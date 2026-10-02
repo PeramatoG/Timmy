@@ -19,18 +19,27 @@ namespace timmy::audio {
 
     namespace {
 
-        std::string makeMiniaudioError(
+        // Converts a miniaudio failure into the public backend-neutral diagnostic.
+        AudioDiagnostic makeMiniaudioDiagnostic(
             const std::string& operation,
+            AudioDiagnosticCode code,
             ma_result result)
         {
-            return operation
-                + " failed (miniaudio error "
-                + std::to_string(static_cast<int>(result))
-                + ")";
+            return {
+                AudioDiagnosticDomain::backend,
+                code,
+                operation
+                    + " failed (miniaudio error "
+                    + std::to_string(static_cast<int>(result))
+                    + ")",
+                static_cast<std::int64_t>(result),
+                true
+            };
         }
 
     } // namespace
 
+    // Enumerates the currently available capture devices.
     AudioDeviceEnumerationResult enumerateCaptureDevices()
     {
         AudioDeviceEnumerationResult output;
@@ -42,9 +51,10 @@ namespace timmy::audio {
 
         if (initResult != MA_SUCCESS)
         {
-            output.errorMessage =
-                makeMiniaudioError(
+            output.diagnostic =
+                makeMiniaudioDiagnostic(
                     "Audio context initialization",
+                    AudioDiagnosticCode::backendInitializationFailed,
                     initResult);
 
             return output;
@@ -66,9 +76,10 @@ namespace timmy::audio {
 
         if (enumerationResult != MA_SUCCESS)
         {
-            output.errorMessage =
-                makeMiniaudioError(
+            output.diagnostic =
+                makeMiniaudioDiagnostic(
                     "Audio device enumeration",
+                    AudioDiagnosticCode::deviceEnumerationFailed,
                     enumerationResult);
 
             ma_context_uninit(&context);

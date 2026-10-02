@@ -340,7 +340,7 @@ namespace timmy::gui {
         {
             statusText_->SetLabel(
                 wxString::FromUTF8(
-                    startResult.errorMessage));
+                    startResult.diagnostic->message));
 
             return;
         }

@@ -11,8 +11,9 @@
 #pragma once
 
 #include "timmy/audio/audio_device_info.h"
+#include "timmy/audio/audio_diagnostic.h"
 
-#include <string>
+#include <optional>
 #include <vector>
 
 namespace timmy::audio {
@@ -20,11 +21,12 @@ namespace timmy::audio {
     struct AudioDeviceEnumerationResult
     {
         std::vector<AudioDeviceInfo> devices;
-        std::string errorMessage;
+        std::optional<AudioDiagnostic> diagnostic;
 
+        // Reports whether device enumeration completed without a diagnostic.
         [[nodiscard]] bool ok() const noexcept
         {
-            return errorMessage.empty();
+            return !diagnostic.has_value();
         }
     };
 

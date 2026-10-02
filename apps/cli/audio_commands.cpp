@@ -40,7 +40,7 @@ namespace timmy::cli {
             {
                 std::cerr
                     << "Audio device discovery failed:\n"
-                    << result.errorMessage
+                    << result.diagnostic->message
                     << '\n';
 
                 return 1;
