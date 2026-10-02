@@ -1,3 +1,5 @@
+find_package(Threads REQUIRED)
+
 # ------------------------------------------------------------------------------
 # miniaudio
 # ------------------------------------------------------------------------------
@@ -11,12 +13,26 @@ target_include_directories(timmy_miniaudio
         ${PROJECT_SOURCE_DIR}/third_party/miniaudio
 )
 
+target_link_libraries(timmy_miniaudio
+    PUBLIC
+        Threads::Threads
+)
+
+if(UNIX AND NOT APPLE)
+    target_link_libraries(timmy_miniaudio
+        PUBLIC
+            m
+            ${CMAKE_DL_LIBS}
+    )
+endif()
+
 # ------------------------------------------------------------------------------
 # Timmy audio module
 # ------------------------------------------------------------------------------
 
 add_library(timmy_audio STATIC
     src/audio_device_enumerator.cpp
+    src/audio_engine.cpp
 )
 
 target_include_directories(timmy_audio
@@ -27,6 +43,7 @@ target_include_directories(timmy_audio
 target_link_libraries(timmy_audio
     PRIVATE
         timmy_miniaudio
+        Threads::Threads
 )
 
 if(MSVC)
