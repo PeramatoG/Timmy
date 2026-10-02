@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.21)
 
 project(
     Timmy
@@ -16,6 +16,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CTest)
+
+option(
+    TIMMY_BUILD_GUI
+    "Build the wxWidgets GUI frontend"
+    ON
+)
 
 # ------------------------------------------------------------------------------
 # Modules
@@ -58,4 +64,70 @@ else()
         -Wextra
         -Wpedantic
     )
+endif()
+
+# ------------------------------------------------------------------------------
+# Timmy GUI
+# ------------------------------------------------------------------------------
+
+if(TIMMY_BUILD_GUI)
+
+    if(WIN32)
+        find_package(
+            wxWidgets
+            CONFIG
+            REQUIRED
+            COMPONENTS
+                core
+                base
+        )
+
+        set(TIMMY_WX_LIBRARIES
+            wx::core
+            wx::base
+        )
+    else()
+        find_package(
+            wxWidgets
+            REQUIRED
+            COMPONENTS
+                core
+                base
+        )
+
+        include(${wxWidgets_USE_FILE})
+
+        set(TIMMY_WX_LIBRARIES
+            ${wxWidgets_LIBRARIES}
+        )
+    endif()
+
+    add_executable(timmy_gui WIN32
+        apps/gui/timmy_app.cpp
+        apps/gui/main_frame.cpp
+    )
+
+    set_target_properties(timmy_gui PROPERTIES
+        OUTPUT_NAME "timmy-gui"
+    )
+
+    target_link_libraries(timmy_gui
+        PRIVATE
+            timmy_audio
+            ${TIMMY_WX_LIBRARIES}
+    )
+
+    if(MSVC)
+        target_compile_options(timmy_gui PRIVATE
+            /W4
+            /permissive-
+        )
+    else()
+        target_compile_options(timmy_gui PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+    endif()
+
 endif()
