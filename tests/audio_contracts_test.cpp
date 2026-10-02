@@ -11,8 +11,10 @@
 #include "timmy/audio/audio_capture_state.h"
 #include "timmy/audio/audio_device_enumerator.h"
 #include "timmy/audio/audio_engine.h"
+#include "miniaudio_device_identity.h"
 
 #include <array>
+#include <cstring>
 #include <cstdint>
 #include <iostream>
 #include <string_view>
@@ -36,10 +38,12 @@ int main()
     const AudioDeviceId firstId{ "test-backend", "opaque-device-a" };
     const AudioDeviceId matchingId{ "test-backend", "opaque-device-a" };
     const AudioDeviceId otherId{ "test-backend", "opaque-device-b" };
+    const AudioDeviceId otherBackendId{ "other-backend", "opaque-device-a" };
 
     if (firstId.empty()
         || firstId != matchingId
         || firstId == otherId
+        || firstId == otherBackendId
         || !AudioDeviceId{}.empty())
     {
         return fail("device identities did not retain their opaque values");
@@ -99,6 +103,99 @@ int main()
         || !AudioDeviceEnumerationResult{}.ok())
     {
         return fail("empty result contracts did not report success");
+    }
+
+    ma_device_id alsaId{};
+    std::strcpy(alsaId.alsa, "hw:Device,7");
+
+    const auto canonicalAlsaId =
+        detail::makeAudioDeviceId(ma_backend_alsa, alsaId);
+
+    ma_device_id pulseId{};
+    std::strcpy(pulseId.pulse, "source.with opaque chars");
+
+    const auto canonicalPulseId =
+        detail::makeAudioDeviceId(ma_backend_pulseaudio, pulseId);
+
+    ma_device_id coreAudioId{};
+    std::strcpy(coreAudioId.coreaudio, "AppleUSBAudioEngine:opaque");
+
+    const auto canonicalCoreAudioId =
+        detail::makeAudioDeviceId(ma_backend_coreaudio, coreAudioId);
+
+    ma_device_id wasapiId{};
+    wasapiId.wasapi[0] = static_cast<ma_wchar_win32>('A');
+    wasapiId.wasapi[1] = static_cast<ma_wchar_win32>('b');
+
+    const auto canonicalWasapiId =
+        detail::makeAudioDeviceId(ma_backend_wasapi, wasapiId);
+
+    ma_device_id directSoundId{};
+    directSoundId.dsound[0] = 0x01;
+    directSoundId.dsound[15] = 0xFF;
+
+    const auto canonicalDirectSoundId =
+        detail::makeAudioDeviceId(ma_backend_dsound, directSoundId);
+
+    ma_device_id winmmId{};
+    winmmId.winmm = 0x12ABU;
+
+    const auto canonicalWinmmId =
+        detail::makeAudioDeviceId(ma_backend_winmm, winmmId);
+
+    if (canonicalAlsaId != AudioDeviceId{ "alsa", "hw:Device,7" }
+        || canonicalPulseId
+            != AudioDeviceId{ "pulseaudio", "source.with opaque chars" }
+        || canonicalCoreAudioId
+            != AudioDeviceId{ "coreaudio", "AppleUSBAudioEngine:opaque" }
+        || canonicalWasapiId != AudioDeviceId{ "wasapi", "00410062" }
+        || canonicalDirectSoundId
+            != AudioDeviceId{
+                "directsound",
+                "010000000000000000000000000000ff" }
+        || canonicalWinmmId != AudioDeviceId{ "winmm", "000012ab" })
+    {
+        return fail("native device IDs were not canonically encoded");
+    }
+
+    std::array<ma_device_info, 2> nativeDevices{};
+    std::strcpy(nativeDevices[0].id.alsa, "first");
+    std::strcpy(nativeDevices[1].id.alsa, "second");
+
+    const auto* matchedNativeId =
+        detail::findCaptureDeviceId(
+            ma_backend_alsa,
+            nativeDevices.data(),
+            static_cast<ma_uint32>(nativeDevices.size()),
+            AudioDeviceId{ "alsa", "second" });
+
+    if (matchedNativeId != &nativeDevices[1].id
+        || detail::findCaptureDeviceId(
+            ma_backend_alsa,
+            nativeDevices.data(),
+            static_cast<ma_uint32>(nativeDevices.size()),
+            AudioDeviceId{ "pulseaudio", "second" }) != nullptr
+        || detail::findCaptureDeviceId(
+            ma_backend_alsa,
+            nativeDevices.data(),
+            static_cast<ma_uint32>(nativeDevices.size()),
+            AudioDeviceId{ "alsa", "missing" }) != nullptr)
+    {
+        return fail("device selection did not require an exact identity match");
+    }
+
+    AudioCaptureConfig ambiguousConfig;
+    ambiguousConfig.deviceId = AudioDeviceId{ "alsa", "first" };
+    ambiguousConfig.runtimeDeviceIndex = 0;
+
+    AudioEngine engine;
+    const auto ambiguousStart = engine.start(ambiguousConfig);
+
+    if (ambiguousStart.ok()
+        || ambiguousStart.diagnostic->code
+            != AudioDiagnosticCode::invalidConfiguration)
+    {
+        return fail("ambiguous device selectors were not rejected");
     }
 
     std::cout << "PASS: deterministic audio contracts\n";

@@ -25,6 +25,7 @@ namespace timmy::audio {
 
     enum class AudioDiagnosticCode
     {
+        invalidConfiguration,
         backendInitializationFailed,
         deviceEnumerationFailed,
         deviceUnavailable,

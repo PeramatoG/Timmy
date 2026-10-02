@@ -294,6 +294,7 @@ namespace timmy::gui {
         startSelectedDevice();
     }
 
+    // Starts capture from the device currently selected in the GUI.
     void MainFrame::startSelectedDevice()
     {
         audioEngine_.stop();
@@ -330,8 +331,14 @@ namespace timmy::gui {
 
         audio::AudioCaptureConfig config;
 
-        config.runtimeDeviceIndex =
-            device.runtimeIndex;
+        if (device.id.has_value())
+        {
+            config.deviceId = device.id;
+        }
+        else
+        {
+            config.runtimeDeviceIndex = device.runtimeIndex;
+        }
 
         const auto startResult =
             audioEngine_.start(config);

@@ -9,6 +9,7 @@
  */
 
 #include "timmy/audio/audio_engine.h"
+#include "miniaudio_device_identity.h"
 
 #include <miniaudio.h>
 
@@ -98,11 +99,26 @@ namespace timmy::audio {
             consumers_.clear();
         }
 
+        // Starts capture with an unambiguous default, canonical ID, or runtime index.
         AudioStartResult start(const AudioCaptureConfig& config)
         {
             stop();
 
             AudioStartResult output;
+
+            if (config.deviceId.has_value()
+                && config.runtimeDeviceIndex.has_value())
+            {
+                output.diagnostic = AudioDiagnostic{
+                    AudioDiagnosticDomain::device,
+                    AudioDiagnosticCode::invalidConfiguration,
+                    "Capture device ID and runtime index cannot both be selected.",
+                    std::nullopt,
+                    true
+                };
+
+                return output;
+            }
 
             const ma_result contextResult =
                 ma_context_init(
@@ -133,7 +149,8 @@ namespace timmy::audio {
             ma_device_info* captureDevices = nullptr;
             ma_uint32 captureDeviceCount = 0;
 
-            if (config.runtimeDeviceIndex.has_value())
+            if (config.deviceId.has_value()
+                || config.runtimeDeviceIndex.has_value())
             {
                 const ma_result enumerationResult =
                     ma_context_get_devices(
@@ -156,25 +173,50 @@ namespace timmy::audio {
                     return output;
                 }
 
-                const std::size_t requestedIndex =
-                    *config.runtimeDeviceIndex;
-
-                if (requestedIndex >= captureDeviceCount)
+                if (config.deviceId.has_value())
                 {
-                    output.diagnostic = AudioDiagnostic{
-                        AudioDiagnosticDomain::device,
-                        AudioDiagnosticCode::deviceUnavailable,
-                        "The requested capture device index is no longer valid.",
-                        std::nullopt,
-                        true
-                    };
+                    selectedDeviceId = detail::findCaptureDeviceId(
+                        context_.backend,
+                        captureDevices,
+                        captureDeviceCount,
+                        *config.deviceId);
 
-                    releaseResources();
-                    return output;
+                    if (selectedDeviceId == nullptr)
+                    {
+                        output.diagnostic = AudioDiagnostic{
+                            AudioDiagnosticDomain::device,
+                            AudioDiagnosticCode::deviceUnavailable,
+                            "The requested capture device is not currently available.",
+                            std::nullopt,
+                            true
+                        };
+
+                        releaseResources();
+                        return output;
+                    }
                 }
+                else
+                {
+                    const std::size_t requestedIndex =
+                        *config.runtimeDeviceIndex;
 
-                selectedDeviceId =
-                    &captureDevices[requestedIndex].id;
+                    if (requestedIndex >= captureDeviceCount)
+                    {
+                        output.diagnostic = AudioDiagnostic{
+                            AudioDiagnosticDomain::device,
+                            AudioDiagnosticCode::deviceUnavailable,
+                            "The requested capture device index is no longer valid.",
+                            std::nullopt,
+                            true
+                        };
+
+                        releaseResources();
+                        return output;
+                    }
+
+                    selectedDeviceId =
+                        &captureDevices[requestedIndex].id;
+                }
             }
 
             ma_device_config deviceConfig =
