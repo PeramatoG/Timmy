@@ -4,7 +4,7 @@ project(
     Timmy
     VERSION 0.1.0
     DESCRIPTION "Offline-first voice command assistant for lighting consoles and OSC-controlled systems"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 # ------------------------------------------------------------------------------
@@ -15,9 +15,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Makes BUILD_TESTING available from the beginning.
-# Actual tests will be added in a later block.
 include(CTest)
+
+# ------------------------------------------------------------------------------
+# Modules
+# ------------------------------------------------------------------------------
+
+add_subdirectory(modules/audio)
 
 # ------------------------------------------------------------------------------
 # Timmy CLI
@@ -29,6 +33,11 @@ add_executable(timmy_cli
 
 set_target_properties(timmy_cli PROPERTIES
     OUTPUT_NAME "timmy-cli"
+)
+
+target_link_libraries(timmy_cli
+    PRIVATE
+        timmy_audio
 )
 
 # ------------------------------------------------------------------------------
