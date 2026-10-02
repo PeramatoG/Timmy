@@ -213,7 +213,7 @@ namespace timmy::cli {
             {
                 std::cerr
                     << "Audio device discovery failed:\n"
-                    << devices.errorMessage
+                    << devices.diagnostic->message
                     << '\n';
 
                 return 1;
@@ -269,7 +269,7 @@ namespace timmy::cli {
         {
             std::cerr
                 << "Audio capture failed:\n"
-                << startResult.errorMessage
+                << startResult.diagnostic->message
                 << '\n';
 
             return 1;

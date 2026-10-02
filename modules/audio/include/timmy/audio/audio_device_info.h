@@ -10,13 +10,20 @@
 
 #pragma once
 
+#include "timmy/audio/audio_device_id.h"
+
 #include <cstddef>
+#include <optional>
 #include <string>
 
 namespace timmy::audio {
 
     struct AudioDeviceInfo
     {
+        // No value means the backend identity has not yet been mapped.
+        std::optional<AudioDeviceId> id;
+
+        // This index is ephemeral and valid only for the associated enumeration.
         std::size_t runtimeIndex = 0;
         std::string name;
         bool isDefault = false;

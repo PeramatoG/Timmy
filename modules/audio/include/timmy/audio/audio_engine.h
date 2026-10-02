@@ -11,22 +11,24 @@
 #pragma once
 
 #include "timmy/audio/audio_capture_config.h"
+#include "timmy/audio/audio_diagnostic.h"
 #include "timmy/audio/audio_consumer.h"
 #include "timmy/audio/audio_stream_format.h"
 
 #include <memory>
-#include <string>
+#include <optional>
 
 namespace timmy::audio {
 
     struct AudioStartResult
     {
         AudioStreamFormat format;
-        std::string errorMessage;
+        std::optional<AudioDiagnostic> diagnostic;
 
+        // Reports whether capture started without a diagnostic.
         [[nodiscard]] bool ok() const noexcept
         {
-            return errorMessage.empty();
+            return !diagnostic.has_value();
         }
     };
 

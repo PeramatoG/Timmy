@@ -32,14 +32,23 @@ namespace timmy::audio {
         constexpr ma_uint32 kDispatchFrames = 512;
         constexpr ma_uint32 kRingBufferSeconds = 1;
 
-        std::string makeMiniaudioError(
+        // Converts a miniaudio failure into the public backend-neutral diagnostic.
+        AudioDiagnostic makeMiniaudioDiagnostic(
             std::string_view operation,
+            AudioDiagnosticDomain domain,
+            AudioDiagnosticCode code,
             ma_result result)
         {
-            return std::string(operation)
-                + " failed (miniaudio error "
-                + std::to_string(static_cast<int>(result))
-                + ")";
+            return {
+                domain,
+                code,
+                std::string(operation)
+                    + " failed (miniaudio error "
+                    + std::to_string(static_cast<int>(result))
+                    + ")",
+                static_cast<std::int64_t>(result),
+                true
+            };
         }
 
     } // namespace
@@ -104,9 +113,11 @@ namespace timmy::audio {
 
             if (contextResult != MA_SUCCESS)
             {
-                output.errorMessage =
-                    makeMiniaudioError(
+                output.diagnostic =
+                    makeMiniaudioDiagnostic(
                         "Audio context initialization",
+                        AudioDiagnosticDomain::backend,
+                        AudioDiagnosticCode::backendInitializationFailed,
                         contextResult);
 
                 return output;
@@ -134,9 +145,11 @@ namespace timmy::audio {
 
                 if (enumerationResult != MA_SUCCESS)
                 {
-                    output.errorMessage =
-                        makeMiniaudioError(
+                    output.diagnostic =
+                        makeMiniaudioDiagnostic(
                             "Audio device enumeration",
+                            AudioDiagnosticDomain::backend,
+                            AudioDiagnosticCode::deviceEnumerationFailed,
                             enumerationResult);
 
                     releaseResources();
@@ -148,8 +161,13 @@ namespace timmy::audio {
 
                 if (requestedIndex >= captureDeviceCount)
                 {
-                    output.errorMessage =
-                        "The requested capture device index is no longer valid.";
+                    output.diagnostic = AudioDiagnostic{
+                        AudioDiagnosticDomain::device,
+                        AudioDiagnosticCode::deviceUnavailable,
+                        "The requested capture device index is no longer valid.",
+                        std::nullopt,
+                        true
+                    };
 
                     releaseResources();
                     return output;
@@ -190,9 +208,11 @@ namespace timmy::audio {
 
             if (deviceResult != MA_SUCCESS)
             {
-                output.errorMessage =
-                    makeMiniaudioError(
+                output.diagnostic =
+                    makeMiniaudioDiagnostic(
                         "Audio capture device initialization",
+                        AudioDiagnosticDomain::device,
+                        AudioDiagnosticCode::deviceInitializationFailed,
                         deviceResult);
 
                 releaseResources();
@@ -210,8 +230,13 @@ namespace timmy::audio {
             if (format_.sampleRate == 0
                 || format_.channelCount == 0)
             {
-                output.errorMessage =
-                    "The capture device returned an invalid stream format.";
+                output.diagnostic = AudioDiagnostic{
+                    AudioDiagnosticDomain::capture,
+                    AudioDiagnosticCode::invalidStreamFormat,
+                    "The capture device returned an invalid stream format.",
+                    std::nullopt,
+                    true
+                };
 
                 releaseResources();
                 return output;
@@ -234,9 +259,11 @@ namespace timmy::audio {
 
             if (ringBufferResult != MA_SUCCESS)
             {
-                output.errorMessage =
-                    makeMiniaudioError(
+                output.diagnostic =
+                    makeMiniaudioDiagnostic(
                         "Audio ring buffer initialization",
+                        AudioDiagnosticDomain::capture,
+                        AudioDiagnosticCode::captureBufferInitializationFailed,
                         ringBufferResult);
 
                 releaseResources();
@@ -257,9 +284,14 @@ namespace timmy::audio {
             {
                 running_.store(false, std::memory_order_release);
 
-                output.errorMessage =
+                output.diagnostic = AudioDiagnostic{
+                    AudioDiagnosticDomain::capture,
+                    AudioDiagnosticCode::captureWorkerInitializationFailed,
                     std::string("Audio worker thread initialization failed: ")
-                    + exception.what();
+                        + exception.what(),
+                    std::nullopt,
+                    true
+                };
 
                 releaseResources();
                 return output;
@@ -277,9 +309,11 @@ namespace timmy::audio {
                     workerThread_.join();
                 }
 
-                output.errorMessage =
-                    makeMiniaudioError(
+                output.diagnostic =
+                    makeMiniaudioDiagnostic(
                         "Audio capture start",
+                        AudioDiagnosticDomain::capture,
+                        AudioDiagnosticCode::captureStartFailed,
                         startResult);
 
                 releaseResources();
