@@ -1,0 +1,22 @@
+name: Windows headless
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure without GUI
+        run: cmake -S . -B build -A x64 -DTIMMY_BUILD_GUI=OFF -DBUILD_TESTING=ON
+
+      - name: Build audio library, CLI, and tests
+        run: cmake --build build --config Debug --parallel
+
+      - name: Run headless tests
+        run: ctest --test-dir build -C Debug --output-on-failure
