@@ -33,6 +33,8 @@ endif()
 add_library(timmy_audio STATIC
     src/audio_device_enumerator.cpp
     src/audio_engine.cpp
+    src/audio_meter.cpp
+    src/audio_channel_selector.cpp
 )
 
 target_include_directories(timmy_audio
