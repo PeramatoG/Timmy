@@ -34,6 +34,12 @@ target_link_libraries(timmy_audio_contracts_tests
         timmy_audio
 )
 
+target_include_directories(timmy_audio_contracts_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/modules/audio/src
+        ${PROJECT_SOURCE_DIR}/third_party/miniaudio
+)
+
 if(MSVC)
     target_compile_options(timmy_audio_contracts_tests PRIVATE
         /W4

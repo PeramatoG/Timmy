@@ -14,12 +14,14 @@
 
 namespace timmy::audio {
 
-    // Identifies a device using an opaque value issued by a named backend.
+    // Identifies a device by a backend-scoped opaque value, not universal hardware identity.
+    // Cross-session stability is determined entirely by the underlying audio backend.
     struct AudioDeviceId
     {
         std::string backend;
         std::string value;
 
+        // Reports whether either required identity component is absent.
         [[nodiscard]]
         bool empty() const noexcept
         {

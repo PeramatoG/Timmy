@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "timmy/audio/audio_device_id.h"
+
 #include <cstddef>
 #include <optional>
 
@@ -17,10 +19,12 @@ namespace timmy::audio {
 
     struct AudioCaptureConfig
     {
-        // No value means: use the current system default capture device.
-        //
-        // A runtime device index is intentionally ephemeral and must come
-        // from a recent enumerateCaptureDevices() call.
+        // Preferred backend-scoped selector; no value means no persistent selector.
+        std::optional<AudioDeviceId> deviceId;
+
+        // Compatibility selector used only when deviceId is absent. With neither
+        // selector set, capture uses the current system default device. A runtime
+        // index is ephemeral and must come from a recent device enumeration.
         std::optional<std::size_t> runtimeDeviceIndex;
     };
 

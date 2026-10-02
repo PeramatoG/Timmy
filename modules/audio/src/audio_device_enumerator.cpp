@@ -9,6 +9,7 @@
  */
 
 #include "timmy/audio/audio_device_enumerator.h"
+#include "miniaudio_device_identity.h"
 
 #include <miniaudio.h>
 
@@ -102,6 +103,10 @@ namespace timmy::audio {
 
             info.isDefault =
                 captureDevices[index].isDefault == MA_TRUE;
+
+            info.id = detail::makeAudioDeviceId(
+                context.backend,
+                captureDevices[index].id);
 
             output.devices.push_back(std::move(info));
         }

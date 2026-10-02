@@ -172,6 +172,7 @@ namespace timmy::cli {
 
     } // namespace
 
+    // Runs the command-line audio monitor with the requested device and channel.
     int runAudioMonitor(
         int argc,
         char* argv[])
@@ -203,6 +204,8 @@ namespace timmy::cli {
 
         std::string deviceDescription =
             "system default";
+
+        std::optional<audio::AudioDeviceId> selectedDeviceId;
 
         if (options.deviceIndex.has_value())
         {
@@ -240,6 +243,8 @@ namespace timmy::cli {
                     device.runtimeIndex)
                 + "] "
                 + device.name;
+
+            selectedDeviceId = device.id;
         }
 
         stopRequested = 0;
@@ -259,8 +264,14 @@ namespace timmy::cli {
         engine.addConsumer(selector);
 
         audio::AudioCaptureConfig config;
-        config.runtimeDeviceIndex =
-            options.deviceIndex;
+        if (selectedDeviceId.has_value())
+        {
+            config.deviceId = selectedDeviceId;
+        }
+        else
+        {
+            config.runtimeDeviceIndex = options.deviceIndex;
+        }
 
         const auto startResult =
             engine.start(config);
