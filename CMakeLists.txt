@@ -29,6 +29,9 @@ add_subdirectory(modules/audio)
 
 add_executable(timmy_cli
     apps/cli/main.cpp
+    apps/cli/cli_application.cpp
+    apps/cli/audio_commands.cpp
+    apps/cli/audio_monitor_command.cpp
 )
 
 set_target_properties(timmy_cli PROPERTIES
