@@ -13,13 +13,23 @@
 #include "timmy/audio/audio_engine.h"
 #include "miniaudio_device_identity.h"
 
+#include <algorithm>
 #include <array>
-#include <cstring>
 #include <cstdint>
 #include <iostream>
 #include <string_view>
 
 namespace {
+
+    // Copies a null-terminated string literal into a sufficiently large array.
+    template <std::size_t DestinationSize, std::size_t SourceSize>
+    void copyStringLiteral(
+        char (&destination)[DestinationSize],
+        const char (&source)[SourceSize])
+    {
+        static_assert(SourceSize <= DestinationSize);
+        std::copy_n(source, SourceSize, destination);
+    }
 
     // Reports a failed contract expectation and returns a value suitable for main().
     int fail(std::string_view message)
@@ -106,19 +116,19 @@ int main()
     }
 
     ma_device_id alsaId{};
-    std::strcpy(alsaId.alsa, "hw:Device,7");
+    copyStringLiteral(alsaId.alsa, "hw:Device,7");
 
     const auto canonicalAlsaId =
         detail::makeAudioDeviceId(ma_backend_alsa, alsaId);
 
     ma_device_id pulseId{};
-    std::strcpy(pulseId.pulse, "source.with opaque chars");
+    copyStringLiteral(pulseId.pulse, "source.with opaque chars");
 
     const auto canonicalPulseId =
         detail::makeAudioDeviceId(ma_backend_pulseaudio, pulseId);
 
     ma_device_id coreAudioId{};
-    std::strcpy(coreAudioId.coreaudio, "AppleUSBAudioEngine:opaque");
+    copyStringLiteral(coreAudioId.coreaudio, "AppleUSBAudioEngine:opaque");
 
     const auto canonicalCoreAudioId =
         detail::makeAudioDeviceId(ma_backend_coreaudio, coreAudioId);
@@ -159,8 +169,8 @@ int main()
     }
 
     std::array<ma_device_info, 2> nativeDevices{};
-    std::strcpy(nativeDevices[0].id.alsa, "first");
-    std::strcpy(nativeDevices[1].id.alsa, "second");
+    copyStringLiteral(nativeDevices[0].id.alsa, "first");
+    copyStringLiteral(nativeDevices[1].id.alsa, "second");
 
     const auto* matchedNativeId =
         detail::findCaptureDeviceId(
