@@ -56,6 +56,12 @@ namespace {
         return std::abs(left - right) <= 0.00001F;
     }
 
+    void sendBlocks(
+        timmy::audio::AudioFormatAdapter& adapter,
+        std::span<const float> input,
+        std::uint32_t sourceRate,
+        std::span<const std::size_t> blockSizes);
+
     // Generates a non-repeating ramp that makes interpolation errors visible.
     std::vector<float> makeInput(std::size_t frameCount)
     {
@@ -70,44 +76,17 @@ namespace {
         return input;
     }
 
-    // Computes the deterministic linear interpolation expected from one timeline.
-    std::vector<float> makeExpected(
+    // Adapts a logical stream using the requested input block boundaries.
+    std::shared_ptr<CollectingConsumer> adaptInput(
         std::span<const float> input,
-        std::uint32_t sourceRate)
+        std::uint32_t sourceRate,
+        std::span<const std::size_t> blockSizes)
     {
-        std::vector<float> expected;
-        std::uint64_t outputFrame = 0;
-
-        while (true)
-        {
-            const std::uint64_t numerator = outputFrame * sourceRate;
-            const std::size_t lower = static_cast<std::size_t>(
-                numerator / timmy::audio::AudioFormatAdapter::targetSampleRate);
-            const std::uint32_t remainder = static_cast<std::uint32_t>(
-                numerator % timmy::audio::AudioFormatAdapter::targetSampleRate);
-
-            if (lower >= input.size()
-                || (remainder != 0 && lower + 1 >= input.size()))
-            {
-                break;
-            }
-
-            float sample = input[lower];
-
-            if (remainder != 0)
-            {
-                const float fraction =
-                    static_cast<float>(remainder)
-                    / static_cast<float>(
-                        timmy::audio::AudioFormatAdapter::targetSampleRate);
-                sample += (input[lower + 1] - input[lower]) * fraction;
-            }
-
-            expected.push_back(sample);
-            ++outputFrame;
-        }
-
-        return expected;
+        auto consumer = std::make_shared<CollectingConsumer>();
+        timmy::audio::AudioFormatAdapter adapter;
+        adapter.addConsumer(consumer);
+        sendBlocks(adapter, input, sourceRate, blockSizes);
+        return consumer;
     }
 
     // Sends one logical stream using consecutive blocks of requested sizes.
@@ -147,21 +126,23 @@ namespace {
         }
 
         const std::vector<float> input = makeInput(inputFrameCount);
-        const std::vector<float> expected = makeExpected(input, sourceRate);
-        auto consumer = std::make_shared<CollectingConsumer>();
-        timmy::audio::AudioFormatAdapter adapter;
-        adapter.addConsumer(consumer);
-        sendBlocks(adapter, input, sourceRate, blockSizes);
+        const std::size_t singleBlock[]{ input.size() };
+        const auto reference = adaptInput(input, sourceRate, singleBlock);
+        const auto consumer = adaptInput(input, sourceRate, blockSizes);
 
-        if (expected.size() != expectedFrameCount
+        if (reference->samples.size() != expectedFrameCount
             || consumer->samples.size() != expectedFrameCount)
         {
             return fail("resampling produced an unexpected frame count");
         }
 
-        for (std::size_t index = 0; index < expected.size(); ++index)
+        for (std::size_t index = 0;
+            index < reference->samples.size();
+            ++index)
         {
-            if (!nearlyEqual(consumer->samples[index], expected[index]))
+            if (!nearlyEqual(
+                consumer->samples[index],
+                reference->samples[index]))
             {
                 return fail("resampling lost continuity across block boundaries");
             }
@@ -178,6 +159,72 @@ namespace {
         return 0;
     }
 
+    // Generates a sine wave at a fixed source-domain frequency.
+    std::vector<float> makeSine(
+        std::size_t frameCount,
+        std::uint32_t sampleRate,
+        float frequency)
+    {
+        constexpr float twoPi = 6.28318530717958647692F;
+        std::vector<float> samples(frameCount);
+
+        for (std::size_t frame = 0; frame < frameCount; ++frame)
+        {
+            samples[frame] = std::sin(
+                twoPi * frequency * static_cast<float>(frame)
+                / static_cast<float>(sampleRate));
+        }
+
+        return samples;
+    }
+
+    // Calculates RMS away from filter startup and ending transients.
+    float steadyStateRms(std::span<const float> samples)
+    {
+        constexpr std::size_t ignoredFrames = 100;
+
+        if (samples.size() <= ignoredFrames * 2)
+        {
+            return 0.0F;
+        }
+
+        double squareSum = 0.0;
+        const std::span<const float> steady =
+            samples.subspan(
+                ignoredFrames,
+                samples.size() - ignoredFrames * 2);
+
+        for (const float sample : steady)
+        {
+            squareSum += static_cast<double>(sample) * sample;
+        }
+
+        return static_cast<float>(
+            std::sqrt(squareSum / static_cast<double>(steady.size())));
+    }
+
+    // Splits a duration into repeatable irregular block sizes.
+    std::vector<std::size_t> makeIrregularBlocks(
+        std::size_t totalFrameCount)
+    {
+        constexpr std::size_t pattern[]{ 127, 2048, 19, 503, 4096, 73 };
+        std::vector<std::size_t> blocks;
+        std::size_t assigned = 0;
+        std::size_t patternIndex = 0;
+
+        while (assigned < totalFrameCount)
+        {
+            const std::size_t blockSize = std::min(
+                pattern[patternIndex % std::size(pattern)],
+                totalFrameCount - assigned);
+            blocks.push_back(blockSize);
+            assigned += blockSize;
+            ++patternIndex;
+        }
+
+        return blocks;
+    }
+
 } // namespace
 
 // Verifies deterministic, hardware-free audio format adaptation contracts.
@@ -188,6 +235,17 @@ int main()
 
     if (verifyResampling(48000, blocks48k, 160) != 0
         || verifyResampling(44100, blocks44k, 160) != 0)
+    {
+        return 1;
+    }
+
+    const std::vector<std::size_t> durationBlocks48k =
+        makeIrregularBlocks(480000);
+    const std::vector<std::size_t> durationBlocks44k =
+        makeIrregularBlocks(441000);
+
+    if (verifyResampling(48000, durationBlocks48k, 160000) != 0
+        || verifyResampling(44100, durationBlocks44k, 160000) != 0)
     {
         return 1;
     }
@@ -221,13 +279,13 @@ int main()
     sendBlocks(resetAdapter, oldInput, 44100, oldBlock);
     resetAdapter.reset();
     resetConsumer->samples.clear();
-    const std::vector<float> restartedInput{ 0.75F, -0.25F, 0.5F, 0.0F };
-    constexpr std::size_t restartedBlock[]{ 4 };
+    const std::vector<float> restartedInput = makeInput(480);
+    constexpr std::size_t restartedBlock[]{ 480 };
     sendBlocks(resetAdapter, restartedInput, 48000, restartedBlock);
+    const auto freshRestart =
+        adaptInput(restartedInput, 48000, restartedBlock);
 
-    if (resetConsumer->samples.size() != 2
-        || !nearlyEqual(resetConsumer->samples[0], 0.75F)
-        || !nearlyEqual(resetConsumer->samples[1], 0.0F))
+    if (resetConsumer->samples != freshRestart->samples)
     {
         return fail("reset did not start a fresh resampling timeline");
     }
@@ -241,6 +299,24 @@ int main()
     if (resetConsumer->samples.size() != validSampleCount)
     {
         return fail("empty or invalid input unexpectedly produced output");
+    }
+
+    constexpr std::uint32_t antiAliasSourceRate = 48000;
+    const std::vector<float> passband =
+        makeSine(antiAliasSourceRate, antiAliasSourceRate, 1000.0F);
+    const std::vector<float> stopband =
+        makeSine(antiAliasSourceRate, antiAliasSourceRate, 14000.0F);
+    constexpr std::size_t antiAliasBlocks[]{ 997, 203, 4096, 71, 42633 };
+    const auto passbandOutput =
+        adaptInput(passband, antiAliasSourceRate, antiAliasBlocks);
+    const auto stopbandOutput =
+        adaptInput(stopband, antiAliasSourceRate, antiAliasBlocks);
+    const float passbandRms = steadyStateRms(passbandOutput->samples);
+    const float stopbandRms = steadyStateRms(stopbandOutput->samples);
+
+    if (passbandRms < 0.5F || stopbandRms >= passbandRms * 0.25F)
+    {
+        return fail("downsampling did not attenuate above-Nyquist input");
     }
 
     std::cout << "PASS: deterministic audio format adaptation\n";

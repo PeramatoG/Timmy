@@ -25,6 +25,12 @@ namespace timmy::audio {
     public:
         static constexpr std::uint32_t targetSampleRate = 16000;
 
+        AudioFormatAdapter();
+        ~AudioFormatAdapter();
+
+        AudioFormatAdapter(const AudioFormatAdapter&) = delete;
+        AudioFormatAdapter& operator=(const AudioFormatAdapter&) = delete;
+
         void addConsumer(std::shared_ptr<IAudioConsumer> consumer);
         void removeConsumer(const std::shared_ptr<IAudioConsumer>& consumer);
         void clearConsumers();
@@ -34,15 +40,11 @@ namespace timmy::audio {
         void reset();
 
     private:
-        void resetResampler(std::uint32_t sourceSampleRate);
         void dispatch(std::span<const float> samples);
 
+        class Impl;
+        std::unique_ptr<Impl> impl_;
         std::mutex stateMutex_;
-        std::uint32_t sourceSampleRate_ = 0;
-        std::uint64_t bufferedFrameOffset_ = 0;
-        std::uint64_t receivedFrameCount_ = 0;
-        std::uint64_t nextOutputFrame_ = 0;
-        std::vector<float> inputBuffer_;
 
         std::mutex consumersMutex_;
         std::vector<std::shared_ptr<IAudioConsumer>> consumers_;

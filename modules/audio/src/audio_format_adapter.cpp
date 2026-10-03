@@ -10,12 +10,148 @@
 
 #include "timmy/audio/audio_format_adapter.h"
 
+#include <miniaudio.h>
+
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace timmy::audio {
+
+    class AudioFormatAdapter::Impl
+    {
+    public:
+        ~Impl();
+
+        bool initialize(std::uint32_t sourceSampleRate);
+        void reset();
+        std::vector<float> process(std::span<const float> input);
+
+        std::uint32_t sourceSampleRate = 0;
+
+    private:
+        ma_resampler resampler_{};
+        bool initialized_ = false;
+        std::vector<float> pendingInput_;
+    };
+
+    // Creates an adapter with isolated resampler implementation state.
+    AudioFormatAdapter::AudioFormatAdapter()
+        : impl_(std::make_unique<Impl>())
+    {}
+
+    // Releases the private resampler implementation.
+    AudioFormatAdapter::~AudioFormatAdapter() = default;
+
+    // Releases miniaudio resources held by the stateful resampler.
+    AudioFormatAdapter::Impl::~Impl()
+    {
+        reset();
+    }
+
+    // Initializes a filtered mono float resampler for a source rate.
+    bool AudioFormatAdapter::Impl::initialize(
+        std::uint32_t newSourceSampleRate)
+    {
+        reset();
+
+        ma_resampler_config config = ma_resampler_config_init(
+            ma_format_f32,
+            1,
+            newSourceSampleRate,
+            AudioFormatAdapter::targetSampleRate,
+            ma_resample_algorithm_linear);
+        config.linear.lpfOrder = 4;
+
+        if (ma_resampler_init(&config, nullptr, &resampler_) != MA_SUCCESS)
+        {
+            return false;
+        }
+
+        sourceSampleRate = newSourceSampleRate;
+        initialized_ = true;
+        return true;
+    }
+
+    // Clears all filter, timing, and pending-input state.
+    void AudioFormatAdapter::Impl::reset()
+    {
+        if (initialized_)
+        {
+            ma_resampler_uninit(&resampler_, nullptr);
+        }
+
+        resampler_ = {};
+        initialized_ = false;
+        sourceSampleRate = 0;
+        pendingInput_.clear();
+    }
+
+    // Processes all possible pending input while respecting partial consumption.
+    std::vector<float> AudioFormatAdapter::Impl::process(
+        std::span<const float> input)
+    {
+        pendingInput_.insert(
+            pendingInput_.end(),
+            input.begin(),
+            input.end());
+
+        std::vector<float> output;
+        std::size_t consumedTotal = 0;
+
+        while (consumedTotal < pendingInput_.size())
+        {
+            const std::size_t remaining =
+                pendingInput_.size() - consumedTotal;
+            const std::uint64_t scaledCapacity =
+                (static_cast<std::uint64_t>(remaining)
+                    * AudioFormatAdapter::targetSampleRate
+                    + sourceSampleRate - 1)
+                / sourceSampleRate;
+            const std::uint64_t requestedOutput =
+                std::max<std::uint64_t>(scaledCapacity + 64, 64);
+            const std::size_t outputOffset = output.size();
+            output.resize(
+                outputOffset
+                + static_cast<std::size_t>(requestedOutput));
+
+            ma_uint64 inputFrameCount =
+                static_cast<ma_uint64>(remaining);
+            ma_uint64 outputFrameCount =
+                static_cast<ma_uint64>(requestedOutput);
+            const ma_result result = ma_resampler_process_pcm_frames(
+                &resampler_,
+                pendingInput_.data() + consumedTotal,
+                &inputFrameCount,
+                output.data() + outputOffset,
+                &outputFrameCount);
+
+            if (result != MA_SUCCESS)
+            {
+                output.resize(outputOffset);
+                break;
+            }
+
+            output.resize(
+                outputOffset
+                + static_cast<std::size_t>(outputFrameCount));
+            consumedTotal += static_cast<std::size_t>(inputFrameCount);
+
+            if (inputFrameCount == 0)
+            {
+                break;
+            }
+        }
+
+        pendingInput_.erase(
+            pendingInput_.begin(),
+            pendingInput_.begin()
+                + static_cast<std::ptrdiff_t>(consumedTotal));
+        return output;
+    }
 
     // Adds a downstream consumer if it is valid and not already registered.
     void AudioFormatAdapter::addConsumer(
@@ -81,9 +217,10 @@ namespace timmy::audio {
             {
                 std::lock_guard lock(stateMutex_);
 
-                if (sourceSampleRate_ != targetSampleRate)
+                if (impl_->sourceSampleRate != targetSampleRate)
                 {
-                    resetResampler(targetSampleRate);
+                    impl_->reset();
+                    impl_->sourceSampleRate = targetSampleRate;
                 }
             }
 
@@ -96,70 +233,13 @@ namespace timmy::audio {
         {
             std::lock_guard lock(stateMutex_);
 
-            if (sourceSampleRate_ != block.format.sampleRate)
+            if (impl_->sourceSampleRate != block.format.sampleRate
+                && !impl_->initialize(block.format.sampleRate))
             {
-                resetResampler(block.format.sampleRate);
+                return;
             }
 
-            inputBuffer_.insert(
-                inputBuffer_.end(),
-                input.begin(),
-                input.end());
-            receivedFrameCount_ += availableFrameCount;
-
-            while (true)
-            {
-                const std::uint64_t positionNumerator =
-                    nextOutputFrame_
-                    * static_cast<std::uint64_t>(sourceSampleRate_);
-                const std::uint64_t lowerFrame =
-                    positionNumerator / targetSampleRate;
-                const std::uint32_t remainder =
-                    static_cast<std::uint32_t>(
-                        positionNumerator % targetSampleRate);
-
-                if (lowerFrame >= receivedFrameCount_
-                    || (remainder != 0
-                        && lowerFrame + 1 >= receivedFrameCount_))
-                {
-                    break;
-                }
-
-                const std::size_t lowerIndex =
-                    static_cast<std::size_t>(
-                        lowerFrame - bufferedFrameOffset_);
-                const float lowerSample = inputBuffer_[lowerIndex];
-                float sample = lowerSample;
-
-                if (remainder != 0)
-                {
-                    const float fraction =
-                        static_cast<float>(remainder)
-                        / static_cast<float>(targetSampleRate);
-                    sample +=
-                        (inputBuffer_[lowerIndex + 1] - lowerSample)
-                        * fraction;
-                }
-
-                output.push_back(sample);
-                ++nextOutputFrame_;
-            }
-
-            const std::uint64_t nextPositionNumerator =
-                nextOutputFrame_
-                * static_cast<std::uint64_t>(sourceSampleRate_);
-            const std::uint64_t nextLowerFrame =
-                nextPositionNumerator / targetSampleRate;
-            const std::uint64_t discardCount =
-                std::min(
-                    nextLowerFrame - bufferedFrameOffset_,
-                    static_cast<std::uint64_t>(inputBuffer_.size()));
-
-            inputBuffer_.erase(
-                inputBuffer_.begin(),
-                inputBuffer_.begin()
-                    + static_cast<std::ptrdiff_t>(discardCount));
-            bufferedFrameOffset_ += discardCount;
+            output = impl_->process(input);
         }
 
         dispatch(output);
@@ -169,18 +249,7 @@ namespace timmy::audio {
     void AudioFormatAdapter::reset()
     {
         std::lock_guard lock(stateMutex_);
-        resetResampler(0);
-    }
-
-    // Initializes empty streaming state for a source sample rate.
-    void AudioFormatAdapter::resetResampler(
-        std::uint32_t sourceSampleRate)
-    {
-        sourceSampleRate_ = sourceSampleRate;
-        bufferedFrameOffset_ = 0;
-        receivedFrameCount_ = 0;
-        nextOutputFrame_ = 0;
-        inputBuffer_.clear();
+        impl_->reset();
     }
 
     // Delivers a normalized mono block to a stable consumer snapshot.
