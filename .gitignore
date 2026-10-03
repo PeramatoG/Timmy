@@ -68,6 +68,10 @@ vcpkg_installed/
 Testing/
 .cache/
 
+# Local speech recognition model weights
+*.bin
+*.gguf
+
 # Visual Studio
 .vs/
 

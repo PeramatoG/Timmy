@@ -11,6 +11,7 @@
 #include "cli_application.h"
 
 #include "audio_commands.h"
+#include "asr_commands.h"
 
 #include <iostream>
 #include <string_view>
@@ -25,6 +26,7 @@ namespace timmy::cli {
 
     namespace {
 
+        // Configures Windows terminals for UTF-8 command-line input and output.
         void configureConsole()
         {
 #ifdef _WIN32
@@ -33,6 +35,7 @@ namespace timmy::cli {
 #endif
         }
 
+        // Prints the top-level command-line help.
         void printUsage()
         {
             std::cout
@@ -41,12 +44,14 @@ namespace timmy::cli {
                 << "  timmy-cli <command> [options]\n\n"
                 << "Commands:\n"
                 << "  audio    Audio device and monitoring tools.\n\n"
+                << "  asr      Speech recognition tools.\n\n"
                 << "Run 'timmy-cli <command> --help' "
                 "for command-specific help.\n";
         }
 
     } // namespace
 
+    // Parses and dispatches the selected top-level CLI command.
     int runCli(
         int argc,
         char* argv[])
@@ -72,6 +77,13 @@ namespace timmy::cli {
         if (command == "audio")
         {
             return runAudioCommand(
+                argc - 2,
+                argv + 2);
+        }
+
+        if (command == "asr")
+        {
+            return runAsrCommand(
                 argc - 2,
                 argv + 2);
         }

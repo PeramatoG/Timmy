@@ -15,6 +15,19 @@ attribution and do not alter TIMMY's own license.
 The complete license text distributed with the vendored source is available at
 [`third_party/miniaudio/LICENSE`](third_party/miniaudio/LICENSE).
 
+## whisper.cpp and ggml
+
+- **Project:** whisper.cpp, including its bundled ggml implementation
+- **Copyright:** Copyright 2023-2026 The ggml authors
+- **Source:** <https://github.com/ggml-org/whisper.cpp>
+- **Version:** v1.9.4, commit `927cfce34f31707e17f2bff35c349632fb9e2c3a`
+- **License:** MIT
+- **Use in TIMMY:** Local CPU speech recognition and tensor computation
+
+The dependency source is retrieved and hash-verified by CMake; model weights
+are not included. The complete license text is available in the upstream
+source archive at `LICENSE` and from the project source link above.
+
 ## wxWidgets
 
 - **Project:** wxWidgets
