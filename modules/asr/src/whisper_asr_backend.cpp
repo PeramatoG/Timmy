@@ -18,6 +18,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdio>
 #include <deque>
 #include <filesystem>
 #include <limits>
@@ -37,6 +38,35 @@ namespace timmy::asr {
         constexpr std::size_t maximumQueuedWindows = 2;
         constexpr std::size_t vadFrameSampleCount = 512;
         constexpr std::size_t maximumQueuedVadFrames = 256;
+
+        // Writes only warning and error messages from whisper.cpp and ggml.
+        void whisperLogCallback(
+            enum ggml_log_level level,
+            const char* text,
+            void*)
+        {
+            thread_local bool writeContinuation = false;
+            if (level != GGML_LOG_LEVEL_CONT)
+            {
+                writeContinuation = level == GGML_LOG_LEVEL_WARN
+                    || level == GGML_LOG_LEVEL_ERROR;
+            }
+
+            if (writeContinuation && text != nullptr)
+            {
+                std::fputs(text, stderr);
+                std::fflush(stderr);
+            }
+        }
+
+        // Installs Timmy's process-wide Whisper log filter exactly once.
+        void configureWhisperLogging()
+        {
+            static std::once_flag loggingConfigured;
+            std::call_once(loggingConfigured, [] {
+                whisper_log_set(whisperLogCallback, nullptr);
+            });
+        }
 
         // Removes surrounding whitespace from a completed transcript.
         std::string trimTranscript(std::string transcript)
@@ -278,6 +308,7 @@ namespace timmy::asr {
     WhisperAsrBackend::WhisperAsrBackend(WhisperAsrBackendOptions options)
         : impl_(std::make_unique<Impl>())
     {
+        configureWhisperLogging();
         impl_->options = std::move(options);
     }
 
