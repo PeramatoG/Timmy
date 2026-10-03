@@ -84,3 +84,30 @@ add_test(
     NAME timmy.audio_contracts
     COMMAND timmy_audio_contracts_tests
 )
+
+add_executable(timmy_asr_contracts_tests
+    asr_contracts_test.cpp
+)
+
+target_link_libraries(timmy_asr_contracts_tests
+    PRIVATE
+        timmy_asr
+)
+
+if(MSVC)
+    target_compile_options(timmy_asr_contracts_tests PRIVATE
+        /W4
+        /permissive-
+    )
+else()
+    target_compile_options(timmy_asr_contracts_tests PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+endif()
+
+add_test(
+    NAME timmy.asr_contracts
+    COMMAND timmy_asr_contracts_tests
+)
