@@ -36,6 +36,7 @@ add_library(timmy_audio STATIC
     src/miniaudio_device_identity.cpp
     src/audio_meter.cpp
     src/audio_channel_selector.cpp
+    src/audio_format_adapter.cpp
 )
 
 target_include_directories(timmy_audio
