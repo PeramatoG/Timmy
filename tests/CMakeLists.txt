@@ -111,3 +111,30 @@ add_test(
     NAME timmy.asr_contracts
     COMMAND timmy_asr_contracts_tests
 )
+
+add_executable(timmy_whisper_asr_tests
+    whisper_asr_backend_test.cpp
+)
+
+target_link_libraries(timmy_whisper_asr_tests
+    PRIVATE
+        timmy_asr
+)
+
+if(MSVC)
+    target_compile_options(timmy_whisper_asr_tests PRIVATE
+        /W4
+        /permissive-
+    )
+else()
+    target_compile_options(timmy_whisper_asr_tests PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+endif()
+
+add_test(
+    NAME timmy.whisper_asr
+    COMMAND timmy_whisper_asr_tests
+)

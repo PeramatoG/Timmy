@@ -1,5 +1,29 @@
+include(FetchContent)
+
+# whisper.cpp v1.9.4 (commit 927cfce34f31707e17f2bff35c349632fb9e2c3a).
+set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_IS_DEV OFF CACHE BOOL "" FORCE)
+set(WHISPER_CURL OFF CACHE BOOL "" FORCE)
+set(WHISPER_COREML OFF CACHE BOOL "" FORCE)
+set(WHISPER_OPENVINO OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+set(GGML_METAL OFF CACHE BOOL "" FORCE)
+set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+    whisper_cpp
+    URL https://github.com/ggml-org/whisper.cpp/archive/927cfce34f31707e17f2bff35c349632fb9e2c3a.tar.gz
+    URL_HASH SHA256=41b664fee09e79176ac277b5237debec34f8d74af3c7d71f333f1ec67989ecde
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(whisper_cpp)
+
 add_library(timmy_asr STATIC
     src/asr_backend.cpp
+    src/whisper_asr_backend.cpp
 )
 
 target_include_directories(timmy_asr
@@ -10,6 +34,8 @@ target_include_directories(timmy_asr
 target_link_libraries(timmy_asr
     PUBLIC
         timmy_audio
+    PRIVATE
+        whisper
 )
 
 if(MSVC)
