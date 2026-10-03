@@ -22,6 +22,7 @@ namespace {
     using timmy::asr::AsrDiagnosticCode;
     using timmy::asr::AsrState;
     using timmy::asr::WhisperAsrBackend;
+    using timmy::asr::WhisperAsrBackendOptions;
 
     // Fails the test process with a focused contract message.
     void require(bool condition, const char* message)
@@ -93,6 +94,37 @@ namespace {
             "initialization failure should remain safely stoppable");
     }
 
+    // Verifies an explicitly missing VAD model has a clear startup diagnostic.
+    void testMissingVadModelDiagnostic()
+    {
+        const auto modelPath =
+            std::filesystem::temp_directory_path()
+            / "timmy-present-whisper-placeholder.bin";
+        {
+            std::ofstream model(modelPath, std::ios::binary);
+            model << "placeholder";
+        }
+
+        WhisperAsrBackendOptions options;
+        options.vadModelPath = "definitely-not-a-silero-vad-model.bin";
+        WhisperAsrBackend backend(options);
+        AsrConfiguration configuration;
+        configuration.modelResourcePath = modelPath;
+        const auto result = backend.start(configuration);
+        std::filesystem::remove(modelPath);
+
+        require(!result.succeeded && result.diagnostic.has_value(),
+            "a missing explicit VAD model should fail with a diagnostic");
+        require(result.diagnostic->code
+                == AsrDiagnosticCode::unavailableResource,
+            "a missing VAD model should use unavailableResource");
+        require(result.diagnostic->message.find("Silero VAD")
+                != std::string::npos,
+            "the VAD startup diagnostic should identify Silero VAD");
+        require(backend.stop().succeeded,
+            "a missing VAD model failure should remain safely stoppable");
+    }
+
 } // namespace
 
 // Runs model-free Whisper backend lifecycle tests.
@@ -101,5 +133,6 @@ int main()
     testCapabilities();
     testMissingModelDiagnostic();
     testInitializationFailure();
+    testMissingVadModelDiagnostic();
     return EXIT_SUCCESS;
 }

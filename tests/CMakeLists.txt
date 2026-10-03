@@ -138,3 +138,35 @@ add_test(
     NAME timmy.whisper_asr
     COMMAND timmy_whisper_asr_tests
 )
+
+add_executable(timmy_whisper_endpoint_tests
+    whisper_endpoint_detector_test.cpp
+)
+
+target_include_directories(timmy_whisper_endpoint_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/modules/asr/src
+)
+
+target_link_libraries(timmy_whisper_endpoint_tests
+    PRIVATE
+        timmy_asr
+)
+
+if(MSVC)
+    target_compile_options(timmy_whisper_endpoint_tests PRIVATE
+        /W4
+        /permissive-
+    )
+else()
+    target_compile_options(timmy_whisper_endpoint_tests PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+endif()
+
+add_test(
+    NAME timmy.whisper_endpoint
+    COMMAND timmy_whisper_endpoint_tests
+)

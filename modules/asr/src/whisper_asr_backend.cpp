@@ -10,12 +10,15 @@
 
 #include "timmy/asr/whisper_asr_backend.h"
 
+#include "whisper_endpoint_detector.h"
+
 #include <whisper.h>
 
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <deque>
 #include <filesystem>
 #include <limits>
 #include <mutex>
@@ -32,6 +35,8 @@ namespace timmy::asr {
         constexpr std::size_t windowSampleCount =
             IAsrBackend::requiredSampleRate * 5;
         constexpr std::size_t maximumQueuedWindows = 2;
+        constexpr std::size_t vadFrameSampleCount = 512;
+        constexpr std::size_t maximumQueuedVadFrames = 256;
 
         // Removes surrounding whitespace from a completed transcript.
         std::string trimTranscript(std::string transcript)
@@ -59,36 +64,94 @@ namespace timmy::asr {
     class WhisperAsrBackend::Impl
     {
     public:
-        // Releases the whisper context after the inference worker has stopped.
+        // Releases all worker and model resources in dependency order.
         ~Impl()
         {
-            stopWorker();
-            destroyContext();
+            stopWorkers();
+            destroyContexts();
         }
 
-        // Runs recognition jobs until shutdown is requested and the queue is empty.
-        void runWorker(WhisperAsrBackend& owner)
+        // Runs queued Whisper recognition jobs until shutdown is complete.
+        void runInferenceWorker(WhisperAsrBackend& owner)
         {
             while (true)
             {
                 std::vector<float> samples;
                 {
                     std::unique_lock lock(mutex);
-                    condition.wait(lock, [this] {
+                    inferenceCondition.wait(lock, [this] {
                         return shutdownRequested || !windows.empty();
                     });
-
                     if (shutdownRequested && windows.empty())
                     {
                         break;
                     }
-
                     samples = std::move(windows.front());
-                    windows.erase(windows.begin());
+                    windows.pop_front();
                 }
-
                 infer(owner, samples);
             }
+        }
+
+        // Runs streaming Silero VAD and sends completed utterances to Whisper.
+        void runVadWorker()
+        {
+            while (true)
+            {
+                std::vector<float> samples;
+                {
+                    std::unique_lock lock(mutex);
+                    vadCondition.wait(lock, [this] {
+                        return shutdownRequested || !vadFrames.empty();
+                    });
+                    if (shutdownRequested && vadFrames.empty())
+                    {
+                        break;
+                    }
+                    samples = std::move(vadFrames.front());
+                    vadFrames.pop_front();
+                }
+
+                if (!whisper_vad_detect_speech_no_reset(
+                        vadContext,
+                        samples.data(),
+                        static_cast<int>(samples.size())))
+                {
+                    continue;
+                }
+                const int probabilityCount = whisper_vad_n_probs(vadContext);
+                const float* probabilities = whisper_vad_probs(vadContext);
+                if (probabilityCount == 0 || probabilities == nullptr)
+                {
+                    continue;
+                }
+
+                auto utterance = endpoint.process(
+                    samples, probabilities[probabilityCount - 1]);
+                if (utterance)
+                {
+                    whisper_vad_reset_state(vadContext);
+                    enqueueInference(std::move(*utterance));
+                }
+            }
+        }
+
+        // Adds one completed utterance to the bounded inference queue.
+        void enqueueInference(std::vector<float> samples)
+        {
+            {
+                std::lock_guard lock(mutex);
+                if (shutdownRequested)
+                {
+                    return;
+                }
+                if (windows.size() == maximumQueuedWindows)
+                {
+                    windows.pop_front();
+                }
+                windows.push_back(std::move(samples));
+            }
+            inferenceCondition.notify_one();
         }
 
         // Transcribes one bounded window and publishes a final Timmy result.
@@ -117,7 +180,7 @@ namespace timmy::asr {
             {
                 owner.publishDiagnostic({
                     AsrDiagnosticCode::recognitionFailure,
-                    "Whisper inference failed for the queued audio window."
+                    "Whisper inference failed for the queued audio segment."
                 });
                 return;
             }
@@ -153,25 +216,38 @@ namespace timmy::asr {
             });
         }
 
-        // Joins the backend-owned worker without holding its queue lock.
-        void stopWorker()
+        // Joins backend-owned workers without holding their shared queue lock.
+        void stopWorkers()
         {
             {
                 std::lock_guard lock(mutex);
                 shutdownRequested = true;
                 windows.clear();
+                vadFrames.clear();
                 accumulation.clear();
+                vadAccumulation.clear();
             }
-            condition.notify_all();
-            if (worker.joinable())
+            inferenceCondition.notify_all();
+            vadCondition.notify_all();
+            if (vadWorker.joinable())
             {
-                worker.join();
+                vadWorker.join();
             }
+            if (inferenceWorker.joinable())
+            {
+                inferenceWorker.join();
+            }
+            endpoint.reset();
         }
 
-        // Frees the private whisper implementation object.
-        void destroyContext()
+        // Frees the private Whisper and Silero implementation objects.
+        void destroyContexts()
         {
+            if (vadContext != nullptr)
+            {
+                whisper_vad_free(vadContext);
+                vadContext = nullptr;
+            }
             if (context != nullptr)
             {
                 whisper_free(context);
@@ -179,22 +255,30 @@ namespace timmy::asr {
             }
         }
 
+        WhisperAsrBackendOptions options;
         std::atomic<AsrState> lifecycle{ AsrState::stopped };
         whisper_context* context = nullptr;
+        whisper_vad_context* vadContext = nullptr;
+        detail::WhisperEndpointDetector endpoint;
         std::string preferredLanguage;
         std::mutex lifecycleMutex;
         std::mutex mutex;
-        std::condition_variable condition;
+        std::condition_variable inferenceCondition;
+        std::condition_variable vadCondition;
         std::vector<float> accumulation;
-        std::vector<std::vector<float>> windows;
+        std::vector<float> vadAccumulation;
+        std::deque<std::vector<float>> windows;
+        std::deque<std::vector<float>> vadFrames;
         bool shutdownRequested = false;
-        std::thread worker;
+        std::thread inferenceWorker;
+        std::thread vadWorker;
     };
 
     // Creates a backend with no model or worker resources allocated.
-    WhisperAsrBackend::WhisperAsrBackend()
+    WhisperAsrBackend::WhisperAsrBackend(WhisperAsrBackendOptions options)
         : impl_(std::make_unique<Impl>())
     {
+        impl_->options = std::move(options);
     }
 
     // Stops recognition before releasing private backend resources.
@@ -227,8 +311,8 @@ namespace timmy::asr {
                 "Whisper ASR is already running.");
         }
 
-        impl_->stopWorker();
-        impl_->destroyContext();
+        impl_->stopWorkers();
+        impl_->destroyContexts();
         impl_->lifecycle = AsrState::starting;
 
         std::error_code filesystemError;
@@ -246,6 +330,21 @@ namespace timmy::asr {
                     + configuration.modelResourcePath.string());
         }
 
+        if (!impl_->options.vadModelPath.empty())
+        {
+            filesystemError.clear();
+            const bool regularVadFile = std::filesystem::is_regular_file(
+                impl_->options.vadModelPath, filesystemError);
+            if (!regularVadFile || filesystemError)
+            {
+                impl_->lifecycle = AsrState::failed;
+                return failure(
+                    AsrDiagnosticCode::unavailableResource,
+                    "Silero VAD model is missing or unavailable: "
+                        + impl_->options.vadModelPath.string());
+            }
+        }
+
         const std::string modelPath =
             configuration.modelResourcePath.string();
         auto contextParameters = whisper_context_default_params();
@@ -261,27 +360,53 @@ namespace timmy::asr {
                 "Whisper could not initialize the configured model.");
         }
 
+        if (!impl_->options.vadModelPath.empty())
+        {
+            auto vadParameters = whisper_vad_default_context_params();
+            vadParameters.use_gpu = false;
+            const std::string vadPath = impl_->options.vadModelPath.string();
+            impl_->vadContext = whisper_vad_init_from_file_with_params(
+                vadPath.c_str(), vadParameters);
+            if (impl_->vadContext == nullptr)
+            {
+                impl_->destroyContexts();
+                impl_->lifecycle = AsrState::failed;
+                return failure(
+                    AsrDiagnosticCode::initializationFailure,
+                    "Silero VAD could not initialize the configured model.");
+            }
+        }
+
         impl_->preferredLanguage =
             configuration.preferredLanguage.value_or("");
         {
             std::lock_guard queueLock(impl_->mutex);
             impl_->shutdownRequested = false;
             impl_->accumulation.clear();
+            impl_->vadAccumulation.clear();
             impl_->windows.clear();
+            impl_->vadFrames.clear();
         }
+        impl_->endpoint.reset();
 
         try
         {
-            impl_->worker = std::thread(
-                [this] { impl_->runWorker(*this); });
+            impl_->inferenceWorker = std::thread(
+                [this] { impl_->runInferenceWorker(*this); });
+            if (impl_->vadContext != nullptr)
+            {
+                impl_->vadWorker = std::thread(
+                    [this] { impl_->runVadWorker(); });
+            }
         }
         catch (const std::system_error& error)
         {
-            impl_->destroyContext();
+            impl_->stopWorkers();
+            impl_->destroyContexts();
             impl_->lifecycle = AsrState::failed;
             return failure(
                 AsrDiagnosticCode::initializationFailure,
-                "Whisper inference worker could not start: "
+                "Whisper worker could not start: "
                     + std::string(error.what()));
         }
 
@@ -299,43 +424,66 @@ namespace timmy::asr {
         }
 
         impl_->lifecycle = AsrState::stopping;
-        impl_->stopWorker();
-        impl_->destroyContext();
+        impl_->stopWorkers();
+        impl_->destroyContexts();
         impl_->preferredLanguage.clear();
         impl_->lifecycle = AsrState::stopped;
         return { true, std::nullopt };
     }
 
-    // Copies validated PCM into bounded backend-owned inference windows.
+    // Copies validated PCM into the fixed-window or VAD endpointing path.
     void WhisperAsrBackend::processAudioBlock(
         const audio::AudioBlockView& block)
     {
         std::lock_guard lock(impl_->mutex);
+        std::vector<float>& accumulation = impl_->vadContext != nullptr
+            ? impl_->vadAccumulation
+            : impl_->accumulation;
+        const std::size_t targetSampleCount = impl_->vadContext != nullptr
+            ? vadFrameSampleCount
+            : windowSampleCount;
+
         std::size_t offset = 0;
         while (offset < block.frameCount)
         {
             const std::size_t available =
-                windowSampleCount - impl_->accumulation.size();
+                targetSampleCount - accumulation.size();
             const std::size_t copyCount =
                 std::min(available, block.frameCount - offset);
-            impl_->accumulation.insert(
-                impl_->accumulation.end(),
+            accumulation.insert(
+                accumulation.end(),
                 block.interleavedSamples.begin()
                     + static_cast<std::ptrdiff_t>(offset),
                 block.interleavedSamples.begin()
                     + static_cast<std::ptrdiff_t>(offset + copyCount));
             offset += copyCount;
 
-            if (impl_->accumulation.size() == windowSampleCount)
+            if (accumulation.size() != targetSampleCount)
+            {
+                continue;
+            }
+
+            if (impl_->vadContext != nullptr)
+            {
+                if (impl_->vadFrames.size() == maximumQueuedVadFrames)
+                {
+                    impl_->vadFrames.pop_front();
+                }
+                impl_->vadFrames.push_back(std::move(accumulation));
+                accumulation.clear();
+                accumulation.reserve(vadFrameSampleCount);
+                impl_->vadCondition.notify_one();
+            }
+            else
             {
                 if (impl_->windows.size() == maximumQueuedWindows)
                 {
-                    impl_->windows.erase(impl_->windows.begin());
+                    impl_->windows.pop_front();
                 }
-                impl_->windows.push_back(std::move(impl_->accumulation));
-                impl_->accumulation.clear();
-                impl_->accumulation.reserve(windowSampleCount);
-                impl_->condition.notify_one();
+                impl_->windows.push_back(std::move(accumulation));
+                accumulation.clear();
+                accumulation.reserve(windowSampleCount);
+                impl_->inferenceCondition.notify_one();
             }
         }
     }
