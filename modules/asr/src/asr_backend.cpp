@@ -22,9 +22,14 @@ namespace timmy::asr {
         listener_ = std::move(listener);
     }
 
-    // Rejects audio that does not match the 16 kHz mono float PCM boundary.
+    // Gates audio by lifecycle and validates the 16 kHz mono float boundary.
     void IAsrBackend::onAudioBlock(const audio::AudioBlockView& block)
     {
+        if (state() != AsrState::running)
+        {
+            return;
+        }
+
         if (block.format.sampleRate != requiredSampleRate
             || block.format.channelCount != requiredChannelCount
             || block.frameCount == 0

@@ -199,6 +199,44 @@ namespace {
             "generic detected language should reach the listener");
     }
 
+    // Verifies that only a running backend receives valid audio blocks.
+    void testLifecycleAudioGating()
+    {
+        FakeAsrBackend backend;
+        auto listener = std::make_shared<RecordingListener>();
+        backend.setResultListener(listener);
+        std::vector<float> samples(160, 0.25F);
+        const AudioBlockView validBlock{
+            samples,
+            samples.size(),
+            { 16000, 1 }
+        };
+
+        backend.onAudioBlock(validBlock);
+        require(backend.acceptedFrameCount == 0,
+            "stopped backend must ignore valid audio");
+
+        require(!backend.start({}).succeeded,
+            "empty configuration should fail to start the fake");
+        backend.onAudioBlock(validBlock);
+        require(backend.acceptedFrameCount == 0,
+            "failed backend must ignore valid audio");
+
+        require(backend.start({ std::nullopt, "test-only-resource" }).succeeded,
+            "valid configuration should start the fake");
+        backend.onAudioBlock(validBlock);
+        require(backend.acceptedFrameCount == samples.size(),
+            "running backend should process valid audio");
+
+        require(backend.stop().succeeded,
+            "running fake should stop successfully");
+        backend.onAudioBlock(validBlock);
+        require(backend.acceptedFrameCount == samples.size(),
+            "stopped backend must ignore later valid audio");
+        require(listener->diagnostics.empty(),
+            "normal lifecycle gating should not publish diagnostics");
+    }
+
     // Verifies deterministic rejection of unsupported ASR input formats.
     void testInvalidAudioIsRejected()
     {
@@ -206,6 +244,8 @@ namespace {
         auto listener = std::make_shared<RecordingListener>();
         backend.setResultListener(listener);
         std::vector<float> samples(320, 0.0F);
+        require(backend.start({ std::nullopt, "test-only-resource" }).succeeded,
+            "fake should be running before format validation");
 
         backend.onAudioBlock({ samples, 320, { 48000, 1 } });
         backend.onAudioBlock({ samples, 160, { 16000, 2 } });
@@ -228,6 +268,7 @@ int main()
 {
     testLifecycleAndCapabilities();
     testAdapterFlowAndResults();
+    testLifecycleAudioGating();
     testInvalidAudioIsRejected();
     return EXIT_SUCCESS;
 }
