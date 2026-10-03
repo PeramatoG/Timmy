@@ -35,6 +35,7 @@ namespace timmy::cli {
         struct AsrListenOptions
         {
             std::filesystem::path modelPath;
+            std::filesystem::path vadModelPath;
             std::optional<std::string> preferredLanguage;
         };
 
@@ -104,6 +105,7 @@ namespace timmy::cli {
                 << "  timmy-cli asr listen --model <path> [options]\n\n"
                 << "Options:\n"
                 << "  --model PATH       Local whisper.cpp model file.\n"
+                << "  --vad-model PATH   Local ggml-silero-v6.2.0.bin file.\n"
                 << "  --language CODE    Preferred language code.\n"
                 << "  -h, --help         Show this help.\n";
         }
@@ -117,7 +119,9 @@ namespace timmy::cli {
             for (int index = 0; index < argc; ++index)
             {
                 const std::string_view argument = argv[index];
-                if (argument == "--model" || argument == "--language")
+                if (argument == "--model"
+                    || argument == "--vad-model"
+                    || argument == "--language")
                 {
                     if (index + 1 >= argc)
                     {
@@ -129,6 +133,10 @@ namespace timmy::cli {
                     if (argument == "--model")
                     {
                         options.modelPath = value;
+                    }
+                    else if (argument == "--vad-model")
+                    {
+                        options.vadModelPath = value;
                     }
                     else
                     {
@@ -172,7 +180,10 @@ namespace timmy::cli {
             return 2;
         }
 
-        auto backend = std::make_shared<asr::WhisperAsrBackend>();
+        asr::WhisperAsrBackendOptions backendOptions;
+        backendOptions.vadModelPath = options.vadModelPath;
+        auto backend =
+            std::make_shared<asr::WhisperAsrBackend>(backendOptions);
         auto listener = std::make_shared<ConsoleAsrListener>();
         backend->setResultListener(listener);
 

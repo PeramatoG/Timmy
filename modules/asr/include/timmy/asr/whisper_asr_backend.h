@@ -12,15 +12,21 @@
 
 #include "timmy/asr/asr_backend.h"
 
+#include <filesystem>
 #include <memory>
 
 namespace timmy::asr {
+
+    struct WhisperAsrBackendOptions
+    {
+        std::filesystem::path vadModelPath;
+    };
 
     class WhisperAsrBackend final
         : public IAsrBackend
     {
     public:
-        WhisperAsrBackend();
+        explicit WhisperAsrBackend(WhisperAsrBackendOptions options = {});
         ~WhisperAsrBackend() override;
 
         WhisperAsrBackend(const WhisperAsrBackend&) = delete;
