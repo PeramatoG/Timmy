@@ -15,6 +15,28 @@ ctest --test-dir build --output-on-failure
 The test suite feeds in-memory sample data through TIMMY's public audio APIs;
 it does not open a microphone.
 
+## Windows development setup
+
+Windows GUI builds require Visual Studio with the MSVC toolchain, CMake,
+Ninja, and an external vcpkg checkout. Set `VCPKG_ROOT` to the checkout before
+configuring Timmy; for example, in PowerShell:
+
+```powershell
+$env:VCPKG_ROOT = "<path-to-vcpkg>"
+cmake --preset windows-debug
+cmake --build out/build/windows-debug
+```
+
+The Windows presets use vcpkg manifest mode and install their dependencies in
+Timmy's project-local `vcpkg_installed` directory. wxWidgets is declared by
+Timmy's `vcpkg.json`, so developers should not download or build wxWidgets
+manually. vcpkg's application-local deployment copies the matching Debug or
+Release runtime DLLs beside `timmy-gui.exe` as part of the build.
+
+whisper.cpp remains managed separately by the project through CMake
+`FetchContent`. Local Whisper and Silero model files are external runtime
+resources; they are not vcpkg dependencies.
+
 ## Command-oriented speech recognition
 
 With local Whisper and Silero VAD weights, the CLI closes each short speech
