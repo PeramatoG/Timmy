@@ -10,6 +10,7 @@
 
 #include "timmy/asr/whisper_asr_backend.h"
 
+#include "whisper_command_decoding.h"
 #include "whisper_endpoint_detector.h"
 
 #include <whisper.h>
@@ -189,12 +190,23 @@ namespace timmy::asr {
             WhisperAsrBackend& owner,
             const std::vector<float>& samples)
         {
+            const auto profile = detail::makeWhisperCommandDecodingProfile(
+                std::thread::hardware_concurrency());
             auto parameters = whisper_full_default_params(
-                WHISPER_SAMPLING_GREEDY);
+                WHISPER_SAMPLING_BEAM_SEARCH);
             parameters.print_progress = false;
             parameters.print_realtime = false;
             parameters.print_timestamps = false;
-            parameters.no_context = true;
+            parameters.no_context = profile.noContext;
+            parameters.no_timestamps = profile.noTimestamps;
+            parameters.single_segment = profile.singleSegment;
+            parameters.max_tokens = profile.maxTokens;
+            parameters.n_threads = profile.threadCount;
+            parameters.audio_ctx = profile.audioContext;
+            parameters.temperature = profile.temperature;
+            parameters.temperature_inc = profile.temperatureIncrement;
+            parameters.greedy.best_of = profile.greedyBestOf;
+            parameters.beam_search.beam_size = profile.beamSize;
             parameters.language = preferredLanguage.empty()
                 ? "auto"
                 : preferredLanguage.c_str();
