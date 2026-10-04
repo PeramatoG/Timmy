@@ -44,9 +44,9 @@ namespace timmy::asr::detail {
 
         WhisperEndpointOptions options_;
         std::vector<float> preRoll_;
-        std::vector<float> pendingSpeech_;
         std::vector<float> utterance_;
-        std::size_t consecutiveSpeechSamples_ = 0;
+        std::size_t speechSpanSamples_ = 0;
+        std::size_t speechEndSamples_ = 0;
         std::size_t consecutiveSilenceSamples_ = 0;
         bool speaking_ = false;
         bool suppressUntilSilence_ = false;
