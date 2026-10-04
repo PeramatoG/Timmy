@@ -29,68 +29,137 @@ namespace {
         }
     }
 
-    // Creates compact endpoint timings for deterministic sample-level tests.
-    WhisperEndpointOptions testOptions()
+    // Creates one 512-sample Silero v6.2.0 frame of identifiable PCM.
+    std::vector<float> frame(float value)
     {
-        return { 0.5F, 4, 3, 2, 12 };
+        return std::vector<float>(512, value);
     }
 
-    // Verifies pre-roll, speech accumulation, padding, and one completed job.
-    void testSpeechEndpoint()
+    // Verifies one positive frame starts speech through probability hysteresis.
+    void testImmediateStartWithHysteresis()
     {
-        WhisperEndpointDetector detector(testOptions());
-        const std::vector<float> silence{ 0.0F, 0.0F };
-        const std::vector<float> speech{ 1.0F, 1.0F };
-        require(!detector.process(silence, 0.1F),
+        WhisperEndpointDetector detector;
+        require(!detector.process(frame(0.0F), 0.1F),
             "silence should not create a job");
-        require(!detector.process(speech, 0.9F),
-            "unconfirmed speech should not create a job");
-        require(!detector.process(speech, 0.9F),
-            "speech start should only begin accumulation");
-        require(!detector.process(speech, 0.9F),
-            "active speech should remain open");
-        require(!detector.process(silence, 0.1F),
-            "short silence should not close speech");
-
-        const std::vector<float> lastSilence{ 0.0F };
-        auto completed = detector.process(lastSilence, 0.1F);
-        require(completed && completed->size() == 10,
-            "end-of-speech should preserve pre-roll and configured padding");
-        require(!detector.process(silence, 0.1F),
-            "completed speech should not emit a duplicate job");
+        require(!detector.process(frame(1.0F), 0.5F),
+            "the threshold crossing should start an open utterance");
+        require(!detector.process(frame(1.0F), 0.42F),
+            "the hysteresis band should preserve active speech");
+        require(!detector.process(frame(1.0F), 0.49F),
+            "fluctuating speech should remain active below the start threshold");
+        require(!detector.process(frame(1.0F), 0.36F),
+            "a valid speech span should not require consecutive positive frames");
+        require(!detector.process(frame(1.0F), 0.45F),
+            "speech in the hysteresis band should remain open");
+        require(!detector.process(frame(1.0F), 0.38F),
+            "more than 250 ms of fluctuating speech should remain open");
+        require(!detector.process(frame(1.0F), 0.48F),
+            "a valid speech span should remain active until real silence");
+        require(!detector.process(frame(1.0F), 0.41F),
+            "more than 250 ms should not require another positive frame");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "short silence should not close valid speech");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "less than 100 ms of silence should keep speech open");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "three Silero frames are still below the silence endpoint");
+        auto completed = detector.process(frame(0.0F), 0.1F);
+        require(completed && completed->size() == 5056,
+            "valid fluctuating speech should complete with pre-roll and padding");
     }
 
-    // Verifies the command duration bound forces a single completed segment.
+    // Verifies a candidate shorter than the minimum speech duration is dropped.
+    void testShortSpeechIsDiscarded()
+    {
+        WhisperEndpointDetector detector;
+        require(!detector.process(frame(1.0F), 0.8F),
+            "a single threshold crossing should open a candidate");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "initial silence should keep the short candidate pending");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "continued silence should keep the short candidate pending");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "three silence frames should remain below 100 ms");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "a completed short candidate should be discarded");
+    }
+
+    // Verifies hysteresis-band frames alone never end an active utterance.
+    void testHysteresisBandDoesNotEndSpeech()
+    {
+        WhisperEndpointDetector detector;
+        require(!detector.process(frame(1.0F), 0.8F),
+            "positive speech should start immediately");
+        for (int index = 0; index < 8; ++index)
+        {
+            require(!detector.process(frame(1.0F), 0.4F),
+                "hysteresis-band frames must not close active speech");
+        }
+    }
+
+    // Verifies minimum low-probability silence closes one valid utterance once.
+    void testSilenceClosesExactlyOnce()
+    {
+        WhisperEndpointDetector detector;
+        for (int index = 0; index < 8; ++index)
+        {
+            require(!detector.process(frame(1.0F), index == 0 ? 0.8F : 0.4F),
+                "valid speech should remain open before endpoint silence");
+        }
+        require(!detector.process(frame(0.0F), 0.1F),
+            "less than the configured silence must not close speech");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "two low-probability frames should remain below 100 ms");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "three low-probability frames should remain below 100 ms");
+        auto completed = detector.process(frame(0.0F), 0.1F);
+        require(completed.has_value(),
+            "configured low-probability silence should close valid speech");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "a closed utterance must not be emitted twice");
+    }
+
+    // Verifies the command duration bound forces one exactly bounded segment.
     void testMaximumDuration()
     {
-        WhisperEndpointDetector detector(testOptions());
-        const std::vector<float> speech{ 1.0F, 1.0F, 1.0F, 1.0F };
-        require(!detector.process(speech, 0.9F),
-            "minimum speech should activate without immediately completing");
-        require(!detector.process(speech, 0.9F),
-            "speech below the maximum should remain open");
-        auto completed = detector.process(speech, 0.9F);
-        require(completed && completed->size() == 12,
+        WhisperEndpointDetector detector;
+        std::optional<std::vector<float>> completed;
+        for (int index = 0; index < 250; ++index)
+        {
+            completed = detector.process(frame(1.0F), 0.8F);
+        }
+        require(completed && completed->size() == 128000,
             "maximum duration should force an exactly bounded job");
-        require(!detector.process(speech, 0.9F),
+        require(!detector.process(frame(1.0F), 0.8F),
             "continued speech after the bound should not create a duplicate");
-        require(!detector.process(std::vector<float>{ 0.0F }, 0.1F),
-            "forced completion should wait for sufficient silence");
-        require(!detector.process(std::vector<float>{ 0.0F, 0.0F }, 0.1F),
-            "sufficient silence should rearm without creating a job");
     }
 
-    // Verifies reset discards an in-progress utterance on backend stop.
-    void testReset()
+    // Verifies reset removes all endpoint state before detector reuse.
+    void testResetAndReuse()
     {
-        WhisperEndpointDetector detector(testOptions());
-        const std::vector<float> speech{ 1.0F, 1.0F, 1.0F, 1.0F };
-        require(!detector.process(speech, 0.9F),
+        WhisperEndpointDetector detector;
+        require(!detector.process(frame(1.0F), 0.8F),
             "speech should be active before reset");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "partial endpoint silence should be active before reset");
         detector.reset();
-        const std::vector<float> silence{ 0.0F, 0.0F, 0.0F };
-        require(!detector.process(silence, 0.1F),
-            "reset should discard an active utterance without a job");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "reset should not retain endpoint silence or emit stale speech");
+        require(!detector.process(frame(0.0F), 0.1F),
+            "session reuse should remain idle after reset");
+        for (int index = 0; index < 8; ++index)
+        {
+            require(!detector.process(frame(1.0F), index == 0 ? 0.8F : 0.4F),
+                "reused endpoint state should accept a fresh utterance");
+        }
+        for (int index = 0; index < 3; ++index)
+        {
+            require(!detector.process(frame(0.0F), 0.1F),
+                "fresh speech should remain open before minimum silence");
+        }
+        auto completed = detector.process(frame(0.0F), 0.1F);
+        require(completed && completed->size() == 5056,
+            "reused state should emit only the fresh padded utterance");
     }
 
 } // namespace
@@ -98,8 +167,11 @@ namespace {
 // Runs deterministic model-free endpointing state tests.
 int main()
 {
-    testSpeechEndpoint();
+    testImmediateStartWithHysteresis();
+    testShortSpeechIsDiscarded();
+    testHysteresisBandDoesNotEndSpeech();
+    testSilenceClosesExactlyOnce();
     testMaximumDuration();
-    testReset();
+    testResetAndReuse();
     return EXIT_SUCCESS;
 }

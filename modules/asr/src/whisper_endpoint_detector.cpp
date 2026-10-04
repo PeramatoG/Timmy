@@ -33,12 +33,21 @@ namespace timmy::asr::detail {
             return std::nullopt;
         }
 
-        const bool speech = speechProbability >= options_.speechThreshold;
+        const float negativeThreshold = std::max(
+            options_.speechThreshold - 0.15F, 0.01F);
+        const bool positiveSpeech =
+            speechProbability >= options_.speechThreshold;
+        const bool negativeSpeech = speechProbability < negativeThreshold;
         if (suppressUntilSilence_)
         {
-            consecutiveSilenceSamples_ = speech
-                ? 0
-                : consecutiveSilenceSamples_ + samples.size();
+            if (positiveSpeech)
+            {
+                consecutiveSilenceSamples_ = 0;
+            }
+            else if (negativeSpeech)
+            {
+                consecutiveSilenceSamples_ += samples.size();
+            }
             if (consecutiveSilenceSamples_ >= options_.minimumSilenceSamples)
             {
                 suppressUntilSilence_ = false;
@@ -51,29 +60,17 @@ namespace timmy::asr::detail {
 
         if (!speaking_)
         {
-            if (!speech)
+            if (!positiveSpeech)
             {
-                pendingSpeech_.clear();
-                consecutiveSpeechSamples_ = 0;
                 appendPreRoll(samples);
-                return std::nullopt;
-            }
-
-            pendingSpeech_.insert(
-                pendingSpeech_.end(), samples.begin(), samples.end());
-            consecutiveSpeechSamples_ += samples.size();
-            if (consecutiveSpeechSamples_ < options_.minimumSpeechSamples)
-            {
                 return std::nullopt;
             }
 
             speaking_ = true;
             utterance_ = std::move(preRoll_);
             utterance_.insert(
-                utterance_.end(),
-                pendingSpeech_.begin(),
-                pendingSpeech_.end());
-            pendingSpeech_.clear();
+                utterance_.end(), samples.begin(), samples.end());
+            speechSpanSamples_ = samples.size();
             if (utterance_.size() >= options_.maximumUtteranceSamples)
             {
                 return finish(true);
@@ -82,9 +79,20 @@ namespace timmy::asr::detail {
         }
 
         utterance_.insert(utterance_.end(), samples.begin(), samples.end());
-        consecutiveSilenceSamples_ = speech
-            ? 0
-            : consecutiveSilenceSamples_ + samples.size();
+        speechSpanSamples_ += samples.size();
+        if (positiveSpeech)
+        {
+            consecutiveSilenceSamples_ = 0;
+            speechEndSamples_ = 0;
+        }
+        else if (negativeSpeech)
+        {
+            if (speechEndSamples_ == 0)
+            {
+                speechEndSamples_ = speechSpanSamples_ - samples.size();
+            }
+            consecutiveSilenceSamples_ += samples.size();
+        }
         if (utterance_.size() >= options_.maximumUtteranceSamples)
         {
             return finish(true);
@@ -100,9 +108,9 @@ namespace timmy::asr::detail {
     void WhisperEndpointDetector::reset()
     {
         preRoll_.clear();
-        pendingSpeech_.clear();
         utterance_.clear();
-        consecutiveSpeechSamples_ = 0;
+        speechSpanSamples_ = 0;
+        speechEndSamples_ = 0;
         consecutiveSilenceSamples_ = 0;
         speaking_ = false;
         suppressUntilSilence_ = false;
@@ -112,6 +120,11 @@ namespace timmy::asr::detail {
     std::optional<std::vector<float>> WhisperEndpointDetector::finish(
         bool maximumDurationReached)
     {
+        const std::size_t candidateSpeechSamples = speechEndSamples_ == 0
+            ? speechSpanSamples_
+            : speechEndSamples_;
+        const bool validSpeech =
+            candidateSpeechSamples >= options_.minimumSpeechSamples;
         if (!maximumDurationReached
             && consecutiveSilenceSamples_ > options_.speechPaddingSamples)
         {
@@ -127,6 +140,10 @@ namespace timmy::asr::detail {
         auto completed = std::move(utterance_);
         reset();
         suppressUntilSilence_ = maximumDurationReached;
+        if (!validSpeech)
+        {
+            return std::nullopt;
+        }
         return completed;
     }
 
