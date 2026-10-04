@@ -10,6 +10,8 @@
 
 #include "timmy/asr/whisper_asr_backend.h"
 
+#include "whisper_command_decoding.h"
+
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -23,6 +25,7 @@ namespace {
     using timmy::asr::AsrState;
     using timmy::asr::WhisperAsrBackend;
     using timmy::asr::WhisperAsrBackendOptions;
+    using timmy::asr::detail::makeWhisperCommandDecodingProfile;
 
     // Fails the test process with a focused contract message.
     void require(bool condition, const char* message)
@@ -47,6 +50,40 @@ namespace {
             "Whisper backend should not advertise grammar constraints");
         require(!capabilities.supportsVocabularyHints,
             "Whisper backend should not advertise vocabulary hints");
+    }
+
+    // Verifies the deterministic command-decoding settings and CPU limits.
+    void testCommandDecodingProfile()
+    {
+        const auto unavailableCpuCount =
+            makeWhisperCommandDecodingProfile(0);
+        require(unavailableCpuCount.threadCount == 1,
+            "unknown hardware concurrency should use one thread");
+
+        const auto limitedCpuCount = makeWhisperCommandDecodingProfile(2);
+        require(limitedCpuCount.threadCount == 2,
+            "available hardware concurrency should set the thread count");
+
+        const auto abundantCpuCount = makeWhisperCommandDecodingProfile(16);
+        require(abundantCpuCount.noContext,
+            "command decoding should not reuse previous transcript context");
+        require(abundantCpuCount.noTimestamps,
+            "command decoding should not generate timestamps");
+        require(abundantCpuCount.singleSegment,
+            "command decoding should produce one command segment");
+        require(abundantCpuCount.threadCount == 4,
+            "command decoding should limit CPU threads to four");
+        require(abundantCpuCount.maxTokens == 32,
+            "command decoding should limit results to 32 tokens");
+        require(abundantCpuCount.audioContext == 0,
+            "command decoding should initially use the full audio context");
+        require(abundantCpuCount.beamSize == 5,
+            "command decoding should use the upstream beam size");
+        require(abundantCpuCount.temperature == 0.4F
+                && abundantCpuCount.temperatureIncrement == 1.0F,
+            "command decoding should use the upstream fallback temperatures");
+        require(abundantCpuCount.greedyBestOf == 5,
+            "command decoding should preserve the upstream fallback width");
     }
 
     // Verifies missing model failures without downloading model weights.
@@ -131,6 +168,7 @@ namespace {
 int main()
 {
     testCapabilities();
+    testCommandDecodingProfile();
     testMissingModelDiagnostic();
     testInitializationFailure();
     testMissingVadModelDiagnostic();

@@ -121,6 +121,11 @@ target_link_libraries(timmy_whisper_asr_tests
         timmy_asr
 )
 
+target_include_directories(timmy_whisper_asr_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/modules/asr/src
+)
+
 if(MSVC)
     target_compile_options(timmy_whisper_asr_tests PRIVATE
         /W4
