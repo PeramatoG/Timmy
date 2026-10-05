@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace timmy::asr {
 
@@ -33,10 +34,25 @@ namespace timmy::asr {
         bool supportsVocabularyHints = false;
     };
 
+    enum class RecognitionConstraintIntent
+    {
+        none,
+        commandPhrase
+    };
+
+    struct RecognitionHints
+    {
+        std::vector<std::string> vocabulary;
+        std::vector<std::string> expectedPhrases;
+        RecognitionConstraintIntent constraintIntent =
+            RecognitionConstraintIntent::none;
+    };
+
     struct AsrConfiguration
     {
         std::optional<std::string> preferredLanguage;
         std::filesystem::path modelResourcePath;
+        RecognitionHints recognitionHints;
     };
 
     enum class AsrResultKind
