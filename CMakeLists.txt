@@ -29,6 +29,7 @@ option(
 
 add_subdirectory(modules/audio)
 add_subdirectory(modules/asr)
+add_subdirectory(modules/command)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)

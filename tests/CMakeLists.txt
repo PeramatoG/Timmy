@@ -175,3 +175,30 @@ add_test(
     NAME timmy.whisper_endpoint
     COMMAND timmy_whisper_endpoint_tests
 )
+
+add_executable(timmy_transcript_normalizer_tests
+    transcript_normalizer_test.cpp
+)
+
+target_link_libraries(timmy_transcript_normalizer_tests
+    PRIVATE
+        timmy_command
+)
+
+if(MSVC)
+    target_compile_options(timmy_transcript_normalizer_tests PRIVATE
+        /W4
+        /permissive-
+    )
+else()
+    target_compile_options(timmy_transcript_normalizer_tests PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+endif()
+
+add_test(
+    NAME timmy.transcript_normalizer
+    COMMAND timmy_transcript_normalizer_tests
+)
