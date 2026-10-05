@@ -52,3 +52,21 @@ timmy-cli asr listen \
 
 The `--vad-model` option is optional. Without it, the Whisper backend retains
 the bounded five-second accumulation behavior.
+
+## Explicit OSC test sends
+
+The CLI can parse and send one explicitly supplied semantic command to a UDP
+destination. This path does not send commands recognized from live audio:
+
+```sh
+timmy-cli osc send --host 127.0.0.1 --port 9000 \
+  --command "Channel 5 At 50"
+```
+
+The initial generic profile is intended for tests and integrations rather than
+a specific lighting console. It maps channel intensity to
+`/timmy/channel/intensity` with integer channel and percentage arguments,
+fixture intensity to `/timmy/fixture/<id>/intensity`, and group intensity to
+`/timmy/group/intensity/<id>`. A console integration can implement
+`IOscCommandProfile` to replace only this semantic-to-message mapping; OSC
+serialization and UDP ownership remain in `OscCommandEmitter`.

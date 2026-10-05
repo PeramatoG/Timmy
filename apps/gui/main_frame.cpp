@@ -559,14 +559,15 @@ namespace timmy::gui {
             + assemblyStateText(payload.transcript.assemblyState);
         if (!payload.transcript.assemblyText.empty())
         {
-            assembly += " — " + wxString::FromUTF8(payload.transcript.assemblyText);
+            assembly += wxString::FromUTF8(" \xE2\x80\x94 ")
+                + wxString::FromUTF8(payload.transcript.assemblyText);
         }
         assemblyText_->SetLabel(assembly);
         wxString semantic = "Semantic command: "
             + semanticStateText(payload.transcript.semanticState);
         if (payload.transcript.semanticCommand)
         {
-            semantic += " — " + wxString::FromUTF8(
+            semantic += wxString::FromUTF8(" \xE2\x80\x94 ") + wxString::FromUTF8(
                 command::describe(*payload.transcript.semanticCommand));
         }
         semanticCommandText_->SetLabel(semantic);
