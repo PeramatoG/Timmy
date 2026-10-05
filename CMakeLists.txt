@@ -30,7 +30,6 @@ option(
 add_subdirectory(modules/audio)
 add_subdirectory(modules/asr)
 add_subdirectory(modules/command)
-add_subdirectory(modules/core)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
@@ -57,7 +56,6 @@ target_link_libraries(timmy_cli
     PRIVATE
         timmy_audio
         timmy_asr
-        timmy_core
 )
 
 # ------------------------------------------------------------------------------
@@ -115,7 +113,6 @@ if(TIMMY_BUILD_GUI)
 
     add_executable(timmy_gui WIN32
         apps/gui/timmy_app.cpp
-        apps/gui/gui_theme.cpp
         apps/gui/main_frame.cpp
     )
 
@@ -126,8 +123,6 @@ if(TIMMY_BUILD_GUI)
     target_link_libraries(timmy_gui
         PRIVATE
             timmy_audio
-            timmy_asr
-            timmy_core
             ${TIMMY_WX_LIBRARIES}
     )
 
