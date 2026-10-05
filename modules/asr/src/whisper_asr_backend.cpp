@@ -12,7 +12,9 @@
 
 #include "whisper_command_decoding.h"
 #include "whisper_endpoint_detector.h"
+#include "whisper_recognition_guidance.h"
 
+#include "grammar-parser.h"
 #include <whisper.h>
 
 #include <algorithm>
@@ -211,6 +213,14 @@ namespace timmy::asr {
                 ? "auto"
                 : preferredLanguage.c_str();
             parameters.detect_language = preferredLanguage.empty();
+            parameters.initial_prompt = guidance.initialPrompt.c_str();
+
+            auto grammarRules = grammar.c_rules();
+            parameters.grammar_rules = grammarRules.data();
+            parameters.n_grammar_rules = grammarRules.size();
+            parameters.i_start_rule = grammar.symbol_ids.at(
+                guidance.startRule);
+            parameters.grammar_penalty = guidance.grammarPenalty;
 
             if (samples.size()
                 > static_cast<std::size_t>(std::numeric_limits<int>::max())
@@ -302,6 +312,8 @@ namespace timmy::asr {
         whisper_context* context = nullptr;
         whisper_vad_context* vadContext = nullptr;
         detail::WhisperEndpointDetector endpoint;
+        detail::WhisperRecognitionGuidance guidance;
+        grammar_parser::parse_state grammar;
         std::string preferredLanguage;
         std::mutex lifecycleMutex;
         std::mutex mutex;
@@ -333,7 +345,7 @@ namespace timmy::asr {
     // Reports the generic features supported by this first Whisper backend.
     AsrCapabilities WhisperAsrBackend::capabilities() const
     {
-        return { false, true, false, false };
+        return { false, true, true, true };
     }
 
     // Returns the current backend lifecycle state.
@@ -357,6 +369,18 @@ namespace timmy::asr {
         impl_->stopWorkers();
         impl_->destroyContexts();
         impl_->lifecycle = AsrState::starting;
+
+        impl_->guidance =
+            detail::makeLightingCommandRecognitionGuidance();
+        if (!detail::isValidWhisperRecognitionGuidance(impl_->guidance))
+        {
+            impl_->lifecycle = AsrState::failed;
+            return failure(
+                AsrDiagnosticCode::invalidConfiguration,
+                "Whisper recognition guidance is invalid.");
+        }
+        impl_->grammar = grammar_parser::parse(
+            impl_->guidance.grammar.c_str());
 
         std::error_code filesystemError;
         const bool regularModelFile =
@@ -470,6 +494,8 @@ namespace timmy::asr {
         impl_->stopWorkers();
         impl_->destroyContexts();
         impl_->preferredLanguage.clear();
+        impl_->guidance = {};
+        impl_->grammar = {};
         impl_->lifecycle = AsrState::stopped;
         return { true, std::nullopt };
     }

@@ -25,12 +25,16 @@ add_library(timmy_asr STATIC
     src/asr_backend.cpp
     src/whisper_command_decoding.cpp
     src/whisper_endpoint_detector.cpp
+    src/whisper_recognition_guidance.cpp
     src/whisper_asr_backend.cpp
+    ${whisper_cpp_SOURCE_DIR}/examples/grammar-parser.cpp
 )
 
 target_include_directories(timmy_asr
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${whisper_cpp_SOURCE_DIR}/examples
 )
 
 target_link_libraries(timmy_asr

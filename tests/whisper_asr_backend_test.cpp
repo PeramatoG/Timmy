@@ -11,6 +11,7 @@
 #include "timmy/asr/whisper_asr_backend.h"
 
 #include "whisper_command_decoding.h"
+#include "whisper_recognition_guidance.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -26,6 +27,8 @@ namespace {
     using timmy::asr::WhisperAsrBackend;
     using timmy::asr::WhisperAsrBackendOptions;
     using timmy::asr::detail::makeWhisperCommandDecodingProfile;
+    using timmy::asr::detail::makeLightingCommandRecognitionGuidance;
+    using timmy::asr::detail::isValidWhisperRecognitionGuidance;
 
     // Fails the test process with a focused contract message.
     void require(bool condition, const char* message)
@@ -46,10 +49,44 @@ namespace {
             "Whisper backend should publish final results only");
         require(capabilities.supportsExplicitLanguage,
             "Whisper backend should support an explicit language");
-        require(!capabilities.supportsGrammarConstraints,
-            "Whisper backend should not advertise grammar constraints");
-        require(!capabilities.supportsVocabularyHints,
-            "Whisper backend should not advertise vocabulary hints");
+        require(capabilities.supportsGrammarConstraints,
+            "Whisper backend should advertise its grammar guidance");
+        require(capabilities.supportsVocabularyHints,
+            "Whisper backend should advertise its vocabulary prompt");
+    }
+
+    // Verifies the bilingual lighting guidance without loading a model.
+    void testRecognitionGuidance()
+    {
+        const auto guidance = makeLightingCommandRecognitionGuidance();
+        require(isValidWhisperRecognitionGuidance(guidance),
+            "default recognition guidance should be valid GBNF");
+        require(guidance.startRule == "root"
+                && guidance.grammarPenalty == 20.0F,
+            "guidance should use the expected root and soft penalty");
+
+        for (const std::string term : {
+                 "Channel", "Canal", "Fixture", "Group", "Grupo",
+                 "Select", "Selecciona", "Set", "Pon", "Sube", "Baja",
+                 "range-connector", "level-separator", "percent" })
+        {
+            require(guidance.grammar.find(term) != std::string::npos,
+                "grammar should contain each expected command term");
+        }
+        require(guidance.initialPrompt.find("Canal 4 al 100%")
+                    != std::string::npos
+                && guidance.initialPrompt.find(
+                    "Selecciona los canales del 20 al 30")
+                    != std::string::npos
+                && guidance.initialPrompt.find(
+                    "Canal 1, Canal 2 y Canal 3 al 40%")
+                    != std::string::npos,
+            "prompt should prime representative Spanish command shapes");
+
+        auto invalidGuidance = guidance;
+        invalidGuidance.startRule = "missing";
+        require(!isValidWhisperRecognitionGuidance(invalidGuidance),
+            "an absent start rule should invalidate guidance");
     }
 
     // Verifies the deterministic command-decoding settings and CPU limits.
@@ -169,6 +206,7 @@ int main()
 {
     testCapabilities();
     testCommandDecodingProfile();
+    testRecognitionGuidance();
     testMissingModelDiagnostic();
     testInitializationFailure();
     testMissingVadModelDiagnostic();
