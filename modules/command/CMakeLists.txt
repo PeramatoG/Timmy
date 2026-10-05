@@ -1,4 +1,5 @@
 add_library(timmy_command STATIC
+    src/command_assembler.cpp
     src/transcript_normalizer.cpp
 )
 
