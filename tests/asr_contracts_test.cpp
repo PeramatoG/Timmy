@@ -30,6 +30,7 @@ namespace {
     using timmy::asr::AsrState;
     using timmy::asr::IAsrBackend;
     using timmy::asr::IAsrResultListener;
+    using timmy::asr::RecognitionConstraintIntent;
     using timmy::audio::AudioBlockView;
 
     class RecordingListener final
@@ -86,6 +87,7 @@ namespace {
                 };
             }
 
+            configuredHints = configuration.recognitionHints;
             state_ = AsrState::running;
             return { true, std::nullopt };
         }
@@ -99,6 +101,7 @@ namespace {
         }
 
         std::size_t acceptedFrameCount = 0;
+        timmy::asr::RecognitionHints configuredHints;
 
     private:
         // Consumes validated audio and emits alternating partial/final events.
@@ -155,8 +158,18 @@ namespace {
         AsrConfiguration configuration;
         configuration.preferredLanguage = "en";
         configuration.modelResourcePath = "test-only-resource";
+        configuration.recognitionHints = {
+            { "channel", "canal" },
+            { "Canal 4 al 100%" },
+            RecognitionConstraintIntent::commandPhrase
+        };
         require(backend.start(configuration).succeeded,
             "valid generic configuration should start the fake");
+        require(backend.configuredHints.vocabulary.size() == 2
+                && backend.configuredHints.expectedPhrases.size() == 1
+                && backend.configuredHints.constraintIntent
+                    == RecognitionConstraintIntent::commandPhrase,
+            "recognition hints should cross the generic ASR boundary");
         require(backend.state() == AsrState::running,
             "successful start should enter running state");
         require(backend.stop().succeeded
@@ -170,7 +183,9 @@ namespace {
         auto backend = std::make_shared<FakeAsrBackend>();
         auto listener = std::make_shared<RecordingListener>();
         backend->setResultListener(listener);
-        require(backend->start({ std::nullopt, "test-only-resource" }).succeeded,
+        require(backend->start({
+                    std::nullopt, "test-only-resource", {}
+                }).succeeded,
             "fake should start before consuming audio");
 
         timmy::audio::AudioFormatAdapter adapter;
@@ -222,7 +237,9 @@ namespace {
         require(backend.acceptedFrameCount == 0,
             "failed backend must ignore valid audio");
 
-        require(backend.start({ std::nullopt, "test-only-resource" }).succeeded,
+        require(backend.start({
+                    std::nullopt, "test-only-resource", {}
+                }).succeeded,
             "valid configuration should start the fake");
         backend.onAudioBlock(validBlock);
         require(backend.acceptedFrameCount == samples.size(),
@@ -244,7 +261,9 @@ namespace {
         auto listener = std::make_shared<RecordingListener>();
         backend.setResultListener(listener);
         std::vector<float> samples(320, 0.0F);
-        require(backend.start({ std::nullopt, "test-only-resource" }).succeeded,
+        require(backend.start({
+                    std::nullopt, "test-only-resource", {}
+                }).succeeded,
             "fake should be running before format validation");
 
         backend.onAudioBlock({ samples, 320, { 48000, 1 } });

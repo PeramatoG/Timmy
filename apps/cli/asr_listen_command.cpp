@@ -32,6 +32,32 @@ namespace timmy::cli {
 
         volatile std::sig_atomic_t stopRequested = 0;
 
+        // Creates the initial backend-neutral lighting recognition hints.
+        asr::RecognitionHints makeLightingRecognitionHints()
+        {
+            return {
+                {
+                    "channel", "canal", "fixture", "group", "grupo",
+                    "at", "al", "full", "select", "selecciona", "set",
+                    "pon", "up", "sube", "down", "baja"
+                },
+                {
+                    "Canal 4 al 100%",
+                    "Grupo 5 al 70%",
+                    "Pon el grupo 5 al 70%",
+                    "Selecciona el canal 25",
+                    "Selecciona los canales del 20 al 30",
+                    "Canal 1, Canal 2 y Canal 3 al 40%",
+                    "Sube el canal 5 al 50%",
+                    "Baja el grupo 2 al 20%",
+                    "Channel 4 at 50%",
+                    "Set group 5 at 70%",
+                    "Select channels 20 through 30"
+                },
+                asr::RecognitionConstraintIntent::commandPhrase
+            };
+        }
+
         struct AsrListenOptions
         {
             std::filesystem::path modelPath;
@@ -190,6 +216,7 @@ namespace timmy::cli {
         asr::AsrConfiguration asrConfiguration;
         asrConfiguration.modelResourcePath = options.modelPath;
         asrConfiguration.preferredLanguage = options.preferredLanguage;
+        asrConfiguration.recognitionHints = makeLightingRecognitionHints();
         const auto asrStart = backend->start(asrConfiguration);
         if (!asrStart.succeeded)
         {
