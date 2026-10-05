@@ -18,14 +18,33 @@
 #include <wx/frame.h>
 #include <wx/timer.h>
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
 class wxChoice;
 class wxCommandEvent;
 class wxGauge;
+class wxButton;
+class wxNotebook;
+class wxPanel;
 class wxStaticText;
+class wxTextCtrl;
+class wxThreadEvent;
 class wxTimerEvent;
+
+namespace timmy::asr {
+
+    struct AsrEngineInfo;
+
+} // namespace timmy::asr
+
+namespace timmy::core {
+
+    class IRecognitionPipelineObserver;
+    class RecognitionPipeline;
+
+} // namespace timmy::core
 
 namespace timmy::gui {
 
@@ -39,6 +58,9 @@ namespace timmy::gui {
     private:
         void populateAudioDevices();
         void startSelectedDevice();
+        wxPanel* createAudioPage(wxNotebook& notebook);
+        wxPanel* createRecognitionPage(wxNotebook& notebook);
+        void populateRecognitionEngines();
 
         void onDeviceSelected(
             wxCommandEvent& event);
@@ -49,16 +71,50 @@ namespace timmy::gui {
         void onMeterTimer(
             wxTimerEvent& event);
 
+        void onListeningToggled(
+            wxCommandEvent& event);
+
+        void onRecognitionEngineSelected(
+            wxCommandEvent& event);
+
+        void onBrowseModel(
+            wxCommandEvent& event);
+
+        void onBrowseVadModel(
+            wxCommandEvent& event);
+
+        void onRecognitionState(
+            wxThreadEvent& event);
+
+        void onRecognitionTranscript(
+            wxThreadEvent& event);
+
+        void stopListening();
+
         wxChoice* deviceChoice_ = nullptr;
         wxChoice* channelChoice_ = nullptr;
+        wxChoice* recognitionEngineChoice_ = nullptr;
+        wxChoice* languageChoice_ = nullptr;
 
         wxGauge* levelGauge_ = nullptr;
 
+        wxTextCtrl* modelPathText_ = nullptr;
+        wxTextCtrl* vadModelPathText_ = nullptr;
+        wxButton* listeningButton_ = nullptr;
+        wxButton* modelBrowseButton_ = nullptr;
+        wxButton* vadBrowseButton_ = nullptr;
+
         wxStaticText* levelText_ = nullptr;
         wxStaticText* statusText_ = nullptr;
+        wxStaticText* recognitionStatusText_ = nullptr;
+        wxStaticText* rawTranscriptText_ = nullptr;
+        wxStaticText* normalizedTranscriptText_ = nullptr;
 
         std::vector<audio::AudioDeviceInfo>
             audioDevices_;
+
+        std::vector<asr::AsrEngineInfo>
+            recognitionEngines_;
 
         audio::AudioEngine audioEngine_;
 
@@ -67,6 +123,14 @@ namespace timmy::gui {
 
         std::shared_ptr<audio::AudioMeter>
             meter_;
+
+        std::shared_ptr<core::IRecognitionPipelineObserver>
+            recognitionObserver_;
+
+        std::unique_ptr<core::RecognitionPipeline>
+            recognitionPipeline_;
+
+        std::uint64_t recognitionGeneration_ = 0;
 
         wxTimer meterTimer_;
     };
