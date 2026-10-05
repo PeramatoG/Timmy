@@ -77,6 +77,7 @@ namespace timmy::gui {
         wxStaticText* recognitionStatusText_ = nullptr;
         wxStaticText* rawTranscriptText_ = nullptr;
         wxStaticText* normalizedTranscriptText_ = nullptr;
+        wxStaticText* assemblyText_ = nullptr;
 
         std::vector<audio::AudioDeviceInfo> audioDevices_;
         audio::AudioEngine audioEngine_;

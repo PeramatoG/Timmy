@@ -73,7 +73,7 @@ namespace {
             diagnostics.push_back(diagnostic);
         }
 
-        // Records the raw and normalized transcript pair.
+        // Records the complete shared recognition event.
         void onRecognitionTranscript(
             const timmy::core::RecognitionTranscript& transcript) override
         {
@@ -87,7 +87,7 @@ namespace {
 
 } // namespace
 
-// Verifies attachment, normalization, diagnostics, and repeatable lifecycle.
+// Verifies shared normalization, assembly, diagnostics, and lifecycle behavior.
 int main()
 {
     auto selector = std::make_shared<timmy::audio::AudioChannelSelector>();
@@ -97,12 +97,35 @@ int main()
     pipeline.setObserver(observer);
 
     assert(pipeline.start({}).succeeded);
-    backend->emit("  Canal 5 al 50 %.  ");
+    backend->emit("  Canal 5.  ");
+    assert(observer->transcripts.size() == 1);
+    assert(observer->transcripts[0].rawTranscript == "  Canal 5.  ");
+    assert(observer->transcripts[0].normalizedTranscript == "Canal 5");
+    assert(observer->transcripts[0].assemblyState
+        == timmy::core::RecognitionAssemblyState::pending);
+    assert(observer->transcripts[0].assemblyText == "Canal 5");
+
+    backend->emit(" al 50 %. ");
+    assert(observer->transcripts.size() == 2);
+    assert(observer->transcripts[1].normalizedTranscript == "al 50%");
+    assert(observer->transcripts[1].assemblyState
+        == timmy::core::RecognitionAssemblyState::complete);
+    assert(observer->transcripts[1].assemblyText == "Canal 5 al 50%");
+
+    backend->emit("Fixture 1 At Full");
+    assert(observer->transcripts.size() == 3);
+    assert(observer->transcripts[2].assemblyState
+        == timmy::core::RecognitionAssemblyState::complete);
+    assert(observer->transcripts[2].assemblyText == "Fixture 1 At Full");
+
+    backend->emit("background noise");
+    assert(observer->transcripts.size() == 4);
+    assert(observer->transcripts[3].assemblyState
+        == timmy::core::RecognitionAssemblyState::rejected);
+    assert(observer->transcripts[3].assemblyText.empty());
+
     backend->emitDiagnostic({
         timmy::asr::AsrDiagnosticCode::recognitionFailure, "kept message" });
-    assert(observer->transcripts.size() == 1);
-    assert(observer->transcripts.front().rawTranscript == "  Canal 5 al 50 %.  ");
-    assert(observer->transcripts.front().normalizedTranscript == "Canal 5 al 50%");
     assert(observer->diagnostics.front().code
         == timmy::asr::AsrDiagnosticCode::recognitionFailure);
     assert(observer->diagnostics.front().message == "kept message");
@@ -110,10 +133,25 @@ int main()
     std::vector<float> audio(480, 0.1F);
     selector->onAudioBlock({ audio, 480, { 48000, 1 } });
     assert(backend->blockCount > 0);
+
+    backend->emit("Group 2");
     assert(pipeline.stop().succeeded);
     const int stoppedCount = backend->blockCount;
     selector->onAudioBlock({ audio, 480, { 48000, 1 } });
     assert(backend->blockCount == stoppedCount);
     assert(pipeline.start({}).succeeded);
+    backend->emit("At 25%");
+    assert(observer->transcripts.back().assemblyState
+        == timmy::core::RecognitionAssemblyState::rejected);
+    assert(observer->transcripts.back().assemblyText.empty());
+
+    backend->emit("Channel 7");
+    assert(observer->transcripts.back().assemblyState
+        == timmy::core::RecognitionAssemblyState::pending);
+    pipeline.discardPendingAssembly();
+    backend->emit("At 70%");
+    assert(observer->transcripts.back().assemblyState
+        == timmy::core::RecognitionAssemblyState::rejected);
+    assert(observer->transcripts.back().assemblyText.empty());
     assert(pipeline.stop().succeeded);
 }

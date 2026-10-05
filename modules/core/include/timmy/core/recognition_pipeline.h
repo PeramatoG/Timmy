@@ -19,6 +19,10 @@
 #include <mutex>
 #include <string>
 
+namespace timmy::command {
+    class CommandAssembler;
+}
+
 namespace timmy::core {
 
     enum class RecognitionPipelineState
@@ -30,10 +34,19 @@ namespace timmy::core {
         failed
     };
 
+    enum class RecognitionAssemblyState
+    {
+        pending,
+        complete,
+        rejected
+    };
+
     struct RecognitionTranscript
     {
         std::string rawTranscript;
         std::string normalizedTranscript;
+        RecognitionAssemblyState assemblyState{RecognitionAssemblyState::rejected};
+        std::string assemblyText;
     };
 
     class IRecognitionPipelineObserver
@@ -60,6 +73,7 @@ namespace timmy::core {
         [[nodiscard]] RecognitionPipelineState state() const;
         asr::AsrOperationResult start(const asr::AsrConfiguration& configuration);
         asr::AsrOperationResult stop();
+        void discardPendingAssembly();
 
     private:
         class BackendListener;
@@ -75,6 +89,7 @@ namespace timmy::core {
         std::shared_ptr<asr::IAsrBackend> backend_;
         std::shared_ptr<BackendListener> backendListener_;
         command::TranscriptNormalizer normalizer_;
+        std::unique_ptr<command::CommandAssembler> assembler_;
         mutable std::mutex mutex_;
         std::shared_ptr<IRecognitionPipelineObserver> observer_;
         RecognitionPipelineState state_ = RecognitionPipelineState::stopped;

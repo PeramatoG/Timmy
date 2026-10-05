@@ -56,7 +56,7 @@ set_target_properties(timmy_cli PROPERTIES
 target_link_libraries(timmy_cli
     PRIVATE
         timmy_audio
-        timmy_asr
+        timmy_core
 )
 
 # ------------------------------------------------------------------------------
