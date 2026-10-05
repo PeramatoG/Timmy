@@ -10,9 +10,30 @@
 
 #include "timmy/core/recognition_pipeline.h"
 
+#include "timmy/command/command_assembler.h"
+
 #include <utility>
 
 namespace timmy::core {
+
+    namespace {
+
+        // Converts the command-layer result to the public Core observer state.
+        RecognitionAssemblyState coreAssemblyState(command::AssemblyState state)
+        {
+            switch (state)
+            {
+            case command::AssemblyState::pending:
+                return RecognitionAssemblyState::pending;
+            case command::AssemblyState::complete:
+                return RecognitionAssemblyState::complete;
+            case command::AssemblyState::rejected:
+                return RecognitionAssemblyState::rejected;
+            }
+            return RecognitionAssemblyState::rejected;
+        }
+
+    } // namespace
 
     class RecognitionPipeline::BackendListener final
         : public asr::IAsrResultListener
@@ -46,7 +67,8 @@ namespace timmy::core {
         : channelSelector_(std::move(channelSelector)),
           formatAdapter_(std::make_shared<audio::AudioFormatAdapter>()),
           backend_(std::move(backend)),
-          backendListener_(std::make_shared<BackendListener>(*this))
+          backendListener_(std::make_shared<BackendListener>(*this)),
+          assembler_(std::make_unique<command::CommandAssembler>())
     {
         backend_->setResultListener(backendListener_);
         formatAdapter_->addConsumer(backend_);
@@ -80,6 +102,7 @@ namespace timmy::core {
         const asr::AsrConfiguration& configuration)
     {
         stop();
+        discardPendingAssembly();
         publishState(RecognitionPipelineState::starting);
         formatAdapter_->reset();
 
@@ -109,6 +132,7 @@ namespace timmy::core {
         const auto currentState = state();
         if (currentState == RecognitionPipelineState::stopped)
         {
+            discardPendingAssembly();
             return { true, std::nullopt };
         }
 
@@ -126,6 +150,7 @@ namespace timmy::core {
         formatAdapter_->reset();
 
         const auto result = backend_->stop();
+        discardPendingAssembly();
         publishState(result.succeeded
             ? RecognitionPipelineState::stopped
             : RecognitionPipelineState::failed);
@@ -136,7 +161,7 @@ namespace timmy::core {
         return result;
     }
 
-    // Normalizes completed transcripts and publishes both observable forms.
+    // Normalizes and assembles each final transcript before publishing it.
     void RecognitionPipeline::handleResult(const asr::AsrResult& result)
     {
         if (result.kind != asr::AsrResultKind::final
@@ -146,13 +171,33 @@ namespace timmy::core {
         }
 
         const auto normalized = normalizer_.normalize(result.transcript);
-        if (const auto currentObserver = observer())
+        command::AssemblyResult assembly;
+        std::shared_ptr<IRecognitionPipelineObserver> currentObserver;
+        {
+            std::lock_guard lock(mutex_);
+            if (state_ != RecognitionPipelineState::listening)
+            {
+                return;
+            }
+            assembly = assembler_->accept(normalized.normalizedText);
+            currentObserver = observer_;
+        }
+        if (currentObserver)
         {
             currentObserver->onRecognitionTranscript({
                 normalized.originalText,
-                normalized.normalizedText
+                normalized.normalizedText,
+                coreAssemblyState(assembly.state),
+                std::move(assembly.text)
             });
         }
+    }
+
+    // Discards any incomplete command retained by the shared pipeline.
+    void RecognitionPipeline::discardPendingAssembly()
+    {
+        std::lock_guard lock(mutex_);
+        assembler_->reset();
     }
 
     // Publishes an unchanged backend diagnostic to the current observer.

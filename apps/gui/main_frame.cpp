@@ -12,6 +12,7 @@
 
 #include "timmy/audio/audio_device_enumerator.h"
 #include "timmy/core/asr_engine_factory.h"
+#include "timmy/core/command_recognition_profile.h"
 #include "timmy/core/resource_path_resolver.h"
 
 #include <wx/button.h>
@@ -93,18 +94,16 @@ namespace timmy::gui {
             return "Unknown recognition state.";
         }
 
-        // Creates the existing command-oriented backend-neutral recognition hints.
-        asr::RecognitionHints makeRecognitionHints()
+        // Returns display text for the shared command assembly state.
+        wxString assemblyStateText(core::RecognitionAssemblyState state)
         {
-            return {
-                { "channel", "canal", "fixture", "group", "grupo", "at",
-                  "al", "full", "select", "selecciona", "set", "pon",
-                  "up", "sube", "down", "baja" },
-                { "Canal 4 al 100%", "Grupo 5 al 70%", "Pon el grupo 5 al 70%",
-                  "Selecciona el canal 25", "Channel 4 at 50%",
-                  "Set group 5 at 70%" },
-                asr::RecognitionConstraintIntent::commandPhrase
-            };
+            switch (state)
+            {
+            case core::RecognitionAssemblyState::pending: return "pending";
+            case core::RecognitionAssemblyState::complete: return "complete";
+            case core::RecognitionAssemblyState::rejected: return "rejected";
+            }
+            return "unknown";
         }
 
     } // namespace
@@ -257,9 +256,11 @@ namespace timmy::gui {
         rawTranscriptText_ = new wxStaticText(panel, wxID_ANY, "Raw transcript: -");
         normalizedTranscriptText_ = new wxStaticText(panel, wxID_ANY,
             "Normalized transcript: -");
+        assemblyText_ = new wxStaticText(panel, wxID_ANY, "Assembly: -");
         sizer->Add(recognitionStatusText_, 0, wxALL, 8);
         sizer->Add(rawTranscriptText_, 0, wxALL, 8);
         sizer->Add(normalizedTranscriptText_, 0, wxALL, 8);
+        sizer->Add(assemblyText_, 0, wxALL, 8);
         panel->SetSizer(sizer);
         notebook->AddPage(panel, "Recognition", false);
     }
@@ -487,7 +488,7 @@ namespace timmy::gui {
         {
             configuration.preferredLanguage = "en";
         }
-        configuration.recognitionHints = makeRecognitionHints();
+        configuration.recognitionHints = core::commandRecognitionHints();
         const auto result = recognitionPipeline_->start(configuration);
         if (!result.succeeded)
         {
@@ -537,6 +538,13 @@ namespace timmy::gui {
             + wxString::FromUTF8(payload.transcript.rawTranscript));
         normalizedTranscriptText_->SetLabel("Normalized transcript: "
             + wxString::FromUTF8(payload.transcript.normalizedTranscript));
+        wxString assembly = "Assembly: "
+            + assemblyStateText(payload.transcript.assemblyState);
+        if (!payload.transcript.assemblyText.empty())
+        {
+            assembly += " — " + wxString::FromUTF8(payload.transcript.assemblyText);
+        }
+        assemblyText_->SetLabel(assembly);
     }
 
     // Refreshes the level meter from its thread-safe audio snapshot.

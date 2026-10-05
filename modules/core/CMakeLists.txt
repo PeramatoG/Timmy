@@ -1,5 +1,6 @@
 add_library(timmy_core STATIC
     src/asr_engine_factory.cpp
+    src/command_recognition_profile.cpp
     src/recognition_pipeline.cpp
     src/resource_path_resolver.cpp
 )
