@@ -9,6 +9,7 @@
  */
 
 #include "timmy/asr/asr_backend.h"
+#include "timmy/asr/asr_backend_factory.h"
 #include "timmy/audio/audio_format_adapter.h"
 
 #include <cstdlib>
@@ -177,6 +178,25 @@ namespace {
             "stop should return success and enter stopped state");
     }
 
+    // Verifies frontend-independent discovery and creation of ASR engines.
+    void testBackendFactory()
+    {
+        const auto engines = timmy::asr::availableAsrEngines();
+        require(engines.size() == 1,
+            "the current build should advertise one ASR engine");
+        require(engines.front().engine == timmy::asr::AsrEngine::whisperCpp
+                && engines.front().displayName == "Whisper.cpp",
+            "the factory should describe Whisper without frontend coupling");
+        require(engines.front().usesVadModelResource,
+            "Whisper should advertise its optional VAD model resource");
+
+        timmy::asr::AsrBackendCreateOptions options;
+        options.engine = engines.front().engine;
+        options.vadModelResourcePath = "test-vad-model";
+        require(timmy::asr::createAsrBackend(options) != nullptr,
+            "the advertised engine should be constructible via the factory");
+    }
+
     // Verifies that the audio adapter feeds valid 16 kHz mono PCM to ASR.
     void testAdapterFlowAndResults()
     {
@@ -286,6 +306,7 @@ namespace {
 int main()
 {
     testLifecycleAndCapabilities();
+    testBackendFactory();
     testAdapterFlowAndResults();
     testLifecycleAudioGating();
     testInvalidAudioIsRejected();

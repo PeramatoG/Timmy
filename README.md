@@ -52,3 +52,11 @@ timmy-cli asr listen \
 
 The `--vad-model` option is optional. Without it, the Whisper backend retains
 the bounded five-second accumulation behavior.
+
+The GUI keeps capture selection and metering on its **Audio** tab. Its
+**Recognition** tab selects the recognition engine, model resources, and
+language before listening, and displays raw and normalized transcripts
+separately. The initial local defaults are `models/ggml-base-q5_1.bin` and
+`models/ggml-silero-v6.2.0.bin`; `TIMMY_WHISPER_MODEL` and
+`TIMMY_WHISPER_VAD_MODEL` may override those paths for a session. The current
+prototype uses a dark appearance by default.
