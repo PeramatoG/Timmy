@@ -11,26 +11,98 @@
 #include "main_frame.h"
 
 #include "timmy/audio/audio_device_enumerator.h"
+#include "timmy/asr/whisper_asr_backend.h"
+#include "timmy/core/recognition_pipeline.h"
 
+#include <wx/button.h>
 #include <wx/choice.h>
 #include <wx/gauge.h>
 #include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
+#include <wx/textctrl.h>
+#include <wx/thread.h>
+#include <wx/utils.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <utility>
 
 namespace timmy::gui {
 
+    namespace {
+
+        wxDEFINE_EVENT(
+            recognitionStateEvent,
+            wxThreadEvent);
+
+        wxDEFINE_EVENT(
+            recognitionTranscriptEvent,
+            wxThreadEvent);
+
+        struct RecognitionStateEventData
+        {
+            core::RecognitionPipelineState state;
+            std::string detail;
+        };
+
+        class GuiRecognitionObserver final
+            : public core::IRecognitionPipelineObserver
+        {
+        public:
+            explicit GuiRecognitionObserver(wxEvtHandler& target)
+                : target_(target)
+            {
+            }
+
+            // Queues a pipeline state update for delivery on the wxWidgets thread.
+            void onRecognitionStateChanged(
+                core::RecognitionPipelineState state,
+                const std::string& detail) override
+            {
+                auto* event =
+                    new wxThreadEvent(recognitionStateEvent);
+                event->SetPayload(
+                    RecognitionStateEventData{ state, detail });
+                wxQueueEvent(&target_, event);
+            }
+
+            // Queues transcript text for delivery on the wxWidgets thread.
+            void onRecognitionTranscript(
+                const core::RecognitionTranscript& transcript) override
+            {
+                auto* event =
+                    new wxThreadEvent(recognitionTranscriptEvent);
+                event->SetPayload(transcript);
+                wxQueueEvent(&target_, event);
+            }
+
+        private:
+            wxEvtHandler& target_;
+        };
+
+        // Reads an optional UTF-8 path from an environment variable.
+        wxString environmentValue(const wxString& name)
+        {
+            wxString value;
+            wxGetEnv(name, &value);
+            return value;
+        }
+
+    } // namespace
+
+    // Builds the audio controls and backend-neutral recognition status view.
     MainFrame::MainFrame()
         : wxFrame(
             nullptr,
             wxID_ANY,
             "TIMMY",
             wxDefaultPosition,
-            wxSize(640, 420))
+            wxSize(720, 680))
     {
         channelSelector_ =
             std::make_shared<
@@ -193,6 +265,124 @@ namespace timmy::gui {
             wxLEFT | wxRIGHT | wxTOP,
             20);
 
+        // -------------------------------------------------------------------------
+        // Speech recognition
+        // -------------------------------------------------------------------------
+
+        auto* asrLabel =
+            new wxStaticText(
+                panel,
+                wxID_ANY,
+                "Speech recognition");
+
+        mainSizer->Add(
+            asrLabel,
+            0,
+            wxLEFT | wxRIGHT | wxTOP,
+            20);
+
+        auto* modelRow =
+            new wxBoxSizer(wxHORIZONTAL);
+        modelRow->Add(
+            new wxStaticText(panel, wxID_ANY, "Model path:"),
+            0,
+            wxALIGN_CENTER_VERTICAL | wxRIGHT,
+            8);
+        modelPathText_ =
+            new wxTextCtrl(
+                panel,
+                wxID_ANY,
+                environmentValue("TIMMY_WHISPER_MODEL"));
+        modelRow->Add(modelPathText_, 1, wxEXPAND);
+        mainSizer->Add(
+            modelRow,
+            0,
+            wxEXPAND | wxLEFT | wxRIGHT | wxTOP,
+            20);
+
+        auto* vadRow =
+            new wxBoxSizer(wxHORIZONTAL);
+        vadRow->Add(
+            new wxStaticText(panel, wxID_ANY, "VAD model path:"),
+            0,
+            wxALIGN_CENTER_VERTICAL | wxRIGHT,
+            8);
+        vadModelPathText_ =
+            new wxTextCtrl(
+                panel,
+                wxID_ANY,
+                environmentValue("TIMMY_WHISPER_VAD_MODEL"));
+        vadRow->Add(vadModelPathText_, 1, wxEXPAND);
+        mainSizer->Add(
+            vadRow,
+            0,
+            wxEXPAND | wxLEFT | wxRIGHT | wxTOP,
+            12);
+
+        auto* languageRow =
+            new wxBoxSizer(wxHORIZONTAL);
+        languageRow->Add(
+            new wxStaticText(panel, wxID_ANY, "Language:"),
+            0,
+            wxALIGN_CENTER_VERTICAL | wxRIGHT,
+            8);
+        languageText_ =
+            new wxTextCtrl(panel, wxID_ANY);
+        languageText_->SetHint("auto");
+        languageRow->Add(languageText_, 1, wxEXPAND);
+        mainSizer->Add(
+            languageRow,
+            0,
+            wxEXPAND | wxLEFT | wxRIGHT | wxTOP,
+            12);
+
+        auto* controlRow =
+            new wxBoxSizer(wxHORIZONTAL);
+        listeningButton_ =
+            new wxButton(
+                panel,
+                wxID_ANY,
+                "Start listening");
+        recognitionStatusText_ =
+            new wxStaticText(
+                panel,
+                wxID_ANY,
+                "Stopped");
+        controlRow->Add(listeningButton_, 0, wxRIGHT, 12);
+        controlRow->Add(
+            recognitionStatusText_,
+            1,
+            wxALIGN_CENTER_VERTICAL);
+        mainSizer->Add(
+            controlRow,
+            0,
+            wxEXPAND | wxLEFT | wxRIGHT | wxTOP,
+            12);
+
+        rawTranscriptText_ =
+            new wxStaticText(
+                panel,
+                wxID_ANY,
+                "Raw transcript: —");
+        rawTranscriptText_->Wrap(660);
+        mainSizer->Add(
+            rawTranscriptText_,
+            0,
+            wxEXPAND | wxLEFT | wxRIGHT | wxTOP,
+            20);
+
+        normalizedTranscriptText_ =
+            new wxStaticText(
+                panel,
+                wxID_ANY,
+                "Normalized transcript: —");
+        normalizedTranscriptText_->Wrap(660);
+        mainSizer->Add(
+            normalizedTranscriptText_,
+            0,
+            wxEXPAND | wxLEFT | wxRIGHT | wxTOP,
+            12);
+
         mainSizer->AddStretchSpacer();
 
         panel->SetSizer(mainSizer);
@@ -218,6 +408,21 @@ namespace timmy::gui {
             &MainFrame::onMeterTimer,
             this);
 
+        listeningButton_->Bind(
+            wxEVT_BUTTON,
+            &MainFrame::onListeningToggled,
+            this);
+
+        Bind(
+            recognitionStateEvent,
+            &MainFrame::onRecognitionState,
+            this);
+
+        Bind(
+            recognitionTranscriptEvent,
+            &MainFrame::onRecognitionTranscript,
+            this);
+
         meterTimer_.Start(50);
 
         populateAudioDevices();
@@ -225,12 +430,15 @@ namespace timmy::gui {
         Centre();
     }
 
+    // Stops worker-owned recognition before destroying GUI event targets.
     MainFrame::~MainFrame()
     {
         meterTimer_.Stop();
+        stopListening();
         audioEngine_.stop();
     }
 
+    // Enumerates capture devices and selects the current system default.
     void MainFrame::populateAudioDevices()
     {
         deviceChoice_->Clear();
@@ -297,6 +505,7 @@ namespace timmy::gui {
     // Starts capture from the device currently selected in the GUI.
     void MainFrame::startSelectedDevice()
     {
+        stopListening();
         audioEngine_.stop();
 
         channelChoice_->Clear();
@@ -381,12 +590,14 @@ namespace timmy::gui {
                     startResult.format.channelCount)));
     }
 
+    // Restarts capture when the user chooses a different input device.
     void MainFrame::onDeviceSelected(
         wxCommandEvent&)
     {
         startSelectedDevice();
     }
 
+    // Routes the selected input channel to metering and recognition consumers.
     void MainFrame::onChannelSelected(
         wxCommandEvent&)
     {
@@ -411,6 +622,7 @@ namespace timmy::gui {
             "Peak: 0.0000   RMS: 0.0000");
     }
 
+    // Refreshes the input meter from its thread-safe audio snapshot.
     void MainFrame::onMeterTimer(
         wxTimerEvent&)
     {
@@ -450,6 +662,144 @@ namespace timmy::gui {
                     level.peak),
                 static_cast<double>(
                     level.rms)));
+    }
+
+    // Starts or stops recognition while capture and metering continue independently.
+    void MainFrame::onListeningToggled(
+        wxCommandEvent&)
+    {
+        if (recognitionPipeline_)
+        {
+            stopListening();
+            return;
+        }
+
+        if (!audioEngine_.isRunning())
+        {
+            recognitionStatusText_->SetLabel(
+                "Error: audio capture is not running.");
+            return;
+        }
+
+        const std::string modelPath =
+            modelPathText_->GetValue().ToStdString();
+        if (modelPath.empty())
+        {
+            recognitionStatusText_->SetLabel(
+                "Error: select a Whisper model.");
+            return;
+        }
+
+        asr::WhisperAsrBackendOptions backendOptions;
+        backendOptions.vadModelPath =
+            std::filesystem::path(
+                vadModelPathText_->GetValue().ToStdString());
+
+        auto backend =
+            std::make_shared<asr::WhisperAsrBackend>(backendOptions);
+        recognitionObserver_ =
+            std::make_shared<GuiRecognitionObserver>(*this);
+        recognitionPipeline_ =
+            std::make_unique<core::RecognitionPipeline>(
+                channelSelector_,
+                std::move(backend));
+        recognitionPipeline_->setObserver(recognitionObserver_);
+
+        asr::AsrConfiguration configuration;
+        configuration.modelResourcePath = modelPath;
+        const std::string language =
+            languageText_->GetValue().ToStdString();
+        if (!language.empty())
+        {
+            configuration.preferredLanguage = language;
+        }
+        configuration.recognitionHints =
+            core::makeDefaultCommandRecognitionHints();
+
+        modelPathText_->Enable(false);
+        vadModelPathText_->Enable(false);
+        languageText_->Enable(false);
+        listeningButton_->Enable(false);
+        recognitionStatusText_->SetLabel("Starting...");
+
+        const auto result =
+            recognitionPipeline_->start(configuration);
+        if (!result.succeeded)
+        {
+            recognitionPipeline_->setObserver(nullptr);
+            recognitionPipeline_.reset();
+            recognitionObserver_.reset();
+            modelPathText_->Enable(true);
+            vadModelPathText_->Enable(true);
+            languageText_->Enable(true);
+            listeningButton_->Enable(true);
+        }
+    }
+
+    // Applies a marshalled recognition state update to GUI controls.
+    void MainFrame::onRecognitionState(
+        wxThreadEvent& event)
+    {
+        const auto data =
+            event.GetPayload<RecognitionStateEventData>();
+        const wxString detail = wxString::FromUTF8(data.detail);
+
+        if (data.state == core::RecognitionPipelineState::listening)
+        {
+            recognitionStatusText_->SetLabel("Listening");
+            listeningButton_->SetLabel("Stop listening");
+            listeningButton_->Enable(true);
+            return;
+        }
+
+        if (data.state == core::RecognitionPipelineState::error)
+        {
+            recognitionStatusText_->SetLabel("Error: " + detail);
+            listeningButton_->Enable(true);
+            return;
+        }
+
+        recognitionStatusText_->SetLabel("Stopped");
+    }
+
+    // Displays raw and normalized transcripts in separate observable fields.
+    void MainFrame::onRecognitionTranscript(
+        wxThreadEvent& event)
+    {
+        const auto transcript =
+            event.GetPayload<core::RecognitionTranscript>();
+        rawTranscriptText_->SetLabel(
+            "Raw transcript: "
+            + wxString::FromUTF8(transcript.rawText));
+        normalizedTranscriptText_->SetLabel(
+            "Normalized transcript: "
+            + wxString::FromUTF8(transcript.normalizedText));
+        Layout();
+    }
+
+    // Stops and joins recognition work while leaving capture available for metering.
+    void MainFrame::stopListening()
+    {
+        if (recognitionPipeline_)
+        {
+            recognitionPipeline_->setObserver(nullptr);
+            recognitionPipeline_->stop();
+            recognitionPipeline_.reset();
+        }
+        recognitionObserver_.reset();
+
+        if (listeningButton_)
+        {
+            listeningButton_->SetLabel("Start listening");
+            listeningButton_->Enable(true);
+        }
+        if (modelPathText_)
+        {
+            modelPathText_->Enable(true);
+            vadModelPathText_->Enable(true);
+            languageText_->Enable(true);
+            recognitionStatusText_->SetLabel("Stopped");
+        }
     }
 
 } // namespace timmy::gui

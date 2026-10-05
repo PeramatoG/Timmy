@@ -14,6 +14,7 @@
 #include "timmy/audio/audio_device_info.h"
 #include "timmy/audio/audio_engine.h"
 #include "timmy/audio/audio_meter.h"
+#include "timmy/core/recognition_pipeline.h"
 
 #include <wx/frame.h>
 #include <wx/timer.h>
@@ -24,7 +25,10 @@
 class wxChoice;
 class wxCommandEvent;
 class wxGauge;
+class wxButton;
 class wxStaticText;
+class wxTextCtrl;
+class wxThreadEvent;
 class wxTimerEvent;
 
 namespace timmy::gui {
@@ -49,13 +53,33 @@ namespace timmy::gui {
         void onMeterTimer(
             wxTimerEvent& event);
 
+        void onListeningToggled(
+            wxCommandEvent& event);
+
+        void onRecognitionState(
+            wxThreadEvent& event);
+
+        void onRecognitionTranscript(
+            wxThreadEvent& event);
+
+        void stopListening();
+
         wxChoice* deviceChoice_ = nullptr;
         wxChoice* channelChoice_ = nullptr;
 
         wxGauge* levelGauge_ = nullptr;
 
+        wxTextCtrl* modelPathText_ = nullptr;
+        wxTextCtrl* vadModelPathText_ = nullptr;
+        wxTextCtrl* languageText_ = nullptr;
+
+        wxButton* listeningButton_ = nullptr;
+
         wxStaticText* levelText_ = nullptr;
         wxStaticText* statusText_ = nullptr;
+        wxStaticText* recognitionStatusText_ = nullptr;
+        wxStaticText* rawTranscriptText_ = nullptr;
+        wxStaticText* normalizedTranscriptText_ = nullptr;
 
         std::vector<audio::AudioDeviceInfo>
             audioDevices_;
@@ -67,6 +91,12 @@ namespace timmy::gui {
 
         std::shared_ptr<audio::AudioMeter>
             meter_;
+
+        std::shared_ptr<core::IRecognitionPipelineObserver>
+            recognitionObserver_;
+
+        std::unique_ptr<core::RecognitionPipeline>
+            recognitionPipeline_;
 
         wxTimer meterTimer_;
     };

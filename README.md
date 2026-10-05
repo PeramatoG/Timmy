@@ -52,3 +52,10 @@ timmy-cli asr listen \
 
 The `--vad-model` option is optional. Without it, the Whisper backend retains
 the bounded five-second accumulation behavior.
+
+The GUI provides the same model, optional VAD model, and language settings in
+its Speech recognition section. Select the current input device and channel,
+then use **Start listening**; the input meter remains active while the latest
+raw and normalized transcripts are displayed separately. `TIMMY_WHISPER_MODEL`
+and `TIMMY_WHISPER_VAD_MODEL` may be used to prefill the two model paths for a
+session.

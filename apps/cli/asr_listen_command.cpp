@@ -13,8 +13,9 @@
 #include "timmy/asr/whisper_asr_backend.h"
 #include "timmy/audio/audio_channel_selector.h"
 #include "timmy/audio/audio_engine.h"
-#include "timmy/audio/audio_format_adapter.h"
+#include "timmy/core/recognition_pipeline.h"
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <filesystem>
@@ -31,32 +32,6 @@ namespace timmy::cli {
     namespace {
 
         volatile std::sig_atomic_t stopRequested = 0;
-
-        // Creates the initial backend-neutral lighting recognition hints.
-        asr::RecognitionHints makeLightingRecognitionHints()
-        {
-            return {
-                {
-                    "channel", "canal", "fixture", "group", "grupo",
-                    "at", "al", "full", "select", "selecciona", "set",
-                    "pon", "up", "sube", "down", "baja"
-                },
-                {
-                    "Canal 4 al 100%",
-                    "Grupo 5 al 70%",
-                    "Pon el grupo 5 al 70%",
-                    "Selecciona el canal 25",
-                    "Selecciona los canales del 20 al 30",
-                    "Canal 1, Canal 2 y Canal 3 al 40%",
-                    "Sube el canal 5 al 50%",
-                    "Baja el grupo 2 al 20%",
-                    "Channel 4 at 50%",
-                    "Set group 5 at 70%",
-                    "Select channels 20 through 30"
-                },
-                asr::RecognitionConstraintIntent::commandPhrase
-            };
-        }
 
         struct AsrListenOptions
         {
@@ -84,36 +59,45 @@ namespace timmy::cli {
             return "unknown";
         }
 
-        class ConsoleAsrListener final
-            : public asr::IAsrResultListener
+        class ConsoleRecognitionObserver final
+            : public core::IRecognitionPipelineObserver
         {
         public:
-            // Prints final recognition events without interleaving worker output.
-            void onAsrResult(const asr::AsrResult& result) override
+            // Prints lifecycle errors without interleaving worker output.
+            void onRecognitionStateChanged(
+                core::RecognitionPipelineState state,
+                const std::string& detail) override
             {
-                if (result.kind != asr::AsrResultKind::final)
+                if (state == core::RecognitionPipelineState::listening)
+                {
+                    hasStarted_.store(true);
+                    return;
+                }
+
+                if (state != core::RecognitionPipelineState::error)
+                {
+                    return;
+                }
+
+                if (!hasStarted_.load())
                 {
                     return;
                 }
 
                 std::lock_guard lock(outputMutex_);
-                std::cout << result.transcript << '\n' << std::flush;
+                std::cerr << "ASR error: " << detail << '\n';
             }
 
-            // Prints structured runtime diagnostics from the backend worker.
-            void onAsrDiagnostic(
-                const asr::AsrDiagnostic& diagnostic) override
+            // Prints final raw recognition text as in the existing CLI contract.
+            void onRecognitionTranscript(
+                const core::RecognitionTranscript& transcript) override
             {
                 std::lock_guard lock(outputMutex_);
-                std::cerr
-                    << "ASR runtime error ["
-                    << diagnosticName(diagnostic.code)
-                    << "]: "
-                    << diagnostic.message
-                    << '\n';
+                std::cout << transcript.rawText << '\n' << std::flush;
             }
 
         private:
+            std::atomic_bool hasStarted_{ false };
             std::mutex outputMutex_;
         };
 
@@ -210,14 +194,18 @@ namespace timmy::cli {
         backendOptions.vadModelPath = options.vadModelPath;
         auto backend =
             std::make_shared<asr::WhisperAsrBackend>(backendOptions);
-        auto listener = std::make_shared<ConsoleAsrListener>();
-        backend->setResultListener(listener);
+        auto selector = std::make_shared<audio::AudioChannelSelector>(0);
+        core::RecognitionPipeline pipeline(selector, backend);
+        auto observer =
+            std::make_shared<ConsoleRecognitionObserver>();
+        pipeline.setObserver(observer);
 
         asr::AsrConfiguration asrConfiguration;
         asrConfiguration.modelResourcePath = options.modelPath;
         asrConfiguration.preferredLanguage = options.preferredLanguage;
-        asrConfiguration.recognitionHints = makeLightingRecognitionHints();
-        const auto asrStart = backend->start(asrConfiguration);
+        asrConfiguration.recognitionHints =
+            core::makeDefaultCommandRecognitionHints();
+        const auto asrStart = pipeline.start(asrConfiguration);
         if (!asrStart.succeeded)
         {
             std::cerr
@@ -228,11 +216,6 @@ namespace timmy::cli {
                 << '\n';
             return 1;
         }
-
-        auto adapter = std::make_shared<audio::AudioFormatAdapter>();
-        auto selector = std::make_shared<audio::AudioChannelSelector>(0);
-        adapter->addConsumer(backend);
-        selector->addConsumer(adapter);
 
         audio::AudioEngine engine;
         engine.addConsumer(selector);
@@ -245,7 +228,7 @@ namespace timmy::cli {
                 << "]: "
                 << audioStart.diagnostic->message
                 << '\n';
-            backend->stop();
+            pipeline.stop();
             return 1;
         }
 
@@ -260,7 +243,7 @@ namespace timmy::cli {
         }
 
         engine.stop();
-        backend->stop();
+        pipeline.stop();
         std::cout << "ASR listener stopped.\n";
         return 0;
     }
