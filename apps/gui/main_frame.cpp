@@ -14,6 +14,7 @@
 #include "timmy/core/asr_engine_factory.h"
 #include "timmy/core/command_recognition_profile.h"
 #include "timmy/core/resource_path_resolver.h"
+#include "timmy/command/semantic_command.h"
 
 #include <wx/button.h>
 #include <wx/choice.h>
@@ -102,6 +103,19 @@ namespace timmy::gui {
             case core::RecognitionAssemblyState::pending: return "pending";
             case core::RecognitionAssemblyState::complete: return "complete";
             case core::RecognitionAssemblyState::rejected: return "rejected";
+            }
+            return "unknown";
+        }
+
+        // Returns display text for the shared semantic parse state.
+        wxString semanticStateText(core::RecognitionSemanticState state)
+        {
+            switch (state)
+            {
+            case core::RecognitionSemanticState::notAttempted: return "not attempted";
+            case core::RecognitionSemanticState::produced: return "produced";
+            case core::RecognitionSemanticState::unsupportedOrInvalid:
+                return "unsupported or invalid";
             }
             return "unknown";
         }
@@ -257,10 +271,13 @@ namespace timmy::gui {
         normalizedTranscriptText_ = new wxStaticText(panel, wxID_ANY,
             "Normalized transcript: -");
         assemblyText_ = new wxStaticText(panel, wxID_ANY, "Assembly: -");
+        semanticCommandText_ = new wxStaticText(panel, wxID_ANY,
+            "Semantic command: -");
         sizer->Add(recognitionStatusText_, 0, wxALL, 8);
         sizer->Add(rawTranscriptText_, 0, wxALL, 8);
         sizer->Add(normalizedTranscriptText_, 0, wxALL, 8);
         sizer->Add(assemblyText_, 0, wxALL, 8);
+        sizer->Add(semanticCommandText_, 0, wxALL, 8);
         panel->SetSizer(sizer);
         notebook->AddPage(panel, "Recognition", false);
     }
@@ -545,6 +562,14 @@ namespace timmy::gui {
             assembly += " — " + wxString::FromUTF8(payload.transcript.assemblyText);
         }
         assemblyText_->SetLabel(assembly);
+        wxString semantic = "Semantic command: "
+            + semanticStateText(payload.transcript.semanticState);
+        if (payload.transcript.semanticCommand)
+        {
+            semantic += " — " + wxString::FromUTF8(
+                command::describe(*payload.transcript.semanticCommand));
+        }
+        semanticCommandText_->SetLabel(semantic);
     }
 
     // Refreshes the level meter from its thread-safe audio snapshot.

@@ -13,10 +13,12 @@
 #include "timmy/asr/asr_backend.h"
 #include "timmy/audio/audio_channel_selector.h"
 #include "timmy/audio/audio_format_adapter.h"
+#include "timmy/command/semantic_command_parser.h"
 #include "timmy/command/transcript_normalizer.h"
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 
 namespace timmy::command {
@@ -41,12 +43,21 @@ namespace timmy::core {
         rejected
     };
 
+    enum class RecognitionSemanticState
+    {
+        notAttempted,
+        produced,
+        unsupportedOrInvalid
+    };
+
     struct RecognitionTranscript
     {
         std::string rawTranscript;
         std::string normalizedTranscript;
         RecognitionAssemblyState assemblyState{RecognitionAssemblyState::rejected};
         std::string assemblyText;
+        RecognitionSemanticState semanticState{RecognitionSemanticState::notAttempted};
+        std::optional<command::SemanticCommand> semanticCommand;
     };
 
     class IRecognitionPipelineObserver
@@ -90,6 +101,7 @@ namespace timmy::core {
         std::shared_ptr<BackendListener> backendListener_;
         command::TranscriptNormalizer normalizer_;
         std::unique_ptr<command::CommandAssembler> assembler_;
+        command::SemanticCommandParser semanticParser_;
         mutable std::mutex mutex_;
         std::shared_ptr<IRecognitionPipelineObserver> observer_;
         RecognitionPipelineState state_ = RecognitionPipelineState::stopped;

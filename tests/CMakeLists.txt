@@ -230,6 +230,33 @@ add_test(
     COMMAND timmy_command_assembler_tests
 )
 
+add_executable(timmy_semantic_command_parser_tests
+    semantic_command_parser_test.cpp
+)
+
+target_link_libraries(timmy_semantic_command_parser_tests
+    PRIVATE
+        timmy_command
+)
+
+if(MSVC)
+    target_compile_options(timmy_semantic_command_parser_tests PRIVATE
+        /W4
+        /permissive-
+    )
+else()
+    target_compile_options(timmy_semantic_command_parser_tests PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+endif()
+
+add_test(
+    NAME timmy.semantic_command_parser
+    COMMAND timmy_semantic_command_parser_tests
+)
+
 add_executable(timmy_recognition_pipeline_tests recognition_pipeline_test.cpp)
 target_link_libraries(timmy_recognition_pipeline_tests PRIVATE timmy_core)
 add_test(NAME timmy.recognition_pipeline COMMAND timmy_recognition_pipeline_tests)
