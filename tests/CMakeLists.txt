@@ -202,3 +202,19 @@ add_test(
     NAME timmy.transcript_normalizer
     COMMAND timmy_transcript_normalizer_tests
 )
+
+add_executable(timmy_recognition_pipeline_tests recognition_pipeline_test.cpp)
+target_link_libraries(timmy_recognition_pipeline_tests PRIVATE timmy_core)
+add_test(NAME timmy.recognition_pipeline COMMAND timmy_recognition_pipeline_tests)
+
+add_executable(timmy_resource_path_resolver_tests resource_path_resolver_test.cpp)
+target_link_libraries(timmy_resource_path_resolver_tests PRIVATE timmy_core)
+add_test(NAME timmy.resource_path_resolver COMMAND timmy_resource_path_resolver_tests)
+
+if(MSVC)
+    target_compile_options(timmy_recognition_pipeline_tests PRIVATE /W4 /permissive-)
+    target_compile_options(timmy_resource_path_resolver_tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(timmy_recognition_pipeline_tests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(timmy_resource_path_resolver_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()

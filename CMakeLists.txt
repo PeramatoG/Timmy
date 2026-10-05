@@ -30,6 +30,7 @@ option(
 add_subdirectory(modules/audio)
 add_subdirectory(modules/asr)
 add_subdirectory(modules/command)
+add_subdirectory(modules/core)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
@@ -123,6 +124,7 @@ if(TIMMY_BUILD_GUI)
     target_link_libraries(timmy_gui
         PRIVATE
             timmy_audio
+            timmy_core
             ${TIMMY_WX_LIBRARIES}
     )
 
