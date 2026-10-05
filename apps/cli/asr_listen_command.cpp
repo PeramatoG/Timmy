@@ -15,6 +15,7 @@
 #include "timmy/core/asr_engine_factory.h"
 #include "timmy/core/command_recognition_profile.h"
 #include "timmy/core/recognition_pipeline.h"
+#include "timmy/command/semantic_command.h"
 
 #include <chrono>
 #include <csignal>
@@ -71,6 +72,19 @@ namespace timmy::cli {
             return "unknown";
         }
 
+        // Returns a stable command-line label for semantic parsing state.
+        std::string_view semanticName(core::RecognitionSemanticState state)
+        {
+            switch (state)
+            {
+            case core::RecognitionSemanticState::notAttempted: return "not-attempted";
+            case core::RecognitionSemanticState::produced: return "produced";
+            case core::RecognitionSemanticState::unsupportedOrInvalid:
+                return "unsupported-or-invalid";
+            }
+            return "unknown";
+        }
+
         class ConsoleRecognitionObserver final
             : public core::IRecognitionPipelineObserver
         {
@@ -105,6 +119,13 @@ namespace timmy::cli {
                 if (!transcript.assemblyText.empty())
                 {
                     std::cout << " — " << transcript.assemblyText;
+                }
+                std::cout << '\n'
+                    << "SEMANTIC: " << semanticName(transcript.semanticState);
+                if (transcript.semanticCommand)
+                {
+                    std::cout << " — "
+                        << command::describe(*transcript.semanticCommand);
                 }
                 std::cout << '\n' << std::flush;
             }

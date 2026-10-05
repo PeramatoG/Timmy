@@ -33,6 +33,20 @@ namespace timmy::core {
             return RecognitionAssemblyState::rejected;
         }
 
+        // Converts a command-layer parse result to the public Core observer state.
+        RecognitionSemanticState coreSemanticState(
+            command::SemanticParseState state)
+        {
+            switch (state)
+            {
+            case command::SemanticParseState::produced:
+                return RecognitionSemanticState::produced;
+            case command::SemanticParseState::unsupportedOrInvalid:
+                return RecognitionSemanticState::unsupportedOrInvalid;
+            }
+            return RecognitionSemanticState::unsupportedOrInvalid;
+        }
+
     } // namespace
 
     class RecognitionPipeline::BackendListener final
@@ -172,6 +186,9 @@ namespace timmy::core {
 
         const auto normalized = normalizer_.normalize(result.transcript);
         command::AssemblyResult assembly;
+        command::SemanticParseResult semantic;
+        RecognitionSemanticState semanticState =
+            RecognitionSemanticState::notAttempted;
         std::shared_ptr<IRecognitionPipelineObserver> currentObserver;
         {
             std::lock_guard lock(mutex_);
@@ -180,6 +197,11 @@ namespace timmy::core {
                 return;
             }
             assembly = assembler_->accept(normalized.normalizedText);
+            if (assembly.state == command::AssemblyState::complete)
+            {
+                semantic = semanticParser_.parse(assembly.text);
+                semanticState = coreSemanticState(semantic.state);
+            }
             currentObserver = observer_;
         }
         if (currentObserver)
@@ -188,7 +210,9 @@ namespace timmy::core {
                 normalized.originalText,
                 normalized.normalizedText,
                 coreAssemblyState(assembly.state),
-                std::move(assembly.text)
+                std::move(assembly.text),
+                semanticState,
+                std::move(semantic.command)
             });
         }
     }

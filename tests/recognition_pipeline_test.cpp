@@ -104,6 +104,9 @@ int main()
     assert(observer->transcripts[0].assemblyState
         == timmy::core::RecognitionAssemblyState::pending);
     assert(observer->transcripts[0].assemblyText == "Canal 5");
+    assert(observer->transcripts[0].semanticState
+        == timmy::core::RecognitionSemanticState::notAttempted);
+    assert(!observer->transcripts[0].semanticCommand);
 
     backend->emit(" al 50 %. ");
     assert(observer->transcripts.size() == 2);
@@ -111,18 +114,37 @@ int main()
     assert(observer->transcripts[1].assemblyState
         == timmy::core::RecognitionAssemblyState::complete);
     assert(observer->transcripts[1].assemblyText == "Canal 5 al 50%");
+    assert(observer->transcripts[1].semanticState
+        == timmy::core::RecognitionSemanticState::produced);
+    assert(observer->transcripts[1].semanticCommand);
+    assert(timmy::command::describe(*observer->transcripts[1].semanticCommand)
+        == "SetIntensity(Channel(5), 50%)");
 
     backend->emit("Fixture 1 At Full");
     assert(observer->transcripts.size() == 3);
     assert(observer->transcripts[2].assemblyState
         == timmy::core::RecognitionAssemblyState::complete);
     assert(observer->transcripts[2].assemblyText == "Fixture 1 At Full");
+    assert(observer->transcripts[2].semanticState
+        == timmy::core::RecognitionSemanticState::produced);
+    assert(timmy::command::describe(*observer->transcripts[2].semanticCommand)
+        == "SetIntensity(Fixture(1), 100%)");
 
     backend->emit("background noise");
     assert(observer->transcripts.size() == 4);
     assert(observer->transcripts[3].assemblyState
         == timmy::core::RecognitionAssemblyState::rejected);
     assert(observer->transcripts[3].assemblyText.empty());
+    assert(observer->transcripts[3].semanticState
+        == timmy::core::RecognitionSemanticState::notAttempted);
+    assert(!observer->transcripts[3].semanticCommand);
+
+    backend->emit("Channel 1 At 101");
+    assert(observer->transcripts.back().assemblyState
+        == timmy::core::RecognitionAssemblyState::complete);
+    assert(observer->transcripts.back().semanticState
+        == timmy::core::RecognitionSemanticState::unsupportedOrInvalid);
+    assert(!observer->transcripts.back().semanticCommand);
 
     backend->emitDiagnostic({
         timmy::asr::AsrDiagnosticCode::recognitionFailure, "kept message" });
@@ -144,10 +166,16 @@ int main()
     assert(observer->transcripts.back().assemblyState
         == timmy::core::RecognitionAssemblyState::rejected);
     assert(observer->transcripts.back().assemblyText.empty());
+    assert(observer->transcripts.back().semanticState
+        == timmy::core::RecognitionSemanticState::notAttempted);
+    assert(!observer->transcripts.back().semanticCommand);
 
     backend->emit("Channel 7");
     assert(observer->transcripts.back().assemblyState
         == timmy::core::RecognitionAssemblyState::pending);
+    assert(observer->transcripts.back().semanticState
+        == timmy::core::RecognitionSemanticState::notAttempted);
+    assert(!observer->transcripts.back().semanticCommand);
     pipeline.discardPendingAssembly();
     backend->emit("At 70%");
     assert(observer->transcripts.back().assemblyState
