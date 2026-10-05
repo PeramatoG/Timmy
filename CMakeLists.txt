@@ -48,6 +48,7 @@ add_executable(timmy_cli
     apps/cli/audio_monitor_command.cpp
     apps/cli/asr_commands.cpp
     apps/cli/asr_listen_command.cpp
+    apps/cli/osc_commands.cpp
 )
 
 set_target_properties(timmy_cli PROPERTIES

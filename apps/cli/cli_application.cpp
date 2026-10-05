@@ -12,6 +12,7 @@
 
 #include "audio_commands.h"
 #include "asr_commands.h"
+#include "osc_commands.h"
 
 #include <iostream>
 #include <string_view>
@@ -45,6 +46,7 @@ namespace timmy::cli {
                 << "Commands:\n"
                 << "  audio    Audio device and monitoring tools.\n\n"
                 << "  asr      Speech recognition tools.\n\n"
+                << "  osc      Explicit OSC test/send tools.\n\n"
                 << "Run 'timmy-cli <command> --help' "
                 "for command-specific help.\n";
         }
@@ -86,6 +88,11 @@ namespace timmy::cli {
             return runAsrCommand(
                 argc - 2,
                 argv + 2);
+        }
+
+        if (command == "osc")
+        {
+            return runOscCommand(argc - 2, argv + 2);
         }
 
         std::cerr
