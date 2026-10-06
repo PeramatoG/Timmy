@@ -15,6 +15,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <functional>
 #include <span>
 #include <string>
 
@@ -43,13 +45,17 @@ namespace timmy::transport {
             std::shared_ptr<const IOscCommandProfile> profile);
         OscCommandEmitter(OscDestination destination,
             std::shared_ptr<const IOscCommandProfile> profile,
-            std::unique_ptr<IUdpSender> sender);
+            std::unique_ptr<IUdpSender> sender,
+            std::function<void(std::chrono::milliseconds)> wait = {});
         ~OscCommandEmitter() override;
 
         [[nodiscard]] EmissionResult emit(
             const command::SemanticCommand& command) override;
 
     private:
+        // Serializes complete plans, including cleanup, on this emitter.
+        std::mutex executionMutex_;
+        std::function<void(std::chrono::milliseconds)> wait_;
         OscDestination destination_;
         std::shared_ptr<const IOscCommandProfile> profile_;
         std::unique_ptr<IUdpSender> sender_;

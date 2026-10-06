@@ -58,7 +58,7 @@ namespace timmy::transport {
                             + std::to_string(target.id);
                         message.arguments = {level};
                     }
-                    return OscMappingResult{std::move(message), {}};
+                    return OscMappingResult{OscExecutionPlan{std::move(message)}, {}};
                 }, operation.target);
             }
             return OscMappingResult{

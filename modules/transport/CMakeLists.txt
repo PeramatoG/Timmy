@@ -3,6 +3,7 @@ add_library(timmy_transport STATIC
     src/osc_command_emitter.cpp
     src/osc_command_profile.cpp
     src/osc_packet.cpp
+    src/hydra2_osc_command_profile.cpp
 )
 
 target_include_directories(timmy_transport
@@ -10,7 +11,8 @@ target_include_directories(timmy_transport
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(timmy_transport PUBLIC timmy_command)
+find_package(Threads REQUIRED)
+target_link_libraries(timmy_transport PUBLIC timmy_command Threads::Threads)
 
 if(WIN32)
     target_link_libraries(timmy_transport PRIVATE ws2_32)
