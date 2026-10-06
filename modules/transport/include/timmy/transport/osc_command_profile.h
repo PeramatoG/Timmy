@@ -14,13 +14,27 @@
 #include "timmy/transport/osc_message.h"
 
 #include <optional>
+#include <chrono>
+#include <variant>
+#include <vector>
 #include <string>
 
 namespace timmy::transport {
 
+    // A pulse owns both edges; execution cannot advance before release.
+    struct OscKeyPulse
+    {
+        std::string address;
+        std::chrono::milliseconds hold{30};
+        std::chrono::milliseconds gap{30};
+    };
+
+    using OscExecutionStep = std::variant<OscMessage, OscKeyPulse>;
+    using OscExecutionPlan = std::vector<OscExecutionStep>;
+
     struct OscMappingResult
     {
-        std::optional<OscMessage> message;
+        std::optional<OscExecutionPlan> plan;
         std::string diagnostic;
     };
 

@@ -13,6 +13,8 @@
 #include "timmy/transport/osc_packet.h"
 
 #include <limits>
+#include <thread>
+#include <exception>
 #include <string>
 #include <utility>
 
@@ -173,8 +175,12 @@ namespace timmy::transport {
     // Creates an OSC emitter with an owned sender for deterministic testing.
     OscCommandEmitter::OscCommandEmitter(OscDestination destination,
         std::shared_ptr<const IOscCommandProfile> profile,
-        std::unique_ptr<IUdpSender> sender)
-        : destination_(std::move(destination)),
+        std::unique_ptr<IUdpSender> sender,
+        std::function<void(std::chrono::milliseconds)> wait)
+        : wait_(wait ? std::move(wait) : [](std::chrono::milliseconds duration) {
+              std::this_thread::sleep_for(duration);
+          }),
+          destination_(std::move(destination)),
           profile_(std::move(profile)),
           sender_(std::move(sender))
     {
@@ -183,10 +189,11 @@ namespace timmy::transport {
     // Destroys the owned UDP sender while its platform state is still valid.
     OscCommandEmitter::~OscCommandEmitter() = default;
 
-    // Maps, serializes, and sends at most one OSC datagram for one command.
+    // Validates the whole plan before I/O and executes it without interleaving.
     EmissionResult OscCommandEmitter::emit(
         const command::SemanticCommand& commandValue)
     {
+        const std::lock_guard lock(executionMutex_);
         if (destination_.host.empty())
         {
             return {EmissionState::failed,
@@ -210,18 +217,86 @@ namespace timmy::transport {
         }
 
         const auto mapped = profile_->map(commandValue);
-        if (!mapped.message)
+        if (!mapped.plan || mapped.plan->empty())
         {
             return {EmissionState::failed, mapped.diagnostic.empty()
                 ? "The OSC profile does not support this semantic command."
                 : mapped.diagnostic};
         }
-        const auto packet = serializeOscMessage(*mapped.message);
-        if (!packet.bytes)
+        struct PreparedStep
         {
-            return {EmissionState::failed, packet.diagnostic};
+            std::vector<std::uint8_t> bytes;
+            std::optional<std::vector<std::uint8_t>> release;
+            std::chrono::milliseconds hold{0};
+            std::chrono::milliseconds gap{0};
+        };
+        std::vector<PreparedStep> prepared;
+        for (const auto& step : *mapped.plan)
+        {
+            PreparedStep next;
+            OscMessage message;
+            if (const auto* pulse = std::get_if<OscKeyPulse>(&step))
+            {
+                if (pulse->hold.count() < 0 || pulse->gap.count() < 0)
+                    return {EmissionState::failed, "OSC key timing must be nonnegative."};
+                message = {pulse->address, {std::int32_t{1}}};
+                auto release = serializeOscMessage({pulse->address, {std::int32_t{0}}});
+                if (!release.bytes) return {EmissionState::failed, release.diagnostic};
+                next.release = std::move(*release.bytes);
+                next.hold = pulse->hold;
+                next.gap = pulse->gap;
+            }
+            else message = std::get<OscMessage>(step);
+            auto packet = serializeOscMessage(message);
+            if (!packet.bytes) return {EmissionState::failed, packet.diagnostic};
+            next.bytes = std::move(*packet.bytes);
+            prepared.push_back(std::move(next));
         }
-        return sender_->send(destination_, *packet.bytes);
+        for (const auto& step : prepared)
+        {
+            // Mark a pulse before attempting delivery: a failing sender may have
+            // delivered the datagram. Cleanup only releases, never retries presses.
+            bool needsRelease = step.release.has_value();
+            auto cleanup = [&] {
+                if (needsRelease)
+                {
+                    try { (void)sender_->send(destination_, *step.release); }
+                    catch (...) { /* Preserve the original failure. */ }
+                }
+            };
+            try
+            {
+                auto result = sender_->send(destination_, step.bytes);
+                if (result.state == EmissionState::failed)
+                {
+                    cleanup();
+                    return result;
+                }
+                if (step.release)
+                {
+                    wait_(step.hold);
+                    result = sender_->send(destination_, *step.release);
+                    if (result.state == EmissionState::failed)
+                    {
+                        cleanup();
+                        return result;
+                    }
+                    needsRelease = false;
+                    wait_(step.gap);
+                }
+            }
+            catch (const std::exception& error)
+            {
+                cleanup();
+                return {EmissionState::failed, error.what()};
+            }
+            catch (...)
+            {
+                cleanup();
+                return {EmissionState::failed, "OSC execution failed with an unknown exception."};
+            }
+        }
+        return {EmissionState::succeeded, {}};
     }
 
 } // namespace timmy::transport

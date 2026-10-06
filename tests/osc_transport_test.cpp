@@ -80,25 +80,25 @@ namespace {
         const timmy::transport::GenericOscCommandProfile profile;
         const auto channel = profile.map(setIntensity(
             timmy::command::Channel{7}, 0));
-        require(channel.message.has_value());
-        require(channel.message->address == "/timmy/channel/intensity");
-        require(channel.message->arguments.size() == 2);
-        requireInteger(channel.message->arguments[0], 7);
-        requireInteger(channel.message->arguments[1], 0);
+        require(channel.plan.has_value() && channel.plan->size() == 1);
+        require(std::get<timmy::transport::OscMessage>(channel.plan->front()).address == "/timmy/channel/intensity");
+        require(std::get<timmy::transport::OscMessage>(channel.plan->front()).arguments.size() == 2);
+        requireInteger(std::get<timmy::transport::OscMessage>(channel.plan->front()).arguments[0], 7);
+        requireInteger(std::get<timmy::transport::OscMessage>(channel.plan->front()).arguments[1], 0);
 
         const auto fixture = profile.map(setIntensity(
             timmy::command::Fixture{42}, 100));
-        require(fixture.message.has_value());
-        require(fixture.message->address == "/timmy/fixture/42/intensity");
-        require(fixture.message->arguments.size() == 1);
-        requireInteger(fixture.message->arguments[0], 100);
+        require(fixture.plan.has_value() && fixture.plan->size() == 1);
+        require(std::get<timmy::transport::OscMessage>(fixture.plan->front()).address == "/timmy/fixture/42/intensity");
+        require(std::get<timmy::transport::OscMessage>(fixture.plan->front()).arguments.size() == 1);
+        requireInteger(std::get<timmy::transport::OscMessage>(fixture.plan->front()).arguments[0], 100);
 
         const auto group = profile.map(setIntensity(
             timmy::command::Group{3}, 55));
-        require(group.message.has_value());
-        require(group.message->address == "/timmy/group/intensity/3");
-        require(group.message->arguments.size() == 1);
-        requireInteger(group.message->arguments[0], 55);
+        require(group.plan.has_value() && group.plan->size() == 1);
+        require(std::get<timmy::transport::OscMessage>(group.plan->front()).address == "/timmy/group/intensity/3");
+        require(std::get<timmy::transport::OscMessage>(group.plan->front()).arguments.size() == 1);
+        requireInteger(std::get<timmy::transport::OscMessage>(group.plan->front()).arguments[0], 55);
     }
 
     // Verifies an OSC message is serialized to exact OSC 1.0 bytes.
@@ -209,9 +209,9 @@ namespace {
         require(receivedSize > 0);
         received.resize(static_cast<std::size_t>(receivedSize));
         const auto mapped = profile->map(command);
-        require(mapped.message.has_value());
+        require(mapped.plan.has_value() && mapped.plan->size() == 1);
         const auto expected = timmy::transport::serializeOscMessage(
-            *mapped.message);
+            std::get<timmy::transport::OscMessage>(mapped.plan->front()));
         require(expected.bytes.has_value());
         require(received == *expected.bytes);
 #endif

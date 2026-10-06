@@ -68,5 +68,34 @@ a specific lighting console. It maps channel intensity to
 `/timmy/channel/intensity` with integer channel and percentage arguments,
 fixture intensity to `/timmy/fixture/<id>/intensity`, and group intensity to
 `/timmy/group/intensity/<id>`. A console integration can implement
-`IOscCommandProfile` to replace only this semantic-to-message mapping; OSC
+`IOscCommandProfile` to replace only this semantic-to-plan mapping; OSC
 serialization and UDP ownership remain in `OscCommandEmitter`.
+
+### LT Hydra II / WOLE remote keys
+
+```sh
+timmy-cli osc send --profile hydra2 --host 127.0.0.1 --port 9000 \
+  --command "Channel 5 At 50" --key-hold-ms 30 --key-gap-ms 30
+```
+
+Hydra II uses ordered remote-key pulses (integer `1` then `0` at the same
+address). `SetIntensity` selects CH, FXT or GRP, enters the target ID, then `@`
+and a two-digit percentage; 100/Full uses a second `@`. No reset or other
+catalog-only keys are emitted. `--pre-clear` optionally prefixes two C pulses;
+it is disabled by default. Hold and gap default to 30 ms each, including the
+final gap. Adapt these to the console configuration.
+
+`Hydra2OscOptions::keyAddresses` exposes the full configurable key catalog;
+applications can override individual OSC addresses without changing command
+semantics. `IOscCommandProfile` now returns an ordered `OscExecutionPlan` of
+messages or complete key pulses. Generic remains the default and still sends
+exactly one unchanged message, without waiting.
+
+Reuse one `OscCommandEmitter` for a destination: concurrent calls on that
+instance execute whole plans serially, including failure cleanup. Independent
+emitters or external console operators are not coordinated. Waiting is injected
+in deterministic tests. The emitter validates every message before the first
+send, stops on failure, attempts to release the active key, and propagates the
+original error. Presses are never retried. UDP success means local submission,
+not console acknowledgement; best-effort release cannot guarantee delivery.
+Live recognition remains disconnected from emission.
