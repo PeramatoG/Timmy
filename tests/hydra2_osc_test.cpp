@@ -126,7 +126,7 @@ void configuration() {
     require(negative.emit(parse("Channel 1 At Full")).state == EmissionState::failed);
     require(negativeRecorded->packets.empty());
 }
-void concurrency() {
+void testPlanSerialization() {
     auto sender = std::make_unique<Sender>(); auto* recorded = sender.get();
     std::promise<void> entered, resume, secondStarted;
     auto gate = resume.get_future().share(); bool firstWait = true;
@@ -155,5 +155,5 @@ int main() {
     mapping("Group 3 At 0", {"/keyGRP", "/key3", "/key@", "/key0", "/key0"});
     mapping("Channel 1 At Full", {"/keyCH", "/key1", "/key@", "/key@"});
     mapping("Channel 1 At 100", {"/keyCH", "/key1", "/key@", "/key@"}, true);
-    failures(); configuration(); concurrency();
+    failures(); configuration(); testPlanSerialization();
 }
