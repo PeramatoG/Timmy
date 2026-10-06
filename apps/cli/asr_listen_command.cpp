@@ -15,6 +15,10 @@
 #include "timmy/core/asr_engine_factory.h"
 #include "timmy/core/command_recognition_profile.h"
 #include "timmy/core/recognition_pipeline.h"
+#include "timmy/core/recognition_command_executor.h"
+#include "timmy/transport/osc_command_emitter.h"
+#include "timmy/transport/hydra2_osc_command_profile.h"
+#include <charconv>
 #include "timmy/command/semantic_command.h"
 
 #include <chrono>
@@ -39,6 +43,12 @@ namespace timmy::cli {
             std::filesystem::path modelPath;
             std::filesystem::path vadModelPath;
             std::optional<std::string> preferredLanguage;
+            std::string profile;
+            std::string host;
+            std::uint32_t port = 0;
+            transport::Hydra2OscOptions hydra;
+            bool outputOptions = false;
+            bool hydraOptions = false;
         };
 
         // Returns a stable command-line label for an ASR diagnostic code.
@@ -89,6 +99,19 @@ namespace timmy::cli {
             : public core::IRecognitionPipelineObserver
         {
         public:
+            core::RecognitionCommandExecutor* executor = nullptr;
+
+            void onExecution(const core::RecognitionExecutionResult& result)
+            {
+                std::lock_guard lock(outputMutex_);
+                const auto label = result.state == core::RecognitionExecutionState::queued
+                    ? "queued" : result.state == core::RecognitionExecutionState::succeeded
+                    ? "succeeded" : "failed";
+                std::cout << "DISPATCH: " << label;
+                if (!result.diagnostic.empty()) std::cout << " — " << result.diagnostic;
+                std::cout << '\n' << std::flush;
+            }
+
             // Ignores lifecycle events already described by the command loop.
             void onRecognitionStateChanged(core::RecognitionPipelineState) override
             {
@@ -111,7 +134,7 @@ namespace timmy::cli {
             void onRecognitionTranscript(
                 const core::RecognitionTranscript& transcript) override
             {
-                std::lock_guard lock(outputMutex_);
+                std::unique_lock lock(outputMutex_);
                 std::cout
                     << "RAW: " << transcript.rawTranscript << '\n'
                     << "NORMALIZED: " << transcript.normalizedTranscript << '\n'
@@ -128,6 +151,12 @@ namespace timmy::cli {
                         << command::describe(*transcript.semanticCommand);
                 }
                 std::cout << '\n' << std::flush;
+                lock.unlock();
+                if (executor)
+                {
+                    const auto result = executor->submit(transcript);
+                    if (result.state == core::RecognitionExecutionState::failed) onExecution(result);
+                }
             }
 
         private:
@@ -150,6 +179,12 @@ namespace timmy::cli {
                 << "  --model PATH       Local whisper.cpp model file.\n"
                 << "  --vad-model PATH   Local ggml-silero-v6.2.0.bin file.\n"
                 << "  --language CODE    Preferred language code.\n"
+                << "  --profile NAME     Opt in to hydra2 or generic OSC emission.\n"
+                << "  --host HOST        Required with --profile.\n"
+                << "  --port PORT        Required with --profile (Hydra II: 8000).\n"
+                << "  --key-hold-ms MS   Hydra II key hold duration.\n"
+                << "  --key-gap-ms MS    Hydra II key gap duration.\n"
+                << "  --pre-clear        Hydra II pre-clear.\n"
                 << "  -h, --help         Show this help.\n";
         }
 
@@ -162,6 +197,49 @@ namespace timmy::cli {
             for (int index = 0; index < argc; ++index)
             {
                 const std::string_view argument = argv[index];
+                if (argument == "--pre-clear")
+                {
+                    options.hydra.preClear = true;
+                    options.outputOptions = options.hydraOptions = true;
+                    continue;
+                }
+                if (argument == "--profile" || argument == "--host"
+                    || argument == "--port" || argument == "--key-hold-ms"
+                    || argument == "--key-gap-ms")
+                {
+                    if (++index >= argc) return false;
+                    const std::string_view value = argv[index];
+                    if (argument == "--profile")
+                    {
+                        if (value != "hydra2" && value != "generic") return false;
+                        options.profile = value;
+                    }
+                    else if (argument == "--host")
+                    {
+                        options.host = value;
+                        options.outputOptions = true;
+                    }
+                    else
+                    {
+                        std::uint32_t number = 0;
+                        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
+                        if (value.empty() || parsed.ec != std::errc{}
+                            || parsed.ptr != value.data() + value.size()) return false;
+                        options.outputOptions = true;
+                        if (argument == "--port")
+                        {
+                            if (number == 0 || number > 65535) return false;
+                            options.port = number;
+                        }
+                        else
+                        {
+                            options.hydraOptions = true;
+                            if (argument == "--key-hold-ms") options.hydra.hold = std::chrono::milliseconds{number};
+                            else options.hydra.gap = std::chrono::milliseconds{number};
+                        }
+                    }
+                    continue;
+                }
                 if (argument == "--model"
                     || argument == "--vad-model"
                     || argument == "--language")
@@ -192,6 +270,13 @@ namespace timmy::cli {
                 return false;
             }
 
+            if ((options.profile.empty() && options.outputOptions)
+                || (!options.profile.empty() && (options.host.empty() || options.port == 0))
+                || (options.hydraOptions && options.profile != "hydra2"))
+            {
+                std::cerr << "Output options require an explicit profile, host and port; timing options require hydra2.\n";
+                return false;
+            }
             if (options.modelPath.empty())
             {
                 std::cerr << "The --model option is required.\n";
@@ -223,11 +308,33 @@ namespace timmy::cli {
             return 2;
         }
 
+        stopRequested = 0;
+        struct InterruptGuard
+        {
+            using Handler = void (*)(int);
+            Handler previous = std::signal(SIGINT, handleInterrupt);
+            ~InterruptGuard() { std::signal(SIGINT, previous); }
+        } interruptGuard;
+
         auto backend = core::createAsrBackend(core::AsrEngineId::whisperCpp,
             { options.vadModelPath });
         auto selector = std::make_shared<audio::AudioChannelSelector>(0);
         core::RecognitionPipeline pipeline(selector, std::move(backend));
         auto observer = std::make_shared<ConsoleRecognitionObserver>();
+        std::unique_ptr<core::RecognitionCommandExecutor> executor;
+        if (!options.profile.empty())
+        {
+            std::shared_ptr<const transport::IOscCommandProfile> profile;
+            if (options.profile == "hydra2")
+                profile = std::make_shared<transport::Hydra2OscCommandProfile>(options.hydra);
+            else profile = std::make_shared<transport::GenericOscCommandProfile>();
+            auto emitter = std::make_shared<transport::OscCommandEmitter>(
+                transport::OscDestination{options.host, options.port}, profile);
+            executor = std::make_unique<core::RecognitionCommandExecutor>(
+                core::CommandDispatcher(emitter),
+                [observer](const auto& result) { observer->onExecution(result); });
+            observer->executor = executor.get();
+        }
         pipeline.setObserver(observer);
 
         asr::AsrConfiguration asrConfiguration;
@@ -243,6 +350,9 @@ namespace timmy::cli {
                 << "]: "
                 << asrStart.diagnostic->message
                 << '\n';
+            pipeline.stop();
+            if (executor) executor->shutdown();
+            observer->executor = nullptr;
             return 1;
         }
 
@@ -258,11 +368,11 @@ namespace timmy::cli {
                 << audioStart.diagnostic->message
                 << '\n';
             pipeline.stop();
+            if (executor) executor->shutdown();
+            observer->executor = nullptr;
             return 1;
         }
 
-        stopRequested = 0;
-        std::signal(SIGINT, handleInterrupt);
         std::cout
             << "Listening on the default capture device. "
             << "Press Ctrl+C to stop.\n";
@@ -273,6 +383,8 @@ namespace timmy::cli {
 
         engine.stop();
         pipeline.stop();
+        if (executor) executor->shutdown();
+        observer->executor = nullptr;
         std::cout << "ASR listener stopped.\n";
         return 0;
     }
