@@ -27,8 +27,9 @@ namespace timmy::gui {
         core::RecognitionExecutionResult result;
     };
 
-    // The caller must join the executor before destroying the target or clearing
-    // its pending events. Generation filtering belongs to the frontend handler.
+    // Disarm does not join the executor: its in-flight completion may still post.
+    // The caller must finish final stop before destroying the target or clearing
+    // pending events. Each arm uses its own generation, filtered by the frontend.
     inline core::RecognitionCommandExecutor::Observer commandOutputObserver(
         wxEvtHandler& target, std::uint64_t generation)
     {

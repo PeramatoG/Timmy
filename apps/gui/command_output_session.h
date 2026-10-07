@@ -14,13 +14,21 @@
 #include "timmy/transport/hydra2_osc_command_profile.h"
 #include "timmy/transport/osc_command_emitter.h"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 
 namespace timmy::gui {
 
     enum class OutputProfile { hydra2, genericOsc };
+
+    // Bound each Hydra pulse hold/gap to 250 ms to avoid accidental multi-minute
+    // executions. Normal 30 ms defaults remain unchanged. In-flight plans still
+    // finish safely; frontends must perform final joining away from their UI.
+    constexpr std::uint32_t maximumHydraTimingMs = 250;
 
     struct CommandOutputConfiguration
     {
@@ -31,6 +39,8 @@ namespace timmy::gui {
         std::string keyHoldMs = std::to_string(transport::Hydra2OscOptions{}.hold.count());
         std::string keyGapMs = std::to_string(transport::Hydra2OscOptions{}.gap.count());
         bool preClear = false;
+
+        bool operator==(const CommandOutputConfiguration&) const = default;
     };
 
     struct CommandOutputStartResult
@@ -39,8 +49,10 @@ namespace timmy::gui {
         std::string diagnostic;
     };
 
-    // All lifecycle calls belong to one frontend thread. Observers run on the
-    // executor worker and must marshal results without stopping this session.
+    // Start/disarm/submit belong to one frontend thread. Final stop may run on an
+    // owned lifecycle worker after disarm; do not start again until it completes.
+    // Observers run on the executor worker and must marshal results without
+    // stopping this session. A disarmed worker retains its frozen configuration.
     class CommandOutputSession final
     {
     public:
@@ -57,12 +69,19 @@ namespace timmy::gui {
             const CommandOutputConfiguration& configuration, Observer observer = {});
         [[nodiscard]] core::RecognitionExecutionResult submit(
             const core::RecognitionTranscript& transcript);
+        // Immediate, nonblocking acceptance closure; waiting commands are
+        // discarded and the in-flight plan completes without interruption.
+        void disarm();
+        // Final resource cleanup joins the execution worker and may block.
         void stop();
         [[nodiscard]] bool active() const;
 
     private:
         EmitterFactory factory_;
+        mutable std::mutex mutex_;
         std::unique_ptr<core::RecognitionCommandExecutor> executor_;
+        std::optional<CommandOutputConfiguration> configuration_;
+        bool armed_ = false;
     };
 
 } // namespace timmy::gui

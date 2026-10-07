@@ -11,6 +11,7 @@
 #pragma once
 
 #include "command_output_session.h"
+#include "recognition_lifecycle.h"
 
 #include "timmy/audio/audio_channel_selector.h"
 #include "timmy/audio/audio_device_info.h"
@@ -22,6 +23,7 @@
 #include <wx/timer.h>
 
 #include <cstdint>
+#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <vector>
@@ -29,6 +31,7 @@
 class wxButton;
 class wxCheckBox;
 class wxChoice;
+class wxCloseEvent;
 class wxCommandEvent;
 class wxGauge;
 class wxNotebook;
@@ -43,6 +46,9 @@ namespace timmy::gui {
     {
     public:
         MainFrame();
+        // Frontends supplying PCM/backends can skip physical capture bootstrap.
+        MainFrame(std::shared_ptr<asr::IAsrBackend> backend,
+            CommandOutputSession::EmitterFactory emitterFactory, bool initializeAudio = true);
         ~MainFrame() override;
 
     private:
@@ -56,8 +62,11 @@ namespace timmy::gui {
         void resolveDefaultResources();
         void startSelectedDevice();
         void stopRecognition();
-        void updateRecognitionControls(bool listening);
+        void pollShutdown();
+        void updateRecognitionControls();
         void updateOutputControls();
+        void updateOutputStatus();
+        void armOutput();
         CommandOutputConfiguration outputConfiguration() const;
         void showExecutionResult(const core::RecognitionExecutionResult& result);
 
@@ -71,6 +80,7 @@ namespace timmy::gui {
         void onRecognitionTranscript(wxThreadEvent& event);
         void onOutputConfigurationChanged(wxCommandEvent& event);
         void onExecutionResult(wxThreadEvent& event);
+        void onClose(wxCloseEvent& event);
         void onMeterTimer(wxTimerEvent& event);
 
         wxChoice* deviceChoice_ = nullptr;
@@ -81,6 +91,8 @@ namespace timmy::gui {
         wxChoice* engineChoice_ = nullptr;
         wxTextCtrl* modelPathText_ = nullptr;
         wxTextCtrl* vadPathText_ = nullptr;
+        wxButton* modelBrowseButton_ = nullptr;
+        wxButton* vadBrowseButton_ = nullptr;
         wxChoice* languageChoice_ = nullptr;
         wxButton* recognitionButton_ = nullptr;
         wxStaticText* recognitionStatusText_ = nullptr;
@@ -102,10 +114,17 @@ namespace timmy::gui {
         audio::AudioEngine audioEngine_;
         std::shared_ptr<audio::AudioChannelSelector> channelSelector_;
         std::shared_ptr<audio::AudioMeter> meter_;
+        std::shared_ptr<asr::IAsrBackend> backendOverride_;
         std::unique_ptr<core::RecognitionPipeline> recognitionPipeline_;
         std::shared_ptr<GuiRecognitionObserver> recognitionObserver_;
         CommandOutputSession outputSession_;
-        std::uint64_t recognitionGeneration_ = 0;
+        RecognitionLifecycle recognitionLifecycle_;
+        CommandOutputConfiguration frozenOutputConfiguration_;
+        std::uint64_t outputGeneration_ = 0;
+        std::atomic<std::uint64_t> armedOutputGeneration_{0};
+        bool closing_ = false;
+        bool audioShutdownScheduled_ = false;
+        wxString stopDiagnostic_;
         wxTimer meterTimer_;
     };
 

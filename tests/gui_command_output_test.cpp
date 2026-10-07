@@ -207,7 +207,7 @@ namespace {
             configuration.port = port;
             reject(configuration, "port");
         }
-        for (const auto* timing : {"", "-1", "+1", "bad", "30ms", "4294967296"})
+        for (const auto* timing : {"", "-1", "+1", "bad", "30ms", "251", "4294967295", "4294967296"})
         {
             configuration = enabled();
             configuration.keyHoldMs = timing;
@@ -252,6 +252,12 @@ namespace {
         REQUIRE(factory.destination.port == 8000);
         checkHydraPlan(factory, {"/keyCH", "/key5", "/key@", "/key5", "/key0"},
             defaults.hold, defaults.gap);
+        session.stop();
+
+        configuration.keyHoldMs = "250";
+        configuration.keyGapMs = "0";
+        REQUIRE(session.start(configuration).succeeded);
+        checkHydraPlan(factory, {"/keyCH", "/key5", "/key@", "/key5", "/key0"}, 250ms, 0ms);
         session.stop();
 
         configuration.host = "  hydra.example.test \t";
@@ -432,6 +438,138 @@ namespace {
         gui::CommandOutputSession& output_;
     };
 
+    class BlockingEmitter final : public transport::ICommandEmitter
+    {
+    public:
+        transport::EmissionResult emit(const command::SemanticCommand& semantic) override
+        {
+            std::unique_lock lock(mutex_);
+            REQUIRE(!executing_);
+            executing_ = true;
+            commands.push_back(command::describe(semantic));
+            changed_.notify_all();
+            changed_.wait(lock, [&] { return released_; });
+            executing_ = false;
+            return {transport::EmissionState::succeeded, {}};
+        }
+
+        void waitEntered()
+        {
+            std::unique_lock lock(mutex_);
+            REQUIRE(changed_.wait_for(lock, 5s, [&] { return executing_; }));
+        }
+
+        void release()
+        {
+            std::lock_guard lock(mutex_);
+            released_ = true;
+            changed_.notify_all();
+        }
+
+        std::vector<std::string> commands;
+
+    private:
+        std::mutex mutex_;
+        std::condition_variable changed_;
+        bool executing_ = false;
+        bool released_ = false;
+    };
+
+    class LiveRecognitionFrontend final : public core::IRecognitionPipelineObserver
+    {
+    public:
+        explicit LiveRecognitionFrontend(gui::CommandOutputSession& output) : output_(output) {}
+        void onRecognitionStateChanged(core::RecognitionPipelineState) override {}
+        void onRecognitionDiagnostic(const asr::AsrDiagnostic&) override {}
+        void onRecognitionTranscript(const core::RecognitionTranscript& transcript) override
+        {
+            transcripts.push_back(transcript);
+            submissions.push_back(output_.submit(transcript).state);
+        }
+        std::vector<core::RecognitionTranscript> transcripts;
+        std::vector<ExecutionState> submissions;
+
+    private:
+        gui::CommandOutputSession& output_;
+    };
+
+    void liveArmingPreservesRecognition()
+    {
+        auto emitter = std::make_shared<BlockingEmitter>();
+        int factoryCalls = 0;
+        gui::CommandOutputSession session([&](auto, auto) {
+            ++factoryCalls;
+            return emitter;
+        });
+        FrontendMailbox firstArm;
+        FrontendMailbox secondArm;
+        REQUIRE(session.start({}).succeeded);
+        auto backend = std::make_shared<FakeBackend>();
+        auto frontend = std::make_shared<LiveRecognitionFrontend>(session);
+        core::RecognitionPipeline pipeline(std::make_shared<audio::AudioChannelSelector>(), backend);
+        pipeline.setObserver(frontend);
+        REQUIRE(pipeline.start({}).succeeded);
+        const auto speak = [&](const char* text) { backend->emit(text); };
+        speak("Channel 5 At 50");
+        REQUIRE(frontend->submissions.back() == ExecutionState::ignored);
+        REQUIRE(factoryCalls == 0);
+
+        auto invalid = enabled();
+        invalid.host.clear();
+        REQUIRE(!session.start(invalid).succeeded);
+        REQUIRE(!session.active());
+        REQUIRE(backend->state() == asr::AsrState::running);
+        REQUIRE(session.start(enabled(), [&](const auto& result) { firstArm.post(result); }).succeeded);
+        speak("Channel 5 At 50");
+        REQUIRE(frontend->submissions.back() == ExecutionState::queued);
+        emitter->waitEntered();
+        speak("Group 3 At 25");
+        REQUIRE(frontend->submissions.back() == ExecutionState::queued);
+        // emit is still blocked, proving disarm does not wait for it to finish.
+        session.disarm();
+        session.disarm();
+        REQUIRE(!session.active());
+        REQUIRE(backend->state() == asr::AsrState::running);
+        speak("Channel 5 At 50");
+        REQUIRE(frontend->submissions.back() == ExecutionState::ignored);
+
+        invalid = enabled();
+        invalid.keyHoldMs = "251";
+        const auto failedArm = session.start(invalid);
+        REQUIRE(!failedArm.succeeded && failedArm.diagnostic.find("250") != std::string::npos);
+        REQUIRE(!session.active());
+        auto changed = enabled();
+        changed.host = "192.0.2.99";
+        REQUIRE(!session.start(changed).succeeded);
+        REQUIRE(!session.active() && factoryCalls == 1);
+        REQUIRE(backend->state() == asr::AsrState::running);
+
+        REQUIRE(session.start(enabled(), [&](const auto& result) { secondArm.post(result); }).succeeded);
+        REQUIRE(factoryCalls == 1);
+        speak("Channel 6 At 60");
+        REQUIRE(frontend->submissions.back() == ExecutionState::queued);
+        emitter->release();
+        firstArm.waitFor(2);
+        secondArm.waitFor(2);
+        REQUIRE(pipeline.stop().succeeded);
+        session.stop();
+        const auto oldEvents = firstArm.drain();
+        const auto newEvents = secondArm.drain();
+        REQUIRE(oldEvents.size() == 2 && oldEvents.back().state == ExecutionState::succeeded);
+        REQUIRE(newEvents.size() == 2 && newEvents.back().state == ExecutionState::succeeded);
+        REQUIRE(emitter->commands == std::vector<std::string>({
+            "SetIntensity(Channel(5), 50%)", "SetIntensity(Channel(6), 60%)"}));
+        REQUIRE(frontend->transcripts.size() == 5);
+        for (const auto& transcript : frontend->transcripts)
+        {
+            REQUIRE(!transcript.rawTranscript.empty());
+            REQUIRE(!transcript.normalizedTranscript.empty());
+            REQUIRE(transcript.assemblyState == core::RecognitionAssemblyState::complete);
+            REQUIRE(transcript.semanticState == core::RecognitionSemanticState::produced);
+            REQUIRE(transcript.semanticCommand.has_value());
+        }
+    }
+
     void recognitionOnlyStagesRemainVisible()
     {
         FactoryProbe factory;
@@ -478,4 +616,5 @@ int main()
     executionFailuresReachFrontend();
     lifecycleReleasesResources();
     recognitionOnlyStagesRemainVisible();
+    liveArmingPreservesRecognition();
 }

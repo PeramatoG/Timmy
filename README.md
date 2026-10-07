@@ -120,27 +120,50 @@ than blocking recognition. Repeated spoken commands are separate events. On
 Ctrl+C, capture and recognition stop first, waiting commands are discarded, and
 the current emitter plan finishes before the worker is joined.
 
-### GUI command output (GUI-020)
+### GUI recognition lifecycle and command output (GUI-030)
 
 The GUI retains its Audio and Recognition pages and adds an Output page.
 Command output is disabled by default, so listening still shows raw transcript,
 normalized transcript, assembly state/text and semantic command without sending.
 
 For Hydra II, select the audio device/channel and local recognition resources,
-then open Output, enable command output, select **LT Hydra II**, enter the console
+then open Output, select **LT Hydra II**, enter the console
 IP or hostname and use port **8000**. Hold and gap inherit the transport profile
 defaults (currently 30 ms each); pre-clear is off. **Generic OSC** uses the existing
-generic mapping and disables the Hydra controls. No output settings are persisted.
+generic mapping and disables the Hydra controls. Hydra hold and gap each accept
+**0–250 ms**; the finite limit prevents accidental multi-minute key sequences.
+No output settings are persisted. Configuration can be edited while stopped,
+including while **Enable OSC command output** is unchecked.
 
 Press **Start listening** on Recognition and speak an already supported command,
-for example `Channel 5 At 50`. Enabled output settings are validated before
-recognition starts and stay locked while listening. Recognition stages remain
-visible; Output reports Ready, Queued, Succeeded or Failed with the diagnostic and
-last result. Succeeded means local UDP delivery, not console acknowledgement.
+for example `Channel 5 At 50`. While listening, audio device/channel, recognition
+resources and output configuration are frozen. **Enable OSC command output**
+remains available: arm it to validate the frozen settings and emit subsequent
+semantic commands without restarting Whisper; disarm it to immediately reject
+new output and discard queued commands. An already executing key sequence finishes
+safely. Invalid arming leaves recognition running and output disarmed with its
+diagnostic. Commands produced while disarmed remain visible and are never replayed
+by a later arm. Output shows **OSC output: Armed/Disarmed** separately from
+**Execution: Queued/Succeeded/Failed**, including failure diagnostics. Succeeded
+means local UDP delivery, not console acknowledgement.
 
-Stop listening, changing the audio device (or channel with output enabled), and
-application close stop recognition before shutting down execution. Pending
-commands are discarded, the active plan finishes, and the worker is joined before
-resources or GUI event targets are released. Microphone/Whisper/real Hydra II
-acceptance is a manual check; deterministic frontend tests use fake emitters and
-an in-memory recognition backend.
+**Stop listening** immediately disarms output and enters **Stopping...**. Whisper
+cooperatively aborts inference using its pinned abort callback. Recognition and
+output workers are joined on an owned shutdown thread; Start and configuration
+controls remain disabled until it completes. Closing the window defers destruction
+until recognition, output and audio cleanup finish, preserving the callback target.
+An in-flight command may extend cleanup until its final key release, while the wx
+event loop continues running. No workers are detached.
+
+Deterministic tests use fake emitters/backends and a simulated inference callback;
+they require no microphone, model, network service or console. Real Whisper abort
+latency and Hydra II execution still require this manual acceptance check:
+
+1. Start listening with OSC disarmed; say `Canal cinco al cincuenta` and verify the
+   semantic command is visible while Hydra does nothing.
+2. Arm output during listening and repeat; verify Hydra executes the command.
+3. Disarm during listening and repeat; verify recognition remains visible without
+   output. Disarming during a pulse must let the active sequence finish.
+4. Stop during inference, verify the window remains responsive through Stopping,
+   then Start again and repeat. Close during recognition and during output to
+   verify safe deferred cleanup.

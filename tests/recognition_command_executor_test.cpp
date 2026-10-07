@@ -113,6 +113,7 @@ int main()
             require(events.results[i+1].state == State::succeeded);
         }
         require(executor.submit(produced()).diagnostic == "Execution is stopped.");
+        require(!executor.resume());
     }
     {
         auto emitter = std::make_shared<RecordingEmitter>();
@@ -137,6 +138,30 @@ int main()
         require(emitter->commands.size() == 1);
         require(events.results.size() == 2 && events.results.back().state == State::succeeded);
         executor.shutdown();
+    }
+    {
+        auto emitter = std::make_shared<RecordingEmitter>();
+        Events firstArm;
+        Events secondArm;
+        core::RecognitionCommandExecutor executor(core::CommandDispatcher{emitter},
+            [&](const auto& event) { firstArm.observe(event); });
+        require(executor.submit(produced()).state == State::queued);
+        emitter->waitEntered();
+        require(executor.submit(produced("Group 3 At 25")).state == State::queued);
+        // Pause must return while emit is blocked and discard waiting work.
+        executor.pause();
+        executor.pause();
+        require(executor.submit(produced()).state == State::ignored);
+        require(executor.resume([&](const auto& event) { secondArm.observe(event); }));
+        require(executor.submit(produced("Channel 6 At 60")).state == State::queued);
+        emitter->release();
+        firstArm.wait(2);
+        secondArm.wait(2);
+        executor.shutdown();
+        require(emitter->commands.size() == 2 && !emitter->concurrent);
+        require(emitter->commands[1] == command::describe(*produced("Channel 6 At 60").semanticCommand));
+        require(firstArm.results.size() == 2 && firstArm.results.back().state == State::succeeded);
+        require(secondArm.results.size() == 2 && secondArm.results.back().state == State::succeeded);
     }
     for (bool throws : {false, true})
     {

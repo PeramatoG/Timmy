@@ -33,7 +33,8 @@ namespace timmy::core {
             return {};
         {
             std::lock_guard lock(mutex_);
-            if (!accepting_) return {RecognitionExecutionState::failed, "Execution is stopped."};
+            if (stopping_) return {RecognitionExecutionState::failed, "Execution is stopped."};
+            if (!accepting_) return {};
             if (queue_.size() >= capacity_)
                 return {RecognitionExecutionState::failed, "Execution queue is full."};
             queue_.push_back(*result.semanticCommand);
@@ -42,21 +43,42 @@ namespace timmy::core {
         return {RecognitionExecutionState::queued, {}};
     }
 
+    void RecognitionCommandExecutor::pause()
+    {
+        std::lock_guard lock(mutex_);
+        accepting_ = false;
+        queue_.clear();
+    }
+
+    bool RecognitionCommandExecutor::resume(Observer observer)
+    {
+        {
+            std::lock_guard lock(mutex_);
+            if (stopping_) return false;
+            observer_ = std::move(observer);
+            accepting_ = true;
+        }
+        ready_.notify_one();
+        return true;
+    }
+
     void RecognitionCommandExecutor::shutdown()
     {
         std::lock_guard shutdownLock(shutdownMutex_);
         {
             std::lock_guard lock(mutex_);
             accepting_ = false;
+            stopping_ = true;
             queue_.clear();
         }
         ready_.notify_one();
         if (worker_.joinable()) worker_.join();
     }
 
-    void RecognitionCommandExecutor::publish(const RecognitionExecutionResult& result) noexcept
+    void RecognitionCommandExecutor::publish(const Observer& observer,
+        const RecognitionExecutionResult& result) noexcept
     {
-        try { if (observer_) observer_(result); }
+        try { if (observer) observer(result); }
         catch (...) { /* Frontend exceptions must not terminate execution or shutdown. */ }
     }
 
@@ -65,12 +87,13 @@ namespace timmy::core {
         for (;;)
         {
             std::unique_lock lock(mutex_);
-            ready_.wait(lock, [this] { return !accepting_ || !queue_.empty(); });
-            if (!accepting_) return;
+            ready_.wait(lock, [this] { return stopping_ || (accepting_ && !queue_.empty()); });
+            if (stopping_) return;
             auto command = std::move(queue_.front());
             queue_.pop_front();
+            const auto observer = observer_;
             lock.unlock();
-            publish({RecognitionExecutionState::queued, {}});
+            publish(observer, {RecognitionExecutionState::queued, {}});
             RecognitionExecutionResult execution;
             try
             {
@@ -87,7 +110,7 @@ namespace timmy::core {
             {
                 execution = {RecognitionExecutionState::failed, "Emitter threw an unknown exception."};
             }
-            publish(execution);
+            publish(observer, execution);
         }
     }
 }
