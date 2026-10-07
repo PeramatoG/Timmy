@@ -132,7 +132,7 @@ int main()
     require(observer->transcripts[1].assemblyText == "Canal 5 al 50%");
     require(observer->transcripts[1].semanticState
         == timmy::core::RecognitionSemanticState::produced);
-    require(observer->transcripts[1].semanticCommand);
+    require(observer->transcripts[1].semanticCommand.has_value());
     require(timmy::command::describe(*observer->transcripts[1].semanticCommand)
         == "SetIntensity(Channel(5), 50%)");
 
@@ -172,7 +172,7 @@ int main()
         require(transcript.rawTranscript == phrase);
         require(transcript.assemblyState == timmy::core::RecognitionAssemblyState::complete);
         require(transcript.semanticState == timmy::core::RecognitionSemanticState::produced);
-        require(transcript.semanticCommand);
+        require(transcript.semanticCommand.has_value());
         require(!timmy::command::describe(*transcript.semanticCommand).empty());
     }
 
@@ -184,9 +184,9 @@ int main()
         const auto& transcript = observer->transcripts.back();
         require(transcript.assemblyState == timmy::core::RecognitionAssemblyState::complete);
         require(transcript.semanticState == timmy::core::RecognitionSemanticState::produced);
-        require(transcript.semanticCommand);
+        require(transcript.semanticCommand.has_value());
         const auto mapped = hydra.map(*transcript.semanticCommand);
-        require(mapped.plan);
+        require(mapped.plan.has_value());
         std::vector<std::string> actual;
         for (const auto& step : *mapped.plan)
         {
