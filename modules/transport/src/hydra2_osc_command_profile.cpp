@@ -69,6 +69,33 @@ namespace timmy::transport {
             }
             return true;
         }
+
+        bool appendModification(std::vector<std::string>& keys,
+            const command::ModifySelection& operation)
+        {
+            const auto typeKey = targetKey(operation.target.type);
+            if (!operation.target.isValid() || !typeKey
+                || !operation.target.excluded.empty()) return false;
+            const char* modifier = nullptr;
+            switch (operation.modification)
+            {
+            case command::SelectionModification::add: modifier = "OK"; break;
+            case command::SelectionModification::remove: modifier = "EXCP"; break;
+            default: return false;
+            }
+            // Hydra II / Piccolo II v7.04, sections 5.1.1 and 5.2.2:
+            // OK is plus, and EXCP precedes a typed subtractive term. Start
+            // with the modifier to extend the console's current selection.
+            // Repeat EXCP for every removed range, never an additive OK.
+            for (const auto& term : operation.target.included)
+            {
+                keys.push_back(modifier);
+                keys.push_back(*typeKey);
+                appendRange(keys, term);
+            }
+            keys.push_back("OK");
+            return true;
+        }
     }
 
     Hydra2OscCommandProfile::Hydra2OscCommandProfile(Hydra2OscOptions options)
@@ -80,8 +107,7 @@ namespace timmy::transport {
         std::vector<std::string> keys;
         const bool valid = std::visit([&](const auto& operation) {
             using Operation = std::decay_t<decltype(operation)>;
-            // Standalone actions must remain exactly one pulse even when the
-            // optional editor pre-clear is enabled for selection commands.
+            // Standalone actions and relative edits bypass optional pre-clear.
             if constexpr (std::is_same_v<Operation, command::AdvanceTest>)
             {
                 keys.push_back("TEST");
@@ -89,6 +115,21 @@ namespace timmy::transport {
             else if constexpr (std::is_same_v<Operation, command::ClearEditor>)
             {
                 keys.push_back("RST");
+            }
+            else if constexpr (std::is_same_v<Operation, command::ClearSelection>)
+            {
+                // v7.04 section 5.1.1: clear selection, retaining edited values.
+                keys = {"C", "C"};
+            }
+            else if constexpr (std::is_same_v<Operation, command::ReleaseEditor>)
+            {
+                // v7.04 section 5.2.12 (5-16): release the complete editor
+                // with fading; the adjacent sudden-clear command is RST.
+                keys = {"REL", "REL"};
+            }
+            else if constexpr (std::is_same_v<Operation, command::ModifySelection>)
+            {
+                return appendModification(keys, operation);
             }
             else
             {

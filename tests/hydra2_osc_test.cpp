@@ -52,7 +52,10 @@ void mapping(const command::SemanticCommand& commandValue,
     auto mapped = Hydra2OscCommandProfile{options}.map(commandValue);
     require(mapped.plan.has_value());
     if (clear && !std::holds_alternative<command::AdvanceTest>(commandValue)
-        && !std::holds_alternative<command::ClearEditor>(commandValue))
+        && !std::holds_alternative<command::ClearEditor>(commandValue)
+        && !std::holds_alternative<command::ClearSelection>(commandValue)
+        && !std::holds_alternative<command::ReleaseEditor>(commandValue)
+        && !std::holds_alternative<command::ModifySelection>(commandValue))
         addresses.insert(addresses.begin(), {"/keyC", "/keyC"});
     require(mapped.plan->size() == addresses.size());
     auto sender = std::make_unique<Sender>();
@@ -143,6 +146,29 @@ void configuration() {
         const auto missing = Hydra2OscCommandProfile(options).map(commandValue);
         require(!missing.plan && missing.diagnostic.find(key) != std::string::npos);
     }
+    for (const auto& [commandValue, key] :
+            std::vector<std::pair<command::SemanticCommand, std::string>>{
+                {command::ClearSelection{}, "C"},
+                {command::ReleaseEditor{}, "REL"},
+                {command::ModifySelection{command::SelectionModification::add,
+                    command::Channel{4}}, "OK"},
+                {command::ModifySelection{command::SelectionModification::remove,
+                    command::Fixture{7}}, "EXCP"}}) {
+        options = Hydra2OscOptions{};
+        options.preClear = true;
+        const auto mapped = Hydra2OscCommandProfile(options).map(commandValue);
+        require(mapped.plan.has_value());
+        require(std::get<OscKeyPulse>(mapped.plan->front()).address
+            == options.keyAddresses.at(key));
+        options.keyAddresses[key] = "/custom/operation";
+        const auto customized = Hydra2OscCommandProfile(options).map(commandValue);
+        require(customized.plan.has_value());
+        require(std::get<OscKeyPulse>(customized.plan->front()).address
+            == "/custom/operation");
+        options.keyAddresses.erase(key);
+        const auto missing = Hydra2OscCommandProfile(options).map(commandValue);
+        require(!missing.plan && missing.diagnostic.find(key) != std::string::npos);
+    }
     options = Hydra2OscOptions{}; options.hold = std::chrono::milliseconds{-1};
     auto negativeSender = std::make_unique<Sender>(); auto* negativeRecorded = negativeSender.get();
     OscCommandEmitter negative({"test", 8000}, std::make_shared<Hydra2OscCommandProfile>(options),
@@ -183,6 +209,32 @@ void selectionsAndActions() {
         {{1, std::numeric_limits<std::uint32_t>::max()}}};
     mapping(command::HomeSelection{large}, {"/keyFXT", "/key1", "/keyTHRU", "/key4", "/key2", "/key9", "/key4", "/key9", "/key6", "/key7", "/key2", "/key9", "/key5", "/keyHOME"});
 }
+void relativeAndEditorActions() {
+    for (bool clear : {false, true}) {
+        for (const auto& [type, address] : std::vector<std::pair<command::TargetType, std::string>>{
+                {command::TargetType::channel, "/keyCH"},
+                {command::TargetType::fixture, "/keyFXT"},
+                {command::TargetType::group, "/keyGRP"}}) {
+            const command::TargetSelection target{type, {{4, 4}, {20, 25}}};
+            mapping(command::ModifySelection{command::SelectionModification::add, target},
+                {"/keyOK", address, "/key4", "/keyOK", address,
+                    "/key2", "/key0", "/keyTHRU", "/key2", "/key5", "/keyOK"}, clear);
+            mapping(command::ModifySelection{command::SelectionModification::remove, target},
+                {"/keyEXCP", address, "/key4", "/keyEXCP", address,
+                    "/key2", "/key0", "/keyTHRU", "/key2", "/key5", "/keyOK"}, clear);
+        }
+        mapping("añade canal 4", {"/keyOK", "/keyCH", "/key4", "/keyOK"}, clear);
+        mapping("quita fixture 7", {"/keyEXCP", "/keyFXT", "/key7", "/keyOK"}, clear);
+        mapping("clear selection", {"/keyC", "/keyC"}, clear);
+        mapping("libera todo", {"/keyREL", "/keyREL"}, clear);
+        mapping("cler all", {"/keyRST"}, clear);
+    }
+    const command::TargetSelection large{command::TargetType::channel,
+        {{1, std::numeric_limits<std::uint32_t>::max()}}};
+    mapping(command::ModifySelection{command::SelectionModification::remove, large},
+        {"/keyEXCP", "/keyCH", "/key1", "/keyTHRU", "/key4", "/key2",
+            "/key9", "/key4", "/key9", "/key6", "/key7", "/key2", "/key9", "/key5", "/keyOK"}, true);
+}
 void invalidSelections() {
     const Hydra2OscCommandProfile profile;
     const auto rejected = [&](const command::SemanticCommand& commandValue) {
@@ -212,6 +264,19 @@ void invalidSelections() {
         command::SelectionDirection::next});
     rejected(command::NavigateSelection{command::TargetType::channel,
         static_cast<command::SelectionDirection>(999)});
+    for (const auto modification : {command::SelectionModification::add,
+            command::SelectionModification::remove}) {
+        for (const auto& target : std::vector<command::TargetSelection>{
+                {}, command::Channel{0},
+                {command::TargetType::channel, {{10, 1}}},
+                {static_cast<command::TargetType>(999), {{1, 1}}},
+                {command::TargetType::fixture, {{1, 10}}, {{5, 5}}},
+                {command::TargetType::group,
+                    std::vector<command::TargetRange>(command::TargetSelection::maxTerms + 1, {1, 1})}})
+            rejected(command::ModifySelection{modification, target});
+    }
+    rejected(command::ModifySelection{static_cast<command::SelectionModification>(999),
+        command::Channel{4}});
 }
 void testPlanSerialization() {
     auto sender = std::make_unique<Sender>(); auto* recorded = sender.get();
@@ -242,6 +307,6 @@ int main() {
     mapping("Group 3 At 0", {"/keyGRP", "/key3", "/key@", "/key0", "/key0"});
     mapping("Channel 1 At Full", {"/keyCH", "/key1", "/key@", "/key@"});
     mapping("Channel 1 At 100", {"/keyCH", "/key1", "/key@", "/key@"}, true);
-    selectionsAndActions(); invalidSelections();
+    selectionsAndActions(); relativeAndEditorActions(); invalidSelections();
     failures(); configuration(); testPlanSerialization();
 }

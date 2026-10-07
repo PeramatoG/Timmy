@@ -94,6 +94,8 @@ int main()
         {"Channel 9 at 0", "SetIntensity(Channel(9), 0%)"},
         {"Fixture 9 at 100", "SetIntensity(Fixture(9), 100%)"},
         {"Canal 5 al 50", "SetIntensity(Channel(5), 50%)"},
+        {"Canal 5 al 50,", "SetIntensity(Channel(5), 50%)"},
+        {"Channel 5 at 50 , ", "SetIntensity(Channel(5), 50%)"},
         {"Canal 5 a 50", "SetIntensity(Channel(5), 50%)"},
         {"Pon canal 5 al 50", "SetIntensity(Channel(5), 50%)"},
         {"Sube canal 5 al 50", "SetIntensity(Channel(5), 50%)"},
@@ -161,13 +163,100 @@ int main()
         passed &= expectCommand(parser, entry.text, entry.description);
     }
 
+
+    const CommandCase naturalCommands[] = {
+        {"dame los canales del 1 al 10", "SelectSelection(Channel(1 through 10))"},
+        {"dame los canales del 1 al 10 y me quitas el 6", "SelectSelection(Channel(1 through 10 except 6))"},
+        {"canales 1 al 10 excepto 6", "SelectSelection(Channel(1 through 10 except 6))"},
+        {"canales 1 al 10 menos el 6", "SelectSelection(Channel(1 through 10 except 6))"},
+        {"canales 1 al 10 salvo el 6", "SelectSelection(Channel(1 through 10 except 6))"},
+        {"dame canales 1 al 10 menos 5 al 8", "SelectSelection(Channel(1 through 10 except 5 through 8))"},
+        {"channels 1 through 10 except 6", "SelectSelection(Channel(1 through 10 except 6))"},
+        {"channels 1 through 10 but not the 6", "SelectSelection(Channel(1 through 10 except 6))"},
+        {"dame canales 1 al 10 y añade el 15", "SelectSelection(Channel(1 through 10, 15))"},
+        {"channels 1 through 10 plus 15", "SelectSelection(Channel(1 through 10, 15))"},
+        {"channels 1 through 10 plus 15 except 6", "SelectSelection(Channel(1 through 10, 15 except 6))"},
+        {"select channels 1 and add channels 20 al 25", "SelectSelection(Channel(1, 20 through 25))"},
+        {"Canales 1 a 15 excepto 5", "SelectSelection(Channel(1 through 15 except 5))"},
+        {"Canales 1 a 15 excepto 5 a 8", "SelectSelection(Channel(1 through 15 except 5 through 8))"},
+        {"añade canal 4", "ModifySelection(Add, Channel(4))"},
+        {"quita fixture 7", "ModifySelection(Remove, Fixture(7))"},
+        {"add channels del 20 al 25", "ModifySelection(Add, Channel(20 through 25))"},
+        {"remove groups 5 through 8", "ModifySelection(Remove, Group(5 through 8))"},
+        {"add channels 1 through 4294967295", "ModifySelection(Add, Channel(1 through 4294967295))"},
+        {"Canales 1 a 10 y añade 15 al 50", "SelectSelection(Channel(1 through 10, 15 through 50))"},
+    };
+    for (const auto& entry : naturalCommands)
+        passed &= expectCommand(parser, entry.text, entry.description);
+
+    const std::string_view selectors[] = {"selecciona", "dame", "coge", "toma", "marca", "select"};
+    for (const auto alias : selectors)
+        passed &= expectCommand(parser, std::string(alias) + " los canales del 1 al 10",
+            "SelectSelection(Channel(1 through 10))");
+
+    const std::string_view additions[] = {
+        "añade", "anade", "agrega", "mete", "incluye", "suma", "súmale", "sumale", "add", "plus", "include"
+    };
+    for (const auto alias : additions)
+    {
+        passed &= expectCommand(parser, std::string(alias) + " canal 4", "ModifySelection(Add, Channel(4))");
+        passed &= expectCommand(parser, "channels 1 through 10 and " + std::string(alias) + " the 15",
+            "SelectSelection(Channel(1 through 10, 15))");
+    }
+    const std::string_view removals[] = {
+        "quita", "saca", "resta", "excluye", "menos", "excepto", "salvo", "remove", "subtract", "exclude", "except", "but not"
+    };
+    for (const auto alias : removals)
+    {
+        passed &= expectCommand(parser, std::string(alias) + " fixture 7", "ModifySelection(Remove, Fixture(7))");
+        passed &= expectCommand(parser, "channels 1 through 10 " + std::string(alias) + " the 6",
+            "SelectSelection(Channel(1 through 10 except 6))");
+    }
+    const CommandCase scopedCommands[] = {
+        {"limpia selección", "ClearSelection()"}, {"limpia la selección", "ClearSelection()"},
+        {"limpia seleccion", "ClearSelection()"}, {"borra selección", "ClearSelection()"},
+        {"quita la selección", "ClearSelection()"}, {"clear selection", "ClearSelection()"},
+        {"limpia todo", "ClearEditor()"}, {"limpia el editor", "ClearEditor()"},
+        {"borra todo", "ClearEditor()"}, {"borra el editor", "ClearEditor()"},
+        {"quita todo", "ClearEditor()"}, {"vacía el editor", "ClearEditor()"},
+        {"vacia el editor", "ClearEditor()"}, {"clear all", "ClearEditor()"},
+        {"cler all", "ClearEditor()"}, {"clear editor", "ClearEditor()"},
+        {"libera todo", "ReleaseEditor()"}, {"suelta todo", "ReleaseEditor()"},
+        {"libera el editor", "ReleaseEditor()"}, {"release all", "ReleaseEditor()"},
+        {"release editor", "ReleaseEditor()"},
+        {"AÑADE CANAL 4", "ModifySelection(Add, Channel(4))"},
+        {"VACÍA EL EDITOR", "ClearEditor()"}, {"LIMPIA LA SELECCIÓN", "ClearSelection()"},
+    };
+    for (const auto& entry : scopedCommands)
+        passed &= expectCommand(parser, entry.text, entry.description);
+
+    const std::string_view incompleteRanges[] = {
+        "Selecciona canales del 1 al", "dame canales 1 al", "add channel del 20 al",
+        "remove fixtures del 5 al", "channels 1 through 10 plus", "channels 1 through 10 and me remove"
+    };
+    for (const auto text : incompleteRanges)
+        passed &= expectIncomplete(parser, text, CommandTextState::pending);
+
+    const std::string_view invalidNatural[] = {
+        "Canal 5 al 50,,", "Channel 5 at 50, ,", "cler", "cleer all", "clera all", "limpa todo", "reset all", "clear editor now",
+        "except all", "but not all", "subtract all", "exclude editor", "remove all", "menos todo",
+        "salvo editor", "resta todo", "saca todo", "quitas todo", "exclude selection",
+        "select article channel 4", "home_to fixture 4", "select me channel 4", "me remove channel 4",
+        "select the the channel 4", "add the the 4", "select channels 1 plus the the 4",
+        "channels 1 through 10 plus fixture 15", "channels 1 through 10 except 6 plus 15",
+        "channels 1 through 10 except 6 except 7", "add channel 4 except 2",
+        "remove channel 4 plus 2", "add channel 0", "remove fixture 9 through 2",
+        "add channel 4294967296", "remove fixture 5 through 4294967296", "remove group 1 at 50"
+    };
+    for (const auto text : invalidNatural)
+        passed &= expectIncomplete(parser, text, CommandTextState::invalid);
+
     const std::string_view pending[] = {
         "Canal 5", "Canales 1, 3 y 5", "Canales 1 a 10",
-        "Canales 1 a 15 excepto 5", "Canales 1 a 15 excepto 5 a 8",
         "Canales del 1 al 10", "Fixtures 1 a 6", "Group 3",
         "Channel 1 through 4294967295", "Canales 1 a", "Canal 5 al",
         "Channels 1,", "Canales 1 a 10 excepto", "Pon canal 5",
-        "Selecciona", "Test canales"
+        "Selecciona", "Test canales", "select channel 5,", "add channel 5,", "remove fixture 7,"
     };
     for (const auto text : pending)
     {
@@ -189,8 +278,8 @@ int main()
         "Release channel -1", "Test channel 4294967296", "Test channel 1 at 50",
         "Home channel 5", "Home group 5", "Channel 5 a home",
         "Home fixture 5 position", "Home fixture 5 color", "Home fixture 5 gobo",
-        "reset", "borra", "clear", "limpia", "reset editor", "clear all",
-        "Borra todo", "Clear editor now", "Borra todo el show",
+        "reset", "borra", "clear", "limpia", "reset editor",
+ "Clear editor now", "Borra todo el show",
         "Next channel 5", "Previous channel 5", "Next cue", "Previous cue",
         "GO", "BACK", "PAUSE", "Record cue 1", "Update cue 1",
         "Delete cue 1", "Fixture 5 color red", "Macro 1", "Sync"
@@ -227,6 +316,28 @@ int main()
     {
         passed &= expect(false, "Large range did not produce SetIntensity");
     }
+
+    const auto relativeLarge = parser.parse("add channels 1 through 4294967295");
+    if (relativeLarge.command && std::holds_alternative<ModifySelection>(*relativeLarge.command))
+    {
+        const auto& selection = std::get<ModifySelection>(*relativeLarge.command).target;
+        passed &= expect(selection.included.size() == 1
+                && selection.included.front().first == 1
+                && selection.included.front().last == std::numeric_limits<std::uint32_t>::max()
+                && selection.excluded.empty(), "A relative operation expanded a compact range");
+    }
+    else passed &= expect(false, "Large relative operation was not produced");
+
+    std::string relativeList = "add channels ";
+    for (std::size_t index = 1; index <= TargetSelection::maxTerms; ++index)
+    {
+        if (index != 1) relativeList += ',';
+        relativeList += std::to_string(index);
+    }
+    passed &= expect(parser.parse(relativeList).command.has_value(),
+        "Maximum relative selection term count was rejected");
+    relativeList += ",33";
+    passed &= expectIncomplete(parser, relativeList, CommandTextState::invalid);
 
     // Bound the semantic term count independently of the command text length.
     std::string list = "Select channels ";

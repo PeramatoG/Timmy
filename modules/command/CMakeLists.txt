@@ -1,5 +1,6 @@
 add_library(timmy_command STATIC
     src/command_assembler.cpp
+    src/command_lexicon.cpp
     src/semantic_command.cpp
     src/semantic_command_parser.cpp
     src/transcript_normalizer.cpp

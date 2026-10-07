@@ -81,9 +81,10 @@ timmy-cli osc send --profile hydra2 --host 127.0.0.1 --port 8000 \
 Hydra II uses ordered remote-key pulses (integer `1` then `0` at the same
 address). `SetIntensity` selects CH, FXT or GRP, enters the compact selection, then
 `@` and a two-digit percentage; 100/Full uses a second `@`. Ranges use THRU,
-additive list terms use OK, and excluded terms use EXCP. `--pre-clear` optionally prefixes two C pulses;
-it is disabled by default. Hold and gap default to 30 ms each, including the
-final gap. Adapt these to the console configuration.
+additive list terms use OK, and excluded terms use EXCP. `--pre-clear` optionally
+prefixes two C pulses; it is disabled by default and never prefixes relative
+selection edits. Hold and gap default to 30 ms each, including the final gap.
+Adapt these to the console configuration.
 
 `Hydra2OscOptions::keyAddresses` exposes the full configurable key catalog;
 applications can override individual OSC addresses without changing command
@@ -111,20 +112,50 @@ Hydra II additionally supports these operations:
 | `Canal anterior` / `Previous channel` | `CH PREV` |
 | `Fixtures 1 a 6 a home` | `FXT 1 THRU 6 HOME` |
 | `Limpia editor` / `Borra todo el editor` / `Clear editor` | `RST` |
+| `Añade canal 4` / `Add channel 4` | `OK CH 4 OK` |
+| `Quita canal 4` / `Remove channel 4` | `EXCP CH 4 OK` |
+| `Limpia selección` / `Clear selection` | `C C` |
+| `Libera todo` / `Release editor` | `REL REL` |
 
 Selection navigation also accepts fixture and group target types. HOME applies
 only to whole fixtures. Bare `siguiente` advances Hydra's TEST workflow; TIMMY
 does not calculate a new target. TEST, NEXT and PREV addresses default to
 `/keyTEST`, `/keyNEXT` and `/keyPREV`, and remain configurable in the key catalog.
 AdvanceTest and ClearEditor always emit exactly one key pulse, including when
-pre-clear is enabled. RST is emitted only for the explicit editor operation;
-bare `reset`, `borra` and `clear` are rejected.
+pre-clear is enabled. Selection clearing and editor release retain their own
+plans without pre-clear. The [Hydra II v7.04 manual](https://lt-light.com/en/download/system-ii-manuals/?filename=ManualSysII704_EN.pdf&ind=17260914681211&wpdmdl=5453)
+defines C C, OK and EXCP in section 5.1.1 (page 5-2), and REL REL fading release
+versus RST abrupt editor clear in section 5.2.12 (page 5-16). RST is emitted only
+for the explicit editor-clear operation; bare `reset`, `borra`, `limpia` and
+`clear` are rejected. `Cler all` is a declared ASR alias for `Clear all`;
+other spelling errors are not corrected by fuzzy matching.
+
+Selection verbs also accept `dame`, `coge`, `toma`, `marca` and `select`, with
+controlled articles: `Dame los canales del 1 al 10 y me quitas el 6` selects
+the range excluding 6. `Canales 1 al 10 menos el 6` and `Channels 1 through 10
+except 6` express the same selection. `Dame canales 1 al 10 y añade el 15`
+and `Channels 1 through 10 plus 15` include the additional term. Known add/remove
+aliases and supported accented/unaccented Spanish forms are canonicalized by a
+shared command lexicon; transcript normalization remains formatting only.
+
+After a successful command explicitly naming a channel, fixture or group,
+follow-ups such as `Súmale el 4`, `Añade el 4`, `Add 4`, `Quita el 10` and
+`Remove 10` use that last target type. `Suma del 20 al 25` and `Quita del 5 al 8`
+retain compact ranges. TIMMY remembers only the target type, never the console's
+selected IDs. Without that context, elided edits are rejected. Stop/restart,
+discarding pending assembly and GUI disarm/re-arm reset context; changing output
+profiles requires stopping recognition and therefore also starts fresh.
 
 `Canal 5` and `Canales 1 a 10` remain pending until a level or action completes
-them. `Canal 10` followed by `test` completes a selection test rather than advancing
+them. A bare selection with an explicit add/exclusion clause, such as
+`Canales 1 al 10 excepto 6`, completes `SelectSelection`; start with `pon` or
+`set` to keep a multi-fragment intensity command pending until its level arrives.
+`Canal 10` followed by `test` completes a selection test rather than advancing
 an earlier test. Pending assembly holds at most 256 bytes and selections contain
 at most 32 compact terms; invalid fragments never execute. Recognition hints
-are covered by deterministic tests against this same Core pipeline.
+use the command lexicon's vocabulary and are covered by deterministic tests
+against this same normalize -> assemble -> semantic parse pipeline, with an
+explicit preceding selection for relative examples.
 The existing singular `Canal 5 a 50` intensity alias remains supported; use
 plural `Canales 1 a 10` or explicit `Canal 1 thru 10` for a pending range.
 

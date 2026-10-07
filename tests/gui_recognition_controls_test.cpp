@@ -353,6 +353,42 @@ namespace {
         REQUIRE(fixture.backend->starts == 1 && fixture.emitter->calls == 0);
     }
 
+    void linguisticContextResetsAcrossArms()
+    {
+        FrameFixture fixture;
+        fixture.host().ChangeValue("192.0.2.5");
+        fixture.emitter->release();
+        click(fixture.recognition());
+        toggle(fixture.output(), true);
+        fixture.backend->emit("Select channels 1 through 10");
+        waitFor([&] { return fixture.emitter->completed == 1; });
+        fixture.backend->emit("add 4");
+        waitFor([&] { return fixture.emitter->completed == 2; });
+
+        toggle(fixture.output(), false);
+        fixture.backend->emit("remove 10");
+        pumpEvents();
+        REQUIRE(fixture.label("Assembly:").GetLabel().Contains("rejected"));
+        REQUIRE(fixture.emitter->calls == 2);
+
+        // Text remains observable while disarmed. A fresh arm resets even a
+        // target explicitly mentioned during that observation-only interval.
+        fixture.backend->emit("Select group 3");
+        pumpEvents();
+        REQUIRE(fixture.label("Semantic command:").GetLabel().Contains("produced"));
+        toggle(fixture.output(), true);
+        fixture.backend->emit("add 4");
+        pumpEvents();
+        REQUIRE(fixture.label("Assembly:").GetLabel().Contains("rejected"));
+        REQUIRE(fixture.emitter->calls == 2);
+
+        fixture.backend->emit("Select fixture 7");
+        waitFor([&] { return fixture.emitter->completed == 3; });
+        fixture.backend->emit("remove 7");
+        waitFor([&] { return fixture.emitter->completed == 4; });
+        REQUIRE(fixture.factories == 1);
+    }
+
     class TestApp final : public wxApp
     {
     public:
@@ -373,6 +409,7 @@ int main(int argc, char** argv)
     REQUIRE(wxTheApp->CallOnInit());
     runtimeArmingAndAsyncShutdown();
     invalidArmKeepsRecognitionListening();
+    linguisticContextResetsAcrossArms();
     wxTheApp->OnExit();
     wxEntryCleanup();
 }

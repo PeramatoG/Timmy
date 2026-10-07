@@ -84,7 +84,12 @@ int main()
     passed &= expectNormalization(normalizer, "3 through 5,", "3 through 5,");
     passed &= expectNormalization(normalizer, "and 3,", "and 3,");
     passed &= expectNormalization(normalizer, "except 5,", "except 5,");
-    passed &= expectNormalization(normalizer, "Canal 5 al 50,", "Canal 5 al 50");
+    passed &= expectNormalization(normalizer, "Canal 5 al 50,", "Canal 5 al 50,");
+    passed &= expectNormalization(normalizer, "Add 4,", "Add 4,");
+    passed &= expectNormalization(normalizer, "Suma del 20 al 25,", "Suma del 20 al 25,");
+    passed &= expectNormalization(normalizer, "Cler all,", "Cler all");
+    passed &= expectNormalization(normalizer, "Test,", "Test");
+    passed &= expectNormalization(normalizer, "ordinary speech,", "ordinary speech");
     passed &= expectNormalization(normalizer, "Clear editor,", "Clear editor");
     passed &= expectNormalization(normalizer, "   \t\r\n", "");
 

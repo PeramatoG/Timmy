@@ -37,7 +37,8 @@ namespace timmy::command {
         static constexpr std::size_t maxPendingLength = SemanticCommandParser::maxCommandLength;
 
         [[nodiscard]]
-        AssemblyResult accept(std::string_view normalizedFragment);
+        AssemblyResult accept(std::string_view normalizedFragment,
+            const CommandContext& context = {});
 
         void reset();
 

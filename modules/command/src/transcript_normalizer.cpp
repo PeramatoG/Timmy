@@ -9,7 +9,6 @@
  */
 
 #include "timmy/command/transcript_normalizer.h"
-#include "timmy/command/semantic_command_parser.h"
 
 #include <cctype>
 #include <string>
@@ -134,18 +133,13 @@ namespace timmy::command {
         {
             while (!text.empty() && isTerminalPunctuation(text.back()))
             {
-                // Preserve list connectors even in standalone continuation
-                // fragments (for example "3,"). Only remove a sentence comma
-                // when the remaining text is a complete, unambiguous operation.
-                if (text.back() == ',')
+                // A comma after a number may continue a list, including a
+                // standalone fragment such as "3,". Preserve it without
+                // interpreting command words; the grammar decides its role.
+                if (text.back() == ',' && text.size() > 1
+                    && isAsciiDigit(text[text.size() - 2]))
                 {
-                    const SemanticCommandParser parser;
-                    const auto withoutComma = std::string_view(text).substr(0, text.size() - 1);
-                    if (parser.classify(text).state == CommandTextState::pending
-                        || parser.classify(withoutComma).state != CommandTextState::complete)
-                    {
-                        break;
-                    }
+                    break;
                 }
                 text.pop_back();
             }

@@ -9,6 +9,7 @@
  */
 
 #include "timmy/command/semantic_command_parser.h"
+#include "timmy/command/command_lexicon.h"
 
 #include <charconv>
 #include <cctype>
@@ -20,48 +21,8 @@ namespace timmy::command {
 
     namespace {
 
-        using Words = std::vector<std::string_view>;
-        enum class Action { none, intensity, select, release, test, home };
-
-        std::string asciiLower(std::string_view text)
-        {
-            std::string result(text);
-            for (char& value : result)
-            {
-                const auto byte = static_cast<unsigned char>(value);
-                if (byte < 0x80U) value = static_cast<char>(std::tolower(byte));
-            }
-            return result;
-        }
-
-        // Keep commas as list separators; reject other punctuation in the grammar.
-        Words splitWords(std::string_view text)
-        {
-            Words words;
-            std::size_t index = 0;
-            while (index < text.size())
-            {
-                const auto byte = static_cast<unsigned char>(text[index]);
-                if (byte < 0x80U && std::isspace(byte) != 0)
-                {
-                    ++index;
-                    continue;
-                }
-                const auto start = index;
-                if (text[index] == ',') ++index;
-                else
-                {
-                    while (index < text.size() && text[index] != ',')
-                    {
-                        const auto next = static_cast<unsigned char>(text[index]);
-                        if (next < 0x80U && std::isspace(next) != 0) break;
-                        ++index;
-                    }
-                }
-                words.push_back(text.substr(start, index - start));
-            }
-            return words;
-        }
+        using Words = std::vector<std::string>;
+        enum class Action { none, intensity, select, release, test, home, homeTo, add, remove };
 
         std::optional<std::uint32_t> parseUnsigned(std::string_view token)
         {
@@ -74,17 +35,10 @@ namespace timmy::command {
 
         std::optional<TargetType> targetType(std::string_view word)
         {
-            if (word == "canal" || word == "canales" || word == "channel" || word == "channels")
-                return TargetType::channel;
+            if (word == "channel" || word == "channels") return TargetType::channel;
             if (word == "fixture" || word == "fixtures") return TargetType::fixture;
-            if (word == "grupo" || word == "grupos" || word == "group" || word == "groups")
-                return TargetType::group;
+            if (word == "group" || word == "groups") return TargetType::group;
             return std::nullopt;
-        }
-
-        bool isArticle(std::string_view word)
-        {
-            return word == "el" || word == "la" || word == "los" || word == "las" || word == "the";
         }
 
         bool isConnector(std::string_view word)
@@ -92,9 +46,21 @@ namespace timmy::command {
             return word == "at" || word == "al" || word == "a";
         }
 
+        bool isModification(std::string_view word)
+        {
+            return word == "add" || word == "remove" || word == canonicalScopedRemove;
+        }
+
+        bool startsModification(const Words& words, std::size_t index)
+        {
+            if (index < words.size() && words[index] == "and") ++index;
+            if (index < words.size() && words[index] == "me") ++index;
+            return index < words.size() && isModification(words[index]);
+        }
+
         std::optional<IntensityLevel> parseLevel(std::string_view word)
         {
-            if (word == "full" || word == "tope") return IntensityLevel::fromPercent(100);
+            if (word == "full") return IntensityLevel::fromPercent(100);
             if (!word.empty() && word.back() == '%') word.remove_suffix(1);
             const auto percent = parseUnsigned(word);
             if (!percent || *percent > 100) return std::nullopt;
@@ -103,30 +69,37 @@ namespace timmy::command {
 
         bool isListSeparator(std::string_view word)
         {
-            return word == "," || word == "y" || word == "and";
+            return word == "," || word == "and";
         }
 
-        // A singular "a <level>" preserves the original intensity alias. Plural
-        // targets and explicit selection actions use "a" as an inclusive range.
+        // Preserve CMD-040's singular intensity aliases. An explicit selector,
+        // range prefix or following clause makes Spanish range "al" unambiguous.
         bool isRangeConnector(const Words& words, std::size_t index,
             bool allowAl, bool preferRange)
         {
-            const auto word = words[index];
-            if (word == "thru" || word == "through" || word == "hasta" || word == "to") return true;
-            if (word == "al") return allowAl;
-            if (word != "a") return false;
-            if (index + 1 >= words.size()) return preferRange;
+            const auto& word = words[index];
+            if (word == "through") return true;
+            if (word != "a" && word != "al") return false;
+            if (index + 1 >= words.size())
+                return (word == "a" && preferRange) || (word == "al" && allowAl);
             if (!parseUnsigned(words[index + 1])) return false;
-            if (preferRange) return true;
-            return index + 2 < words.size()
+            const bool followedByClause = index + 2 < words.size()
                 && (isConnector(words[index + 2]) || isListSeparator(words[index + 2])
-                    || words[index + 2] == "except" || words[index + 2] == "excepto");
+                    || startsModification(words, index + 2));
+            if (word == "al") return allowAl || followedByClause;
+            return preferRange || followedByClause;
         }
 
         bool parseRanges(const Words& words, std::size_t& index,
             std::vector<TargetRange>& ranges, bool allowAl, bool preferRange,
             bool& incomplete, std::size_t maxRanges)
         {
+            if (index < words.size() && words[index] == canonicalArticle) ++index;
+            if (index < words.size() && (words[index] == "del" || words[index] == "from"))
+            {
+                allowAl = allowAl || words[index] == "del";
+                ++index;
+            }
             while (index < words.size())
             {
                 const auto first = parseUnsigned(words[index++]);
@@ -146,152 +119,258 @@ namespace timmy::command {
                 }
                 ranges.push_back({*first, last});
                 if (ranges.size() > maxRanges) return false;
-                if (index == words.size() || !isListSeparator(words[index])) return true;
+                if (index == words.size() || !isListSeparator(words[index])
+                    || startsModification(words, index)) return true;
                 const bool comma = words[index++] == ",";
-                if (comma && index < words.size()
-                    && (words[index] == "and" || words[index] == "y")) ++index;
+                if (comma && index < words.size() && words[index] == "and") ++index;
+                if (index < words.size() && words[index] == canonicalArticle) ++index;
             }
             incomplete = true;
             return false;
         }
 
-        std::optional<TargetSelection> parseSelection(const Words& words,
-            std::size_t& index, Action action, bool& incomplete)
+        CommandTextResult pending()
         {
-            if (index < words.size() && isArticle(words[index])) ++index;
-            if (index == words.size())
-            {
-                incomplete = action != Action::none;
-                return std::nullopt;
-            }
-            const auto type = targetType(words[index]);
-            if (!type) return std::nullopt;
-            const bool plural = words[index].back() == 's';
-            ++index;
-            bool allowAl = false;
-            if (index < words.size() && (words[index] == "del" || words[index] == "from"))
-            {
-                allowAl = words[index] == "del";
-                ++index;
-            }
-            TargetSelection selection;
-            selection.type = *type;
-            const bool preferRange = plural || action == Action::select
-                || action == Action::release || action == Action::test || action == Action::home;
-            if (!parseRanges(words, index, selection.included, allowAl, preferRange, incomplete, TargetSelection::maxTerms)) return std::nullopt;
-            if (index < words.size() && (words[index] == "except" || words[index] == "excepto"))
-            {
-                ++index;
-                if (index < words.size() && isArticle(words[index])) ++index;
-                if (!parseRanges(words, index, selection.excluded, false, true, incomplete,
-                    TargetSelection::maxTerms - selection.included.size())) return std::nullopt;
-            }
-            if (!selection.isValid()) return std::nullopt;
-            return selection;
+            return {CommandTextState::pending, std::nullopt, std::nullopt};
         }
 
-        CommandTextResult complete(SemanticCommand command)
+        CommandTextResult complete(SemanticCommand command,
+            std::optional<TargetType> explicitTarget = std::nullopt)
         {
-            return {CommandTextState::complete, std::move(command)};
+            return {CommandTextState::complete, std::move(command), explicitTarget};
         }
 
         std::optional<SelectionDirection> navigation(std::string_view word)
         {
-            if (word == "next" || word == "siguiente") return SelectionDirection::next;
-            if (word == "previous" || word == "prev" || word == "anterior") return SelectionDirection::previous;
+            if (word == "next") return SelectionDirection::next;
+            if (word == "previous") return SelectionDirection::previous;
             return std::nullopt;
+        }
+
+        // Editor/selection scope is mandatory: a bare clear remains invalid.
+        std::optional<SemanticCommand> scopedEditorAction(const Words& words)
+        {
+            if (words[0] != "clear" && words[0] != canonicalScopedRemove && words[0] != "release")
+                return std::nullopt;
+            std::size_t index = 1;
+            if (index < words.size() && words[index] == canonicalArticle) ++index;
+            if (index == words.size()) return std::nullopt;
+            const auto& scope = words[index++];
+            if (scope == "all" && index < words.size())
+            {
+                if (words[index] == canonicalArticle) ++index;
+                if (index == words.size() || words[index++] != "editor") return std::nullopt;
+            }
+            if (index != words.size()) return std::nullopt;
+            if (words[0] == "release")
+            {
+                if (scope == "all" || scope == "editor") return ReleaseEditor{};
+                return std::nullopt;
+            }
+            if (scope == "selection") return ClearSelection{};
+            if (scope == "all" || scope == "editor") return ClearEditor{};
+            return std::nullopt;
+        }
+
+        Action actionFor(std::string_view word)
+        {
+            if (word == "select") return Action::select;
+            if (word == "release") return Action::release;
+            if (word == "test") return Action::test;
+            if (word == "home") return Action::home;
+            if (word == canonicalHomeTo) return Action::homeTo;
+            if (word == "set") return Action::intensity;
+            if (word == "add") return Action::add;
+            if (word == "remove" || word == canonicalScopedRemove) return Action::remove;
+            return Action::none;
+        }
+
+        CommandTextResult relativeSelection(const Words& words, Action action,
+            const CommandContext& context)
+        {
+            std::size_t index = 1;
+            if (index + 1 < words.size() && words[index] == canonicalArticle
+                && targetType(words[index + 1])) ++index;
+            std::optional<TargetType> explicitType;
+            if (index < words.size()) explicitType = targetType(words[index]);
+            if (explicitType) ++index;
+            const auto type = explicitType ? explicitType : context.lastExplicitTargetType;
+            if (!type) return {};
+            bool incomplete = false;
+            TargetSelection selection{*type, {}};
+            if (!parseRanges(words, index, selection.included, true, true, incomplete,
+                    TargetSelection::maxTerms))
+                return incomplete ? pending() : CommandTextResult{};
+            if (index != words.size() || !selection.isValid()) return {};
+            return complete(ModifySelection{action == Action::add
+                    ? SelectionModification::add : SelectionModification::remove,
+                std::move(selection)}, explicitType);
         }
 
     } // namespace
 
-    CommandTextResult SemanticCommandParser::classify(std::string_view text) const
+    CommandTextResult SemanticCommandParser::classify(std::string_view text,
+        const CommandContext& context) const
     {
         if (text.empty() || text.size() > maxCommandLength) return {};
-        const auto lowered = asciiLower(text);
-        const auto words = splitWords(lowered);
+        // A numeric sentence comma can finish intensity, but a selection's
+        // terminal comma is a pending list connector. Keep that distinction in
+        // the grammar rather than transcript formatting.
+        auto commaCandidate = text;
+        while (!commaCandidate.empty())
+        {
+            const auto byte = static_cast<unsigned char>(commaCandidate.back());
+            if (byte >= 0x80U || std::isspace(byte) == 0) break;
+            commaCandidate.remove_suffix(1);
+        }
+        if (!commaCandidate.empty() && commaCandidate.back() == ',')
+        {
+            commaCandidate.remove_suffix(1);
+            while (!commaCandidate.empty())
+            {
+                const auto byte = static_cast<unsigned char>(commaCandidate.back());
+                if (byte >= 0x80U || std::isspace(byte) == 0) break;
+                commaCandidate.remove_suffix(1);
+            }
+            if (!commaCandidate.empty() && commaCandidate.back() >= '0' && commaCandidate.back() <= '9')
+            {
+                auto candidate = classify(commaCandidate, context);
+                if (candidate.state == CommandTextState::complete && candidate.command
+                    && std::holds_alternative<SetIntensity>(*candidate.command)) return candidate;
+            }
+        }
+        const auto words = canonicalizeCommandText(text);
         if (words.empty()) return {};
 
-        if (lowered == "limpia editor" || lowered == "limpia el editor"
-            || lowered == "borra editor" || lowered == "borra el editor"
-            || lowered == "borra todo el editor" || lowered == "clear editor")
-            return complete(ClearEditor{});
+        if (auto command = scopedEditorAction(words)) return complete(std::move(*command));
 
-        if (words.size() == 1 && (words[0] == "test" || words[0] == "siguiente" || words[0] == "next"))
+        if (words.size() == 1 && (words[0] == "test" || words[0] == "next"))
             return complete(AdvanceTest{});
-        if (words.size() == 2 && ((words[0] == "test" && words[1] == "siguiente")
-                || ((words[0] == "next" || words[0] == "siguiente") && words[1] == "test")))
+        if (words.size() == 2 && ((words[0] == "test" && words[1] == "next")
+                || (words[0] == "next" && words[1] == "test")))
             return complete(AdvanceTest{});
 
         if (words.size() == 2)
         {
             const auto directionFirst = navigation(words[0]);
             const auto targetLast = targetType(words[1]);
-            if (directionFirst && targetLast) return complete(NavigateSelection{*targetLast, *directionFirst});
+            if (directionFirst && targetLast)
+                return complete(NavigateSelection{*targetLast, *directionFirst}, targetLast);
             const auto targetFirst = targetType(words[0]);
             const auto directionLast = navigation(words[1]);
-            if (targetFirst && directionLast) return complete(NavigateSelection{*targetFirst, *directionLast});
+            if (targetFirst && directionLast)
+                return complete(NavigateSelection{*targetFirst, *directionLast}, targetFirst);
         }
 
-        Action action = Action::none;
-        std::size_t index = 0;
-        const auto first = words[0];
-        if (first == "selecciona" || first == "select") action = Action::select;
-        else if (first == "libera" || first == "suelta" || first == "release") action = Action::release;
-        else if (first == "test" || first == "prueba" || first == "comprueba") action = Action::test;
-        else if (first == "home" || first == "lleva") action = Action::home;
-        else if (first == "pon" || first == "sube" || first == "baja" || first == "set") action = Action::intensity;
-        if (action != Action::none) ++index;
+        const auto action = actionFor(words[0]);
+        if (action == Action::add || action == Action::remove)
+            return relativeSelection(words, action, context);
+        std::size_t index = action == Action::none ? 0 : 1;
+        if (index < words.size() && words[index] == canonicalArticle) ++index;
+        if (index == words.size()) return action != Action::none ? pending() : CommandTextResult{};
+        const auto type = targetType(words[index]);
+        if (!type) return {};
+        const bool plural = words[index].back() == 's';
+        ++index;
         bool incomplete = false;
-        const auto selection = parseSelection(words, index, action, incomplete);
-        if (!selection)
+        TargetSelection selection{*type, {}};
+        const bool selectionAction = action == Action::select || action == Action::release
+            || action == Action::test || action == Action::home || action == Action::homeTo;
+        if (!parseRanges(words, index, selection.included, selectionAction,
+                plural || selectionAction, incomplete, TargetSelection::maxTerms))
+            return incomplete ? pending() : CommandTextResult{};
+
+        bool modified = false;
+        bool removed = false;
+        while (index < words.size() && startsModification(words, index))
         {
-            return incomplete ? CommandTextResult{CommandTextState::pending, std::nullopt}
-                              : CommandTextResult{};
+            if (words[index] == "and") ++index;
+            if (words[index] == "me") ++index;
+            const bool remove = words[index++] != "add";
+            // Repeated exclusions and additions after exclusions cannot preserve
+            // spoken evaluation order in one included/excluded selection.
+            if (removed) return {};
+            removed = remove;
+            modified = true;
+            if (index + 1 < words.size() && words[index] == canonicalArticle
+                && targetType(words[index + 1])) ++index;
+            if (index < words.size())
+            {
+                const auto clauseType = targetType(words[index]);
+                if (clauseType)
+                {
+                    if (*clauseType != *type) return {};
+                    ++index;
+                }
+            }
+            auto& ranges = remove ? selection.excluded : selection.included;
+            const auto otherTerms = remove ? selection.included.size() : selection.excluded.size();
+            if (!parseRanges(words, index, ranges, !remove || selectionAction, true, incomplete,
+                    TargetSelection::maxTerms - otherTerms))
+                return incomplete ? pending() : CommandTextResult{};
         }
+        if (!selection.isValid()) return {};
 
         if (index == words.size())
         {
             switch (action)
             {
-            case Action::select: return complete(SelectSelection{*selection});
-            case Action::release: return complete(ReleaseSelection{*selection});
-            case Action::test: return complete(TestSelection{*selection});
+            case Action::select: return complete(SelectSelection{selection}, type);
+            case Action::release: return complete(ReleaseSelection{selection}, type);
+            case Action::test: return complete(TestSelection{selection}, type);
             case Action::home:
-                if (first == "home" && selection->type == TargetType::fixture)
-                    return complete(HomeSelection{*selection});
-                if (first == "lleva" && selection->type == TargetType::fixture)
-                    return {CommandTextState::pending, std::nullopt};
-                return {};
+                return *type == TargetType::fixture ? complete(HomeSelection{selection}, type)
+                    : CommandTextResult{};
+            case Action::homeTo:
+                return *type == TargetType::fixture ? pending() : CommandTextResult{};
             case Action::none:
-            case Action::intensity: return {CommandTextState::pending, std::nullopt};
+                if (modified) return complete(SelectSelection{selection}, type);
+                return pending();
+            case Action::intensity: return pending();
+            case Action::add:
+            case Action::remove: return {};
             }
         }
 
+        const bool acceptsIntensity = action == Action::none || action == Action::intensity;
+        const bool acceptsHome = *type == TargetType::fixture
+            && (action == Action::none || action == Action::homeTo);
         if (words.size() - index == 1 && isConnector(words[index])
-            && (action == Action::none || action == Action::intensity
-                || (action == Action::home && first == "lleva"
-                    && selection->type == TargetType::fixture)))
-            return {CommandTextState::pending, std::nullopt};
+            && (acceptsIntensity || acceptsHome)) return pending();
 
         if (words.size() - index == 2 && isConnector(words[index]))
         {
-            if (words[index + 1] == "home" && selection->type == TargetType::fixture
-                && (action == Action::none || (action == Action::home && first == "lleva")))
-                return complete(HomeSelection{*selection});
-            if (action == Action::none || action == Action::intensity)
+            if (words[index + 1] == "home" && acceptsHome)
+                return complete(HomeSelection{selection}, type);
+            if (acceptsIntensity)
             {
                 const auto level = parseLevel(words[index + 1]);
-                if (level) return complete(SetIntensity{*selection, *level});
+                if (level) return complete(SetIntensity{selection, *level}, type);
             }
         }
         return {};
     }
 
-    SemanticParseResult SemanticCommandParser::parse(std::string_view completeText) const
+    SemanticParseResult SemanticCommandParser::parse(std::string_view completeText,
+        const CommandContext& context) const
     {
-        auto result = classify(completeText);
+        auto result = classify(completeText, context);
         if (result.state != CommandTextState::complete || !result.command) return {};
-        return {SemanticParseState::produced, std::move(result.command)};
+        return {SemanticParseState::produced, std::move(result.command), result.explicitTargetType};
+    }
+
+    void CommandContext::observe(const SemanticParseResult& result)
+    {
+        if (result.state != SemanticParseState::produced || !result.command || !result.explicitTargetType)
+            return;
+        const auto type = *result.explicitTargetType;
+        if (type == TargetType::channel || type == TargetType::fixture || type == TargetType::group)
+            lastExplicitTargetType = type;
+    }
+
+    void CommandContext::reset()
+    {
+        lastExplicitTargetType.reset();
     }
 
 } // namespace timmy::command

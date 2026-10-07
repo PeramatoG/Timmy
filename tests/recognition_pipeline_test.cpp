@@ -1,5 +1,6 @@
 #include "timmy/core/recognition_pipeline.h"
 #include "timmy/core/command_recognition_profile.h"
+#include "timmy/command/command_lexicon.h"
 #include "timmy/transport/hydra2_osc_command_profile.h"
 
 #include <cstdlib>
@@ -162,12 +163,90 @@ int main()
         == timmy::core::RecognitionSemanticState::notAttempted);
     require(!observer->transcripts.back().semanticCommand);
 
+    const auto expectProduced = [&](const std::string& phrase) {
+        backend->emit(phrase);
+        const auto& transcript = observer->transcripts.back();
+        if (transcript.semanticState != timmy::core::RecognitionSemanticState::produced)
+            std::cerr << "Unaccepted recognition phrase: " << phrase << '\n';
+        require(transcript.assemblyState == timmy::core::RecognitionAssemblyState::complete);
+        require(transcript.semanticState == timmy::core::RecognitionSemanticState::produced);
+        require(transcript.semanticCommand.has_value());
+    };
+    const auto expectModification = [&](const std::string& phrase,
+                                        timmy::command::TargetType type,
+                                        timmy::command::SelectionModification operation,
+                                        timmy::command::TargetRange term) {
+        expectProduced(phrase);
+        const auto* edit = std::get_if<timmy::command::ModifySelection>(
+            &*observer->transcripts.back().semanticCommand);
+        require(edit != nullptr);
+        require(edit->modification == operation);
+        require(edit->target.type == type);
+        require(edit->target.included.size() == 1);
+        require(edit->target.included[0].first == term.first);
+        require(edit->target.included[0].last == term.last);
+        require(edit->target.excluded.empty());
+    };
+    const auto expectRejected = [&](const std::string& phrase) {
+        backend->emit(phrase);
+        require(observer->transcripts.back().assemblyState
+            == timmy::core::RecognitionAssemblyState::rejected);
+        require(!observer->transcripts.back().semanticCommand);
+    };
+    using timmy::command::TargetType;
+    using timmy::command::SelectionModification;
+
+    // Elided edits use only the last successfully parsed explicit target type.
+    pipeline.discardPendingAssembly();
+    expectRejected("Súmale el 4");
+    expectProduced("Dame los canales del 1 al 10");
+    expectModification("Súmale el 4", TargetType::channel, SelectionModification::add, {4, 4});
+    expectModification("Quita del 5 al 8", TargetType::channel, SelectionModification::remove, {5, 8});
+    expectRejected("Fixture 7 at 101");
+    expectModification("Add 4", TargetType::channel, SelectionModification::add, {4, 4});
+    backend->emit("Fixture 7");
+    require(observer->transcripts.back().assemblyState
+        == timmy::core::RecognitionAssemblyState::pending);
+    expectRejected("background noise");
+    expectProduced("Clear selection"); // Supersede assembly without seeding a type.
+    expectModification("Remove 10", TargetType::channel, SelectionModification::remove, {10, 10});
+
+    expectProduced("Selecciona grupo 2");
+    expectModification("Menos el 10", TargetType::group, SelectionModification::remove, {10, 10});
+    expectProduced("Añade fixture 7");
+    expectModification("Sumale el 4", TargetType::fixture, SelectionModification::add, {4, 4});
+    expectProduced("Limpia selección");
+    require(std::holds_alternative<timmy::command::ClearSelection>(
+        *observer->transcripts.back().semanticCommand));
+    expectProduced("Libera todo");
+    require(std::holds_alternative<timmy::command::ReleaseEditor>(
+        *observer->transcripts.back().semanticCommand));
+    expectProduced("Cler all");
+    require(std::holds_alternative<timmy::command::ClearEditor>(
+        *observer->transcripts.back().semanticCommand));
+    expectModification("Añade el 4", TargetType::fixture, SelectionModification::add, {4, 4});
+
+    // Disarm/re-arm and profile/session transitions discard linguistic context.
+    pipeline.discardPendingAssembly();
+    expectRejected("Remove 10");
+    expectProduced("Select group 2");
+    require(pipeline.stop().succeeded);
+    backend->emit("Select fixture 9"); // Stopped backends cannot seed a later session.
+    require(pipeline.start({}).succeeded);
+    expectRejected("Add 4");
+    expectProduced("Select fixture 9");
+    require(pipeline.start({}).succeeded); // Restart also drops the old type.
+    expectRejected("Quita el 10");
+
     // Every representative recognition phrase must reach the same Core semantics.
     const auto hints = timmy::core::commandRecognitionHints();
     require(hints.constraintIntent == timmy::asr::RecognitionConstraintIntent::commandPhrase);
+    require(hints.vocabulary == timmy::command::spokenCommandVocabulary());
     for (const auto& phrase : hints.expectedPhrases)
     {
-        backend->emit(phrase);
+        pipeline.discardPendingAssembly();
+        expectProduced("Select channels 1");
+        expectProduced(phrase);
         const auto& transcript = observer->transcripts.back();
         require(transcript.rawTranscript == phrase);
         require(transcript.assemblyState == timmy::core::RecognitionAssemblyState::complete);
