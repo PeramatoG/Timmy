@@ -203,6 +203,14 @@ namespace {
             require(recorded->packets() == expectedPackets);
         };
 
+        // Every token is allowed recognition vocabulary, but these sequences
+        // must still fail semantic parsing and leave the sender untouched.
+        for (const auto* phrase : {"channel group 5", "channel 5 at 105", "clear selection all"})
+        {
+            pipeline.discardPendingAssembly();
+            expectIgnored(phrase);
+        }
+        pipeline.discardPendingAssembly();
         expectIgnored("súmale el 4");
         expectPlan("  Dame los canales del 1 al 10 y me quitas el 6.  ",
             {"/keyC", "/keyC", "/keyCH", "/key1", "/keyTHRU", "/key1", "/key0",

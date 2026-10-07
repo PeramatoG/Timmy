@@ -86,20 +86,12 @@ namespace {
 
         require(guidance.grammar.find("phrase ::= element")
                     != std::string::npos
-                && guidance.grammar.find("letter ::= [A-Za-z]")
+                && guidance.grammar.find("vocabulary ::= \"channel\" | \"canal\"")
                     != std::string::npos,
-            "grammar should allow broad command phrases, not domain syntax");
-        require(guidance.initialPrompt.find("Vocabulary: channel, canal")
-                    != std::string::npos
-                && guidance.initialPrompt.find("Canal 4 al 100%")
-                    != std::string::npos
-                && guidance.initialPrompt.find(
-                    "Selecciona los canales del 20 al 30")
-                    != std::string::npos
-                && guidance.initialPrompt.find(
-                    "Canal 1, Canal 2 y Canal 3 al 40%")
-                    != std::string::npos,
-            "prompt should prime representative Spanish command shapes");
+            "grammar should constrain vocabulary without prescribing domain syntax");
+        require(guidance.initialPrompt
+                == "Vocabulary: channel, canal, group, grupo, select, pon.",
+            "prompt should use compact vocabulary guidance without example commands");
 
         const auto promptOnly = makeWhisperRecognitionGuidance({
             { "fixture" },
