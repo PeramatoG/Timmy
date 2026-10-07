@@ -74,7 +74,7 @@ serialization and UDP ownership remain in `OscCommandEmitter`.
 ### LT Hydra II / WOLE remote keys
 
 ```sh
-timmy-cli osc send --profile hydra2 --host 127.0.0.1 --port 9000 \
+timmy-cli osc send --profile hydra2 --host 127.0.0.1 --port 8000 \
   --command "Channel 5 At 50" --key-hold-ms 30 --key-gap-ms 30
 ```
 
@@ -99,3 +99,24 @@ send, stops on failure, attempts to release the active key, and propagates the
 original error. Presses are never retried. UDP success means local submission,
 not console acknowledgement; best-effort release cannot guarantee delivery.
 Live recognition remains disconnected from emission.
+
+### Live voice execution (E2E-010)
+
+`asr listen` remains transcript-only unless `--profile` is explicitly supplied.
+To send the existing SetIntensity commands to Hydra II:
+
+```sh
+timmy-cli asr listen --model <whisper-model> --vad-model <silero-model> \
+  --language es --profile hydra2 --host <HYDRA_IP> --port 8000
+```
+
+`--key-hold-ms`, `--key-gap-ms` and `--pre-clear` use the same Hydra profile
+settings as `osc send`. Output options require a profile, host and port; Hydra
+options require `hydra2`. `generic` is also supported.
+
+RAW, NORMALIZED, ASSEMBLY and SEMANTIC output remain visible. A single execution
+worker reports DISPATCH queued/succeeded/failed independently of transcript
+printing. Its FIFO holds up to 16 waiting commands; overflow is reported rather
+than blocking recognition. Repeated spoken commands are separate events. On
+Ctrl+C, capture and recognition stop first, waiting commands are discarded, and
+the current emitter plan finishes before the worker is joined.
