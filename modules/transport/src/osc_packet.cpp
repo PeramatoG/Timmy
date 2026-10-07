@@ -58,9 +58,18 @@ namespace timmy::transport {
         {
             tags.push_back(std::visit([](const auto& value) {
                 using Value = std::decay_t<decltype(value)>;
-                if constexpr (std::is_same_v<Value, std::int32_t>) return 'i';
-                if constexpr (std::is_same_v<Value, float>) return 'f';
-                return 's';
+                if constexpr (std::is_same_v<Value, std::int32_t>)
+                {
+                    return 'i';
+                }
+                else if constexpr (std::is_same_v<Value, float>)
+                {
+                    return 'f';
+                }
+                else
+                {
+                    return 's';
+                }
             }, argument));
         }
 

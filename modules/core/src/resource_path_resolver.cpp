@@ -23,10 +23,17 @@ namespace timmy::core {
         {
 #ifdef _WIN32
             const std::wstring wideName(name.begin(), name.end());
-            if (const wchar_t* value = _wgetenv(wideName.c_str());
-                value != nullptr && value[0] != L'\0')
+            std::size_t requiredSize = 0;
+            if (_wgetenv_s(&requiredSize, nullptr, 0, wideName.c_str()) != 0
+                || requiredSize <= 1)
             {
-                return std::filesystem::path(value);
+                return std::nullopt;
+            }
+            std::wstring value(requiredSize, L'\0');
+            if (_wgetenv_s(&requiredSize, value.data(), value.size(),
+                    wideName.c_str()) == 0 && value[0] != L'\0')
+            {
+                return std::filesystem::path(value.c_str());
             }
 #else
             const std::string ownedName(name);
