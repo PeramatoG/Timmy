@@ -137,6 +137,9 @@ int main()
     require(timmy::command::describe(*observer->transcripts[1].semanticCommand)
         == "SetIntensity(Channel(5), 50%)");
 
+    require(observer->transcripts[1].validation.accepted);
+    require(observer->transcripts[1].rendering.text == "Channel 5 At 50");
+
     backend->emit("Fixture 1 At Full");
     require(observer->transcripts.size() == 3);
     require(observer->transcripts[2].assemblyState
@@ -346,5 +349,24 @@ int main()
     require(observer->transcripts.back().assemblyState
         == timmy::core::RecognitionAssemblyState::rejected);
     require(observer->transcripts.back().assemblyText.empty());
+    for (const auto phrase : {"enciende canal 1", "apaga canal 10", "fuera todo",
+            "enciende los canales del 2 al 40", "canales del 2 al 40 al 50", "apaga 10"}) {
+        backend->emit(phrase);
+        const auto& transcript = observer->transcripts.back();
+        require(transcript.assemblyState == timmy::core::RecognitionAssemblyState::complete);
+        require(transcript.semanticCommand.has_value());
+        require(transcript.validation.accepted);
+        require(transcript.rendering.text.has_value());
+    }
+    pipeline.discardPendingAssembly();
+    backend->emit("enciende canales 1,");
+    require(observer->transcripts.back().assemblyState == timmy::core::RecognitionAssemblyState::pending);
+    require(!observer->transcripts.back().semanticCommand);
+    require(!observer->transcripts.back().validation.accepted);
+    require(!observer->transcripts.back().rendering.text);
+    backend->emit("3 y 5");
+    require(observer->transcripts.back().assemblyState == timmy::core::RecognitionAssemblyState::complete);
+    const auto& prefixList = std::get<timmy::command::SetIntensity>(*observer->transcripts.back().semanticCommand);
+    require(prefixList.target.included.size() == 3 && prefixList.level.percent() == 100);
     require(pipeline.stop().succeeded);
 }

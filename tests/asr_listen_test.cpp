@@ -27,12 +27,27 @@ int main()
     transcript.assemblyState = core::RecognitionAssemblyState::complete;
     transcript.semanticState = core::RecognitionSemanticState::produced;
     transcript.semanticCommand = command::SemanticCommandParser{}.parse("Channel 5 At 50").command;
+        transcript.validation = command::validateIntent(*transcript.semanticCommand);
+        transcript.rendering = command::renderIntent(*transcript.semanticCommand);
     std::ostringstream output;
     auto* previous = std::cout.rdbuf(output.rdbuf());
     observer.onRecognitionTranscript(transcript);
     std::cout.rdbuf(previous);
-    require(output.str().find("SEMANTIC: produced") != std::string::npos);
+    require(output.str().find("PARSED INTENT: produced") != std::string::npos);
+    require(output.str().find("VALIDATION: accepted") != std::string::npos);
+    require(output.str().find("RENDERED COMMAND: Channel 5 At 50") != std::string::npos);
     require(output.str().find("DISPATCH:") == std::string::npos);
+    const auto unsupported = command::CommandProcessor{command::hydra2CommandProfile()}.process("fuera todo");
+    transcript.semanticCommand = unsupported.parsed.command;
+    transcript.validation = unsupported.validation;
+    transcript.rendering = unsupported.rendering;
+    output.str("");
+    previous = std::cout.rdbuf(output.rdbuf());
+    observer.onRecognitionTranscript(transcript);
+    std::cout.rdbuf(previous);
+    require(output.str().find("RENDERING: rejected") != std::string::npos);
+    require(output.str().find(unsupported.rendering.diagnostic) != std::string::npos);
+
     for (const auto& extra : std::vector<std::vector<std::string>>{
         {"--host", "localhost"}, {"--port", "8000"}, {"--key-hold-ms", "30"},
         {"--key-gap-ms", "30"}, {"--pre-clear"}, {"--profile", "hydra2"},

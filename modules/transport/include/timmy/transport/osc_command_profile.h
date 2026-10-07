@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "timmy/command/semantic_command.h"
+#include "timmy/transport/command_emitter.h"
 #include "timmy/transport/osc_message.h"
 
 #include <optional>
@@ -42,6 +42,12 @@ namespace timmy::transport {
     {
     public:
         virtual ~IOscCommandProfile();
+        // Compatibility for generic typed OSC. Console-key profiles override
+        // this boundary and consume the renderer's output without interpreting intent.
+        [[nodiscard]] virtual OscMappingResult mapRendered(const RenderedCommand& rendered) const
+        {
+            return map(rendered.intent);
+        }
 
         [[nodiscard]] virtual OscMappingResult map(
             const command::SemanticCommand& command) const = 0;

@@ -77,12 +77,15 @@ namespace timmy::core {
     // Creates a pipeline attached to an existing selected audio channel.
     RecognitionPipeline::RecognitionPipeline(
         std::shared_ptr<audio::AudioChannelSelector> channelSelector,
-        std::shared_ptr<asr::IAsrBackend> backend)
+        std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile)
         : channelSelector_(std::move(channelSelector)),
           formatAdapter_(std::make_shared<audio::AudioFormatAdapter>()),
           backend_(std::move(backend)),
           backendListener_(std::make_shared<BackendListener>(*this)),
-          assembler_(std::make_unique<command::CommandAssembler>())
+          profile_(std::move(profile)),
+          normalizer_(profile_.normalization),
+          assembler_(std::make_unique<command::CommandAssembler>(profile_.parsing)),
+          semanticParser_(profile_.parsing)
     {
         backend_->setResultListener(backendListener_);
         formatAdapter_->addConsumer(backend_);
@@ -187,6 +190,8 @@ namespace timmy::core {
         const auto normalized = normalizer_.normalize(result.transcript);
         command::AssemblyResult assembly;
         command::SemanticParseResult semantic;
+        command::IntentValidationResult validation;
+        command::IntentRenderingResult rendering;
         RecognitionSemanticState semanticState =
             RecognitionSemanticState::notAttempted;
         std::shared_ptr<IRecognitionPipelineObserver> currentObserver;
@@ -201,7 +206,13 @@ namespace timmy::core {
             {
                 semantic = semanticParser_.parse(assembly.text, commandContext_);
                 semanticState = coreSemanticState(semantic.state);
-                commandContext_.observe(semantic);
+                if (semantic.command) {
+                    validation = command::validateIntent(*semantic.command, profile_.validation);
+                    if (validation.accepted) {
+                        rendering = command::renderIntent(*semantic.command, profile_.rendering);
+                        commandContext_.observe(semantic);
+                    }
+                }
             }
             currentObserver = observer_;
         }
@@ -213,7 +224,9 @@ namespace timmy::core {
                 coreAssemblyState(assembly.state),
                 std::move(assembly.text),
                 semanticState,
-                std::move(semantic.command)
+                std::move(semantic.command),
+                std::move(validation),
+                std::move(rendering)
             });
         }
     }

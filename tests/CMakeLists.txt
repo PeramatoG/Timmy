@@ -351,3 +351,24 @@ else()
     target_compile_options(timmy_command_lexicon_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(timmy_command_context_tests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+add_executable(timmy_command_processor_tests command_processor_test.cpp)
+target_link_libraries(timmy_command_processor_tests PRIVATE timmy_core)
+add_test(NAME timmy.command_processor COMMAND timmy_command_processor_tests)
+if(MSVC)
+    target_compile_options(timmy_command_processor_tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(timmy_command_processor_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME timmy.cli_semantic_dry_run COMMAND timmy_cli osc send --dry-run
+    --command "canales del 2 al 40 al 50")
+set_tests_properties(timmy.cli_semantic_dry_run PROPERTIES
+    PASS_REGULAR_EXPRESSION "RENDERED COMMAND: Channel 2 Through 40 At 50")
+add_test(NAME timmy.cli_semantic_invalid COMMAND timmy_cli osc send --dry-run
+    --command "channel 1 at 101")
+set_tests_properties(timmy.cli_semantic_invalid PROPERTIES WILL_FAIL TRUE)
+
+add_test(NAME timmy.cli_hydra_rendering_dry_run COMMAND timmy_cli osc send --dry-run
+    --profile hydra2 --pre-clear --command "enciende los canales del 2 al 40")
+set_tests_properties(timmy.cli_hydra_rendering_dry_run PROPERTIES
+    PASS_REGULAR_EXPRESSION "RENDERED COMMAND: C C CH 2 THRU 4 0 AT AT")

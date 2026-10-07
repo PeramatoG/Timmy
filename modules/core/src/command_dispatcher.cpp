@@ -17,8 +17,8 @@ namespace timmy::core {
 
     // Retains shared ownership of the configured transport-neutral emitter.
     CommandDispatcher::CommandDispatcher(
-        std::shared_ptr<transport::ICommandEmitter> emitter)
-        : emitter_(std::move(emitter))
+        std::shared_ptr<transport::ICommandEmitter> emitter, command::CommandProfile profile)
+        : emitter_(std::move(emitter)), profile_(std::move(profile))
     {
         if (!emitter_)
         {
@@ -26,16 +26,23 @@ namespace timmy::core {
         }
     }
 
-    // Forwards one immutable semantic command to the configured emitter.
+    // Validates and renders every intent, including directly constructed candidates.
     CommandDispatchResult CommandDispatcher::dispatch(
         const command::SemanticCommand& command)
     {
-        const auto result = emitter_->emit(command);
+        const auto validation = command::validateIntent(command, profile_.validation);
+        if (!validation.accepted)
+            return {CommandDispatchState::notDispatched, validation.diagnostic};
+        const auto rendered = command::renderIntent(command, profile_.rendering);
+        if (!rendered.text)
+            return {CommandDispatchState::notDispatched, rendered.diagnostic};
+        const auto result = emitter_->emitRendered({*rendered.text, command, rendered.target, rendered.consoleKeys});
         return {
             result.state == transport::EmissionState::succeeded
                 ? CommandDispatchState::succeeded
                 : CommandDispatchState::failed,
-            result.diagnostic
+            result.diagnostic,
+            *rendered.text
         };
     }
 

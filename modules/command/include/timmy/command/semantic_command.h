@@ -57,6 +57,7 @@ namespace timmy::command {
         TargetType type{TargetType::channel};
         std::vector<TargetRange> included;
         std::vector<TargetRange> excluded;
+        bool all{false};
 
         TargetSelection() = default;
         TargetSelection(TargetType type, std::vector<TargetRange> included,
@@ -114,6 +115,9 @@ namespace timmy::command {
     using SemanticCommand = std::variant<SetIntensity, SelectSelection,
         ReleaseSelection, TestSelection, HomeSelection, AdvanceTest,
         ClearEditor, ClearSelection, ReleaseEditor, ModifySelection, NavigateSelection>;
+
+    // CommandIntent is the existing bounded semantic model, not console syntax.
+    using CommandIntent = SemanticCommand;
 
     [[nodiscard]] std::string describe(const TargetSelection& selection);
 

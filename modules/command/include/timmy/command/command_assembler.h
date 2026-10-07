@@ -34,6 +34,7 @@ namespace timmy::command {
     class CommandAssembler
     {
     public:
+        explicit CommandAssembler(SemanticParsingConfiguration configuration = {});
         static constexpr std::size_t maxPendingLength = SemanticCommandParser::maxCommandLength;
 
         [[nodiscard]]
@@ -47,6 +48,7 @@ namespace timmy::command {
 
     private:
         std::string pending_;
+        SemanticCommandParser parser_;
     };
 
 } // namespace timmy::command

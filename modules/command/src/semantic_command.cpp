@@ -101,7 +101,8 @@ namespace timmy::command {
     {
         if ((type != TargetType::channel && type != TargetType::fixture
                 && type != TargetType::group)
-            || included.empty() || included.size() + excluded.size() > maxTerms)
+            || (all ? (!included.empty() || !excluded.empty()) : included.empty())
+            || included.size() + excluded.size() > maxTerms)
         {
             return false;
         }
@@ -133,7 +134,7 @@ namespace timmy::command {
     std::string describe(const TargetSelection& selection)
     {
         std::string result = targetName(selection.type) + "("
-            + describeRanges(selection.included);
+            + (selection.all ? "All" : describeRanges(selection.included));
         if (!selection.excluded.empty())
         {
             result += " except " + describeRanges(selection.excluded);

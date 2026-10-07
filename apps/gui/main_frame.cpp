@@ -301,10 +301,10 @@ namespace timmy::gui {
         semanticCommandText_ = new wxStaticText(panel, wxID_ANY,
             "Semantic command: -");
         sizer->Add(recognitionStatusText_, 0, wxALL, 8);
-        sizer->Add(rawTranscriptText_, 0, wxALL, 8);
-        sizer->Add(normalizedTranscriptText_, 0, wxALL, 8);
-        sizer->Add(assemblyText_, 0, wxALL, 8);
-        sizer->Add(semanticCommandText_, 0, wxALL, 8);
+        sizer->Add(rawTranscriptText_, 0, wxEXPAND | wxALL, 8);
+        sizer->Add(normalizedTranscriptText_, 0, wxEXPAND | wxALL, 8);
+        sizer->Add(assemblyText_, 0, wxEXPAND | wxALL, 8);
+        sizer->Add(semanticCommandText_, 0, wxEXPAND | wxALL, 8);
         panel->SetSizer(sizer);
         notebook->AddPage(panel, "Recognition", false);
     }
@@ -716,8 +716,9 @@ namespace timmy::gui {
             };
             auto backend = backendOverride_ ? backendOverride_
                 : core::createAsrBackend(core::AsrEngineId::whisperCpp, resources);
+            const auto languageProfile = commandProfileForOutput(frozenOutputConfiguration_);
             recognitionPipeline_ = std::make_unique<core::RecognitionPipeline>(
-                channelSelector_, std::move(backend));
+                channelSelector_, std::move(backend), languageProfile);
             recognitionObserver_ = std::make_shared<GuiRecognitionObserver>(*this, generation,
                 armedOutputGeneration_);
             recognitionPipeline_->setObserver(recognitionObserver_);
@@ -733,7 +734,7 @@ namespace timmy::gui {
             {
                 configuration.preferredLanguage = "en";
             }
-            configuration.recognitionHints = core::commandRecognitionHints();
+            configuration.recognitionHints = core::commandRecognitionHints(languageProfile);
             const auto result = recognitionPipeline_->start(configuration);
             if (!result.succeeded)
             {
@@ -810,7 +811,23 @@ namespace timmy::gui {
             semantic += wxString::FromUTF8(" \xE2\x80\x94 ") + wxString::FromUTF8(
                 command::describe(*payload.transcript.semanticCommand));
         }
+        if (payload.transcript.semanticCommand) {
+            semantic += " | Validation: ";
+            semantic += payload.transcript.validation.accepted ? "accepted" : "rejected";
+            if (!payload.transcript.validation.diagnostic.empty())
+                semantic += " (" + wxString::FromUTF8(payload.transcript.validation.diagnostic) + ")";
+            if (!payload.transcript.rendering.diagnostic.empty())
+                semantic += " | Rendering: " + wxString::FromUTF8(payload.transcript.rendering.diagnostic);
+            if (payload.transcript.rendering.text)
+                semantic += " | Rendered command: " + wxString::FromUTF8(*payload.transcript.rendering.text);
+        }
         semanticCommandText_->SetLabel(semantic);
+        const int resultWidth = std::max(100,
+            semanticCommandText_->GetParent()->GetClientSize().GetWidth() - 16);
+        for (auto* label : {rawTranscriptText_, normalizedTranscriptText_,
+                assemblyText_, semanticCommandText_})
+            label->Wrap(resultWidth);
+        semanticCommandText_->GetParent()->Layout();
 
         // Submission only enqueues the produced semantic command. The existing
         // executor validates the event and performs dispatch/OSC on its worker.
@@ -837,6 +854,8 @@ namespace timmy::gui {
             text += wxString::FromUTF8(" \xE2\x80\x94 ")
                 + wxString::FromUTF8(result.diagnostic);
         }
+        if (!result.renderedCommand.empty())
+            text += " | Rendered command: " + wxString::FromUTF8(result.renderedCommand);
         executionResultText_->SetLabel("Execution: " + text);
         executionResultText_->Wrap(std::max(100, GetClientSize().GetWidth() - 64));
         executionResultText_->GetParent()->Layout();
