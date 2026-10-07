@@ -53,7 +53,8 @@ namespace timmy::gui {
     CommandOutputStartResult CommandOutputSession::start(
         const CommandOutputConfiguration& configuration, Observer observer)
     {
-        if (active()) return {false, "Command output is already active. Stop listening before changing output."};
+        std::lock_guard lock(mutex_);
+        if (armed_) return {false, "Command output is already active. Disarm it before arming again."};
         if (!configuration.enabled) return {true, {}};
 
         if (configuration.profile != OutputProfile::hydra2
@@ -77,10 +78,12 @@ namespace timmy::gui {
         {
             std::uint32_t hold = 0;
             std::uint32_t gap = 0;
-            if (!parseUnsigned(configuration.keyHoldMs, hold))
-                return {false, "Hydra key hold ms must be an integer between 0 and 4294967295."};
-            if (!parseUnsigned(configuration.keyGapMs, gap))
-                return {false, "Hydra key gap ms must be an integer between 0 and 4294967295."};
+            if (!parseUnsigned(configuration.keyHoldMs, hold) || hold > maximumHydraTimingMs)
+                return {false, "Hydra key hold ms must be an integer between 0 and "
+                    + std::to_string(maximumHydraTimingMs) + "."};
+            if (!parseUnsigned(configuration.keyGapMs, gap) || gap > maximumHydraTimingMs)
+                return {false, "Hydra key gap ms must be an integer between 0 and "
+                    + std::to_string(maximumHydraTimingMs) + "."};
             hydraOptions.hold = std::chrono::milliseconds{hold};
             hydraOptions.gap = std::chrono::milliseconds{gap};
             hydraOptions.preClear = configuration.preClear;
@@ -88,6 +91,15 @@ namespace timmy::gui {
 
         try
         {
+            if (executor_)
+            {
+                if (*configuration_ != configuration)
+                    return {false, "Command output configuration is frozen until listening stops."};
+                if (!executor_->resume(std::move(observer)))
+                    return {false, "Command output is stopping."};
+                armed_ = true;
+                return {true, {}};
+            }
             std::shared_ptr<const transport::IOscCommandProfile> profile;
             if (configuration.profile == OutputProfile::hydra2)
                 profile = std::make_shared<transport::Hydra2OscCommandProfile>(std::move(hydraOptions));
@@ -100,8 +112,11 @@ namespace timmy::gui {
                 : std::make_shared<transport::OscCommandEmitter>(
                     std::move(destination), std::move(profile));
             if (!emitter) return {false, "Command output emitter could not be created."};
-            executor_ = std::make_unique<core::RecognitionCommandExecutor>(
+            auto executor = std::make_unique<core::RecognitionCommandExecutor>(
                 core::CommandDispatcher(std::move(emitter)), std::move(observer));
+            configuration_ = configuration;
+            executor_ = std::move(executor);
+            armed_ = true;
         }
         catch (const std::exception& error)
         {
@@ -117,16 +132,33 @@ namespace timmy::gui {
     core::RecognitionExecutionResult CommandOutputSession::submit(
         const core::RecognitionTranscript& transcript)
     {
-        return executor_ ? executor_->submit(transcript) : core::RecognitionExecutionResult{};
+        std::lock_guard lock(mutex_);
+        return armed_ ? executor_->submit(transcript) : core::RecognitionExecutionResult{};
+    }
+
+    void CommandOutputSession::disarm()
+    {
+        std::lock_guard lock(mutex_);
+        armed_ = false;
+        if (executor_) executor_->pause();
     }
 
     void CommandOutputSession::stop()
     {
-        if (!executor_) return;
-        executor_->shutdown();
-        executor_.reset();
+        std::unique_ptr<core::RecognitionCommandExecutor> executor;
+        {
+            std::lock_guard lock(mutex_);
+            armed_ = false;
+            executor = std::move(executor_);
+            configuration_.reset();
+        }
+        if (executor) executor->shutdown();
     }
 
-    bool CommandOutputSession::active() const { return executor_ != nullptr; }
+    bool CommandOutputSession::active() const
+    {
+        std::lock_guard lock(mutex_);
+        return armed_;
+    }
 
 } // namespace timmy::gui

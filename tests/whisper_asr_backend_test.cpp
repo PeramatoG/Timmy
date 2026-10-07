@@ -11,13 +11,17 @@
 #include "timmy/asr/whisper_asr_backend.h"
 
 #include "whisper_command_decoding.h"
+#include "whisper_inference_cancellation.h"
 #include "whisper_recognition_guidance.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -31,6 +35,8 @@ namespace {
     using timmy::asr::RecognitionHints;
     using timmy::asr::detail::isValidWhisperRecognitionGuidance;
     using timmy::asr::detail::makeWhisperRecognitionGuidance;
+    using timmy::asr::detail::WhisperInferenceCancellation;
+    using timmy::asr::detail::WhisperInferenceOutcome;
 
     // Fails the test process with a focused contract message.
     void require(bool condition, const char* message)
@@ -151,6 +157,66 @@ namespace {
             "command decoding should preserve the upstream fallback width");
     }
 
+    // Verifies stop aborts in-flight work without treating it as a failure.
+    void testCooperativeInferenceCancellation()
+    {
+        WhisperInferenceCancellation cancellation;
+        std::promise<void> inferenceEntered;
+        auto entered = inferenceEntered.get_future();
+        auto worker = std::async(std::launch::async, [&] {
+            return cancellation.run([&] {
+                inferenceEntered.set_value();
+                while (!WhisperInferenceCancellation::abortCallback(
+                    &cancellation))
+                {
+                    std::this_thread::yield();
+                }
+                // Whisper returns a nonzero status when computation aborts.
+                return -1;
+            });
+        });
+        require(entered.wait_for(std::chrono::seconds(5))
+                == std::future_status::ready,
+            "fake inference should start before requesting cancellation");
+        cancellation.requestStop();
+        require(worker.wait_for(std::chrono::seconds(5))
+                == std::future_status::ready,
+            "abort callback should observe a stop request from another thread");
+        require(worker.get() == WhisperInferenceOutcome::cancelled,
+            "an intentional inference abort should not be a recognition failure");
+
+        bool inferenceCalled = false;
+        require(cancellation.run([&] {
+            inferenceCalled = true;
+            return 0;
+        }) == WhisperInferenceOutcome::cancelled && !inferenceCalled,
+            "shutdown should discard queued inference before invoking Whisper");
+
+        for (int restart = 0; restart < 3; ++restart)
+        {
+            cancellation.reset();
+            require(!WhisperInferenceCancellation::abortCallback(&cancellation),
+                "restart should clear the previous inference stop request");
+            require(cancellation.run([] { return 0; })
+                    == WhisperInferenceOutcome::completed,
+                "restarted inference should accept successful recognition");
+            require(cancellation.run([] { return -1; })
+                    == WhisperInferenceOutcome::failed,
+                "a genuine inference error should remain a failure");
+            require(cancellation.run([&] {
+                cancellation.requestStop();
+                return -1;
+            }) == WhisperInferenceOutcome::failed,
+                "stop should not hide a genuine error before Whisper acknowledges abort");
+            cancellation.reset();
+            require(cancellation.run([&] {
+                cancellation.requestStop();
+                return 0;
+            }) == WhisperInferenceOutcome::cancelled,
+                "stop concurrent with inference completion should suppress its result");
+        }
+    }
+
     // Verifies missing model failures without downloading model weights.
     void testMissingModelDiagnostic()
     {
@@ -169,6 +235,16 @@ namespace {
         require(backend.stop().succeeded
                 && backend.state() == AsrState::stopped,
             "a failed backend should stop cleanly");
+        require(backend.stop().succeeded,
+            "repeated stop should remain safe after failed startup");
+        const auto restart = backend.start(configuration);
+        require(!restart.succeeded && restart.diagnostic.has_value()
+                && restart.diagnostic->code
+                    == AsrDiagnosticCode::unavailableResource,
+            "failed startup should remain safely restartable");
+        require(backend.stop().succeeded
+                && backend.state() == AsrState::stopped,
+            "a restarted failed backend should stop cleanly");
     }
 
     // Verifies invalid local weights report initialization failure safely.
@@ -234,6 +310,7 @@ int main()
 {
     testCapabilities();
     testCommandDecodingProfile();
+    testCooperativeInferenceCancellation();
     testRecognitionGuidance();
     testMissingModelDiagnostic();
     testInitializationFailure();

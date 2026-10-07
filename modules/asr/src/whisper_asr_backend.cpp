@@ -12,6 +12,7 @@
 
 #include "whisper_command_decoding.h"
 #include "whisper_endpoint_detector.h"
+#include "whisper_inference_cancellation.h"
 #include "whisper_recognition_guidance.h"
 
 #include "grammar-parser.h"
@@ -213,6 +214,9 @@ namespace timmy::asr {
                 ? "auto"
                 : preferredLanguage.c_str();
             parameters.detect_language = preferredLanguage.empty();
+            parameters.abort_callback =
+                detail::WhisperInferenceCancellation::abortCallback;
+            parameters.abort_callback_user_data = &inferenceCancellation;
             if (!guidance.initialPrompt.empty())
             {
                 parameters.initial_prompt = guidance.initialPrompt.c_str();
@@ -228,13 +232,20 @@ namespace timmy::asr {
                 parameters.grammar_penalty = guidance.grammarPenalty;
             }
 
-            if (samples.size()
-                > static_cast<std::size_t>(std::numeric_limits<int>::max())
-                || whisper_full(
-                    context,
-                    parameters,
-                    samples.data(),
-                    static_cast<int>(samples.size())) != 0)
+            const auto outcome = inferenceCancellation.run([&] {
+                if (samples.size() > static_cast<std::size_t>(
+                        std::numeric_limits<int>::max()))
+                {
+                    return -1;
+                }
+                return whisper_full(context, parameters, samples.data(),
+                    static_cast<int>(samples.size()));
+            });
+            if (outcome == detail::WhisperInferenceOutcome::cancelled)
+            {
+                return;
+            }
+            if (outcome == detail::WhisperInferenceOutcome::failed)
             {
                 owner.publishDiagnostic({
                     AsrDiagnosticCode::recognitionFailure,
@@ -267,6 +278,11 @@ namespace timmy::asr {
                 detectedLanguage = language;
             }
 
+            if (inferenceCancellation.stopRequested())
+            {
+                return;
+            }
+
             owner.publishResult({
                 std::move(transcript),
                 AsrResultKind::final,
@@ -277,6 +293,7 @@ namespace timmy::asr {
         // Joins backend-owned workers without holding their shared queue lock.
         void stopWorkers()
         {
+            inferenceCancellation.requestStop();
             {
                 std::lock_guard lock(mutex);
                 shutdownRequested = true;
@@ -315,6 +332,7 @@ namespace timmy::asr {
 
         WhisperAsrBackendOptions options;
         std::atomic<AsrState> lifecycle{ AsrState::stopped };
+        detail::WhisperInferenceCancellation inferenceCancellation;
         whisper_context* context = nullptr;
         whisper_vad_context* vadContext = nullptr;
         detail::WhisperEndpointDetector endpoint;
@@ -462,6 +480,7 @@ namespace timmy::asr {
             impl_->vadFrames.clear();
         }
         impl_->endpoint.reset();
+        impl_->inferenceCancellation.reset();
 
         try
         {
@@ -512,6 +531,11 @@ namespace timmy::asr {
         const audio::AudioBlockView& block)
     {
         std::lock_guard lock(impl_->mutex);
+        if (impl_->shutdownRequested
+            || impl_->lifecycle.load() != AsrState::running)
+        {
+            return;
+        }
         std::vector<float>& accumulation = impl_->vadContext != nullptr
             ? impl_->vadAccumulation
             : impl_->accumulation;

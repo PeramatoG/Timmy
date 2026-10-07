@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <exception>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -61,6 +62,7 @@ namespace timmy::gui {
         struct TranscriptEventPayload
         {
             std::uint64_t generation;
+            std::uint64_t outputGeneration;
             core::RecognitionTranscript transcript;
         };
 
@@ -129,8 +131,10 @@ namespace timmy::gui {
         : public core::IRecognitionPipelineObserver
     {
     public:
-        GuiRecognitionObserver(wxEvtHandler& target, std::uint64_t generation)
-            : target_(target), generation_(generation)
+        GuiRecognitionObserver(wxEvtHandler& target, std::uint64_t generation,
+            const std::atomic<std::uint64_t>& armedOutputGeneration)
+            : target_(target), generation_(generation),
+              armedOutputGeneration_(armedOutputGeneration)
         {
         }
 
@@ -154,18 +158,27 @@ namespace timmy::gui {
         void onRecognitionTranscript(const core::RecognitionTranscript& transcript) override
         {
             auto* event = new wxThreadEvent(wxEVT_THREAD, recognitionTranscriptEventId);
-            event->SetPayload(TranscriptEventPayload{ generation_, transcript });
+            event->SetPayload(TranscriptEventPayload{ generation_,
+                armedOutputGeneration_.load(std::memory_order_acquire), transcript });
             wxQueueEvent(&target_, event);
         }
 
     private:
         wxEvtHandler& target_;
         std::uint64_t generation_;
+        const std::atomic<std::uint64_t>& armedOutputGeneration_;
     };
 
     // Creates the native notebook pages and initializes audio capture.
     MainFrame::MainFrame()
+        : MainFrame(nullptr, {}, true)
+    {
+    }
+
+    MainFrame::MainFrame(std::shared_ptr<asr::IAsrBackend> backend,
+        CommandOutputSession::EmitterFactory emitterFactory, bool initializeAudio)
         : wxFrame(nullptr, wxID_ANY, "TIMMY", wxDefaultPosition, wxSize(720, 520))
+        , backendOverride_(std::move(backend)), outputSession_(std::move(emitterFactory))
     {
         channelSelector_ = std::make_shared<audio::AudioChannelSelector>(0);
         meter_ = std::make_shared<audio::AudioMeter>();
@@ -192,21 +205,30 @@ namespace timmy::gui {
         Bind(wxEVT_THREAD, &MainFrame::onRecognitionTranscript, this,
             recognitionTranscriptEventId);
         Bind(wxEVT_THREAD, &MainFrame::onExecutionResult, this, commandOutputEventId);
+        Bind(wxEVT_CLOSE_WINDOW, &MainFrame::onClose, this);
         meterTimer_.SetOwner(this);
         Bind(wxEVT_TIMER, &MainFrame::onMeterTimer, this);
         meterTimer_.Start(50);
 
         populateRecognitionEngines();
         resolveDefaultResources();
-        populateAudioDevices();
+        if (initializeAudio) populateAudioDevices();
         Centre();
     }
 
-    // Joins recognition and execution before any GUI event target is destroyed.
+    // Ordinary close waits asynchronously. Forced destruction still joins every
+    // worker before destroying the event target or any referenced subsystem.
     MainFrame::~MainFrame()
     {
         meterTimer_.Stop();
-        stopRecognition();
+        recognitionLifecycle_.join();
+        if (recognitionPipeline_)
+        {
+            recognitionPipeline_->setObserver(nullptr);
+            recognitionPipeline_->stop();
+            recognitionPipeline_.reset();
+        }
+        outputSession_.stop();
         audioEngine_.stop();
         DeletePendingEvents();
     }
@@ -252,21 +274,21 @@ namespace timmy::gui {
             row->Add(choice, 1, wxEXPAND);
             sizer->Add(row, 0, wxEXPAND | wxALL, 8);
         };
-        auto addPath = [&](const wxString& label, wxTextCtrl*& text,
+        auto addPath = [&](const wxString& label, wxTextCtrl*& text, wxButton*& button,
                            void (MainFrame::*handler)(wxCommandEvent&)) {
             auto* row = new wxBoxSizer(wxHORIZONTAL);
             row->Add(new wxStaticText(panel, wxID_ANY, label), 0,
                 wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
             text = new wxTextCtrl(panel, wxID_ANY);
             row->Add(text, 1, wxEXPAND | wxRIGHT, 8);
-            auto* button = new wxButton(panel, wxID_ANY, "Browse...");
+            button = new wxButton(panel, wxID_ANY, "Browse...");
             button->Bind(wxEVT_BUTTON, handler, this);
             row->Add(button, 0);
             sizer->Add(row, 0, wxEXPAND | wxALL, 8);
         };
         addChoice("Recognition engine:", engineChoice_);
-        addPath("ASR model:", modelPathText_, &MainFrame::onBrowseModel);
-        addPath("VAD model:", vadPathText_, &MainFrame::onBrowseVadModel);
+        addPath("ASR model:", modelPathText_, modelBrowseButton_, &MainFrame::onBrowseModel);
+        addPath("VAD model:", vadPathText_, vadBrowseButton_, &MainFrame::onBrowseVadModel);
         addChoice("Language:", languageChoice_);
         recognitionButton_ = new wxButton(panel, wxID_ANY, "Start listening");
         recognitionButton_->Bind(wxEVT_BUTTON, &MainFrame::onToggleRecognition, this);
@@ -293,8 +315,10 @@ namespace timmy::gui {
         const CommandOutputConfiguration defaults;
         auto* panel = new wxPanel(notebook);
         auto* sizer = new wxBoxSizer(wxVERTICAL);
-        outputEnabledCheck_ = new wxCheckBox(panel, wxID_ANY, "Enable command output");
+        outputEnabledCheck_ = new wxCheckBox(panel, wxID_ANY, "Enable OSC command output");
         outputEnabledCheck_->SetValue(defaults.enabled);
+        outputEnabledCheck_->SetToolTip(
+            "Arm OSC while listening, or enable it for the next Start listening.");
         outputEnabledCheck_->Bind(wxEVT_CHECKBOX,
             &MainFrame::onOutputConfigurationChanged, this);
         sizer->Add(outputEnabledCheck_, 0, wxALL, 12);
@@ -324,14 +348,18 @@ namespace timmy::gui {
         addText("Port:", outputPortText_, defaults.port);
         addText("Hydra key hold (ms):", hydraHoldText_, defaults.keyHoldMs);
         addText("Hydra key gap (ms):", hydraGapText_, defaults.keyGapMs);
+        const auto timingHint = wxString::Format("Maximum %u ms; default 30 ms",
+            static_cast<unsigned int>(maximumHydraTimingMs));
+        hydraHoldText_->SetToolTip(timingHint);
+        hydraGapText_->SetToolTip(timingHint);
         addLabel("Hydra pre-clear:");
         hydraPreClearCheck_ = new wxCheckBox(panel, wxID_ANY, "Clear before each command");
         hydraPreClearCheck_->SetValue(defaults.preClear);
         grid->Add(hydraPreClearCheck_, 0, wxALIGN_CENTER_VERTICAL);
         sizer->Add(grid, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
 
-        executionStatusText_ = new wxStaticText(panel, wxID_ANY, "Execution status: Disabled");
-        executionResultText_ = new wxStaticText(panel, wxID_ANY, "Last result: -");
+        executionStatusText_ = new wxStaticText(panel, wxID_ANY, "OSC output: Disarmed");
+        executionResultText_ = new wxStaticText(panel, wxID_ANY, "Execution: -");
         sizer->Add(executionStatusText_, 0, wxEXPAND | wxALL, 12);
         sizer->Add(executionResultText_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
         panel->SetSizer(sizer);
@@ -414,7 +442,7 @@ namespace timmy::gui {
     // Starts capture from the selected device after recognition has stopped.
     void MainFrame::startSelectedDevice()
     {
-        stopRecognition();
+        if (!recognitionLifecycle_.canConfigure() || closing_) return;
         audioEngine_.stop();
         channelChoice_->Clear();
         channelChoice_->Enable(false);
@@ -460,52 +488,130 @@ namespace timmy::gui {
             static_cast<unsigned int>(result.format.channelCount)));
     }
 
-    // Stops producers, invalidates pending submissions/events, and joins execution.
+    // Invalidate events and close output acceptance immediately. Blocking joins
+    // belong to one owned lifecycle worker; wx continues pumping until poll().
     void MainFrame::stopRecognition()
     {
-        const bool wasListening = recognitionPipeline_ != nullptr;
-        ++recognitionGeneration_;
-        if (recognitionPipeline_)
+        if (recognitionLifecycle_.stopping()) return;
+        armedOutputGeneration_.store(0, std::memory_order_release);
+        ++outputGeneration_;
+        outputSession_.disarm();
+        outputEnabledCheck_->SetValue(false);
+        const bool closeAudio = closing_;
+        if (!recognitionLifecycle_.beginStop([this, closeAudio] {
+            std::string diagnostic;
+            if (recognitionPipeline_)
+            {
+                recognitionPipeline_->setObserver(nullptr);
+                const auto result = recognitionPipeline_->stop();
+                if (!result.succeeded)
+                    diagnostic = result.diagnostic ? result.diagnostic->message
+                        : "Recognition could not stop cleanly.";
+                recognitionPipeline_.reset();
+            }
+            outputSession_.stop();
+            if (closeAudio) audioEngine_.stop();
+            if (!diagnostic.empty()) throw std::runtime_error(diagnostic);
+        }))
         {
-            recognitionPipeline_->setObserver(nullptr);
-            recognitionPipeline_->stop();
-            recognitionPipeline_.reset();
+            closing_ = false;
+            updateRecognitionControls();
+            updateOutputStatus();
+            recognitionStatusText_->SetLabel(wxString::FromUTF8(
+                recognitionLifecycle_.diagnostic()));
+            return;
         }
         recognitionObserver_.reset();
-        outputSession_.stop();
-        if (recognitionButton_)
-        {
-            updateRecognitionControls(false);
-            executionStatusText_->SetLabel(outputEnabledCheck_->GetValue()
-                ? "Execution status: Ready" : "Execution status: Disabled");
-            if (wasListening) recognitionStatusText_->SetLabel("Stopped.");
-        }
+        audioShutdownScheduled_ = closeAudio;
+        recognitionStatusText_->SetLabel("Stopping...");
+        updateRecognitionControls();
+        updateOutputStatus();
     }
 
-    // Updates controls that differ between stopped and listening states.
-    void MainFrame::updateRecognitionControls(bool listening)
+    void MainFrame::pollShutdown()
     {
-        recognitionButton_->SetLabel(listening ? "Stop listening" : "Start listening");
-        engineChoice_->Enable(!listening);
-        modelPathText_->Enable(!listening);
-        vadPathText_->Enable(!listening);
-        languageChoice_->Enable(!listening);
+        if (!recognitionLifecycle_.poll()) return;
+        if (closing_)
+        {
+            // Close can arrive during an already running normal Stop. Schedule
+            // audio cleanup separately after that worker has finished.
+            if (!audioShutdownScheduled_)
+            {
+                stopRecognition();
+                return;
+            }
+            Destroy();
+            return;
+        }
+        updateRecognitionControls();
+        updateOutputStatus();
+        const auto& diagnostic = recognitionLifecycle_.diagnostic();
+        recognitionStatusText_->SetLabel(!diagnostic.empty()
+            ? wxString::FromUTF8(diagnostic)
+            : (stopDiagnostic_.empty() ? wxString("Stopped.") : stopDiagnostic_));
+        stopDiagnostic_.clear();
+    }
+
+    // One policy freezes input/resources throughout listening and stopping,
+    // regardless of whether command output is armed.
+    void MainFrame::updateRecognitionControls()
+    {
+        const bool idle = recognitionLifecycle_.canConfigure() && !closing_;
+        const bool stopping = recognitionLifecycle_.stopping() || closing_;
+        recognitionButton_->SetLabel(stopping ? "Stopping..."
+            : (recognitionLifecycle_.listening() ? "Stop listening" : "Start listening"));
+        recognitionButton_->Enable(!stopping);
+        deviceChoice_->Enable(idle && !audioDevices_.empty());
+        channelChoice_->Enable(idle && channelChoice_->GetCount() > 0);
+        engineChoice_->Enable(idle);
+        modelPathText_->Enable(idle);
+        vadPathText_->Enable(idle);
+        modelBrowseButton_->Enable(idle);
+        vadBrowseButton_->Enable(idle);
+        languageChoice_->Enable(idle);
         updateOutputControls();
     }
 
     // Freezes output options for the whole recognition/execution lifecycle.
     void MainFrame::updateOutputControls()
     {
-        const bool idle = !recognitionPipeline_;
-        const bool enabled = idle && outputEnabledCheck_->GetValue();
-        const bool hydra = enabled && outputProfileChoice_->GetSelection() == 0;
-        outputEnabledCheck_->Enable(idle);
-        outputProfileChoice_->Enable(enabled);
-        outputHostText_->Enable(enabled);
-        outputPortText_->Enable(enabled);
+        const bool idle = recognitionLifecycle_.canConfigure() && !closing_;
+        const bool hydra = idle && outputProfileChoice_->GetSelection() == 0;
+        outputEnabledCheck_->Enable(!recognitionLifecycle_.stopping() && !closing_);
+        outputProfileChoice_->Enable(idle);
+        outputHostText_->Enable(idle);
+        outputPortText_->Enable(idle);
         hydraHoldText_->Enable(hydra);
         hydraGapText_->Enable(hydra);
         hydraPreClearCheck_->Enable(hydra);
+    }
+
+    void MainFrame::updateOutputStatus()
+    {
+        executionStatusText_->SetLabel(outputSession_.active()
+            && !recognitionLifecycle_.stopping() && !closing_
+            ? "OSC output: Armed" : "OSC output: Disarmed");
+    }
+
+    void MainFrame::armOutput()
+    {
+        auto configuration = frozenOutputConfiguration_;
+        configuration.enabled = true;
+        const auto generation = ++outputGeneration_;
+        const auto result = outputSession_.start(configuration,
+            commandOutputObserver(*this, generation));
+        if (result.succeeded)
+        {
+            armedOutputGeneration_.store(generation, std::memory_order_release);
+        }
+        else
+        {
+            armedOutputGeneration_.store(0, std::memory_order_release);
+            outputSession_.disarm();
+            outputEnabledCheck_->SetValue(false);
+            showExecutionResult({core::RecognitionExecutionState::failed, result.diagnostic});
+        }
+        updateOutputStatus();
     }
 
     CommandOutputConfiguration MainFrame::outputConfiguration() const
@@ -524,26 +630,36 @@ namespace timmy::gui {
 
     void MainFrame::onOutputConfigurationChanged(wxCommandEvent&)
     {
+        if (recognitionLifecycle_.stopping() || closing_) return;
+        if (recognitionLifecycle_.listening())
+        {
+            if (outputEnabledCheck_->GetValue()) armOutput();
+            else
+            {
+                armedOutputGeneration_.store(0, std::memory_order_release);
+                outputSession_.disarm();
+            }
+        }
         updateOutputControls();
-        executionStatusText_->SetLabel(outputEnabledCheck_->GetValue()
-            ? "Execution status: Ready" : "Execution status: Disabled");
+        updateOutputStatus();
     }
 
     // Restarts audio capture for a newly selected physical device.
     void MainFrame::onDeviceSelected(wxCommandEvent&)
     {
+        if (!recognitionLifecycle_.canConfigure() || closing_) return;
         startSelectedDevice();
     }
 
     // Routes capture to the newly selected channel without reopening the device.
     void MainFrame::onChannelSelected(wxCommandEvent&)
     {
+        if (!recognitionLifecycle_.canConfigure() || closing_) return;
         const int selection = channelChoice_->GetSelection();
         if (selection == wxNOT_FOUND || selection < 0)
         {
             return;
         }
-        if (outputSession_.active()) stopRecognition();
         channelSelector_->setChannelIndex(static_cast<std::size_t>(selection));
         meter_->reset();
         levelGauge_->SetValue(0);
@@ -553,6 +669,7 @@ namespace timmy::gui {
     // Opens a native file picker for the main ASR model.
     void MainFrame::onBrowseModel(wxCommandEvent&)
     {
+        if (!recognitionLifecycle_.canConfigure() || closing_) return;
         wxFileDialog dialog(this, "Select ASR model", wxEmptyString,
             wxEmptyString, "Model files (*.bin)|*.bin|All files (*.*)|*.*",
             wxFD_OPEN | wxFD_FILE_MUST_EXIST);
@@ -565,6 +682,7 @@ namespace timmy::gui {
     // Opens a native file picker for the Whisper voice-activity model.
     void MainFrame::onBrowseVadModel(wxCommandEvent&)
     {
+        if (!recognitionLifecycle_.canConfigure() || closing_) return;
         wxFileDialog dialog(this, "Select VAD model", wxEmptyString,
             wxEmptyString, "Model files (*.bin)|*.bin|All files (*.*)|*.*",
             wxFD_OPEN | wxFD_FILE_MUST_EXIST);
@@ -577,35 +695,29 @@ namespace timmy::gui {
     // Starts or stops one generation of recognition from the selected channel.
     void MainFrame::onToggleRecognition(wxCommandEvent&)
     {
-        if (recognitionPipeline_)
+        if (recognitionLifecycle_.stopping() || closing_) return;
+        if (recognitionLifecycle_.listening())
         {
             stopRecognition();
-            recognitionStatusText_->SetLabel("Stopped.");
             return;
         }
 
-        const auto generation = ++recognitionGeneration_;
-        const auto outputStart = outputSession_.start(outputConfiguration(),
-            commandOutputObserver(*this, generation));
-        if (!outputStart.succeeded)
-        {
-            showExecutionResult({core::RecognitionExecutionState::failed,
-                outputStart.diagnostic});
-            recognitionStatusText_->SetLabel("Output configuration rejected: "
-                + wxString::FromUTF8(outputStart.diagnostic));
-            return;
-        }
-        executionStatusText_->SetLabel(outputEnabledCheck_->GetValue()
-            ? "Execution status: Ready" : "Execution status: Disabled");
+        if (!recognitionLifecycle_.beginListening()) return;
+        const auto generation = recognitionLifecycle_.generation();
+        frozenOutputConfiguration_ = outputConfiguration();
+        updateRecognitionControls();
+        recognitionStatusText_->SetLabel("Starting recognition...");
         try
         {
             core::AsrEngineResources resources{
                 wxStringToPath(vadPathText_->GetValue())
             };
-            auto backend = core::createAsrBackend(core::AsrEngineId::whisperCpp, resources);
+            auto backend = backendOverride_ ? backendOverride_
+                : core::createAsrBackend(core::AsrEngineId::whisperCpp, resources);
             recognitionPipeline_ = std::make_unique<core::RecognitionPipeline>(
                 channelSelector_, std::move(backend));
-            recognitionObserver_ = std::make_shared<GuiRecognitionObserver>(*this, generation);
+            recognitionObserver_ = std::make_shared<GuiRecognitionObserver>(*this, generation,
+                armedOutputGeneration_);
             recognitionPipeline_->setObserver(recognitionObserver_);
 
             asr::AsrConfiguration configuration;
@@ -623,25 +735,25 @@ namespace timmy::gui {
             const auto result = recognitionPipeline_->start(configuration);
             if (!result.succeeded)
             {
-                const wxString diagnostic = result.diagnostic
+                stopDiagnostic_ = result.diagnostic
                     ? wxString::FromUTF8(result.diagnostic->message)
                     : wxString("Recognition could not start.");
                 stopRecognition();
-                recognitionStatusText_->SetLabel(diagnostic);
                 return;
             }
-            updateRecognitionControls(true);
+            if (outputEnabledCheck_->GetValue()) armOutput();
+            updateOutputStatus();
         }
         catch (const std::exception& error)
         {
+            stopDiagnostic_ = "Recognition could not start: "
+                + wxString::FromUTF8(error.what());
             stopRecognition();
-            recognitionStatusText_->SetLabel("Recognition could not start: "
-                + wxString::FromUTF8(error.what()));
         }
         catch (...)
         {
+            stopDiagnostic_ = "Recognition could not start: unknown initialization failure.";
             stopRecognition();
-            recognitionStatusText_->SetLabel("Recognition could not start: unknown initialization failure.");
         }
     }
 
@@ -649,7 +761,7 @@ namespace timmy::gui {
     void MainFrame::onRecognitionState(wxThreadEvent& event)
     {
         const auto payload = event.GetPayload<StateEventPayload>();
-        if (payload.generation != recognitionGeneration_)
+        if (!recognitionLifecycle_.accepts(payload.generation))
         {
             return;
         }
@@ -660,7 +772,7 @@ namespace timmy::gui {
     void MainFrame::onRecognitionDiagnostic(wxThreadEvent& event)
     {
         const auto payload = event.GetPayload<DiagnosticEventPayload>();
-        if (payload.generation != recognitionGeneration_)
+        if (!recognitionLifecycle_.accepts(payload.generation))
         {
             return;
         }
@@ -673,7 +785,7 @@ namespace timmy::gui {
     void MainFrame::onRecognitionTranscript(wxThreadEvent& event)
     {
         const auto payload = event.GetPayload<TranscriptEventPayload>();
-        if (payload.generation != recognitionGeneration_)
+        if (!recognitionLifecycle_.accepts(payload.generation))
         {
             return;
         }
@@ -700,10 +812,11 @@ namespace timmy::gui {
 
         // Submission only enqueues the produced semantic command. The existing
         // executor validates the event and performs dispatch/OSC on its worker.
-        const auto result = outputSession_.submit(payload.transcript);
-        if (result.state == core::RecognitionExecutionState::failed)
+        // A transcript produced while disarmed stays observable even if its wx
+        // event is processed after a later arm. Only the current arm may submit.
+        if (payload.outputGeneration != 0 && payload.outputGeneration == outputGeneration_)
         {
-            showExecutionResult(result);
+            showExecutionResult(outputSession_.submit(payload.transcript));
         }
     }
 
@@ -717,33 +830,48 @@ namespace timmy::gui {
         case core::RecognitionExecutionState::succeeded: text = "Succeeded"; break;
         case core::RecognitionExecutionState::failed: text = "Failed"; break;
         }
-        executionStatusText_->SetLabel("Execution status: " + text);
-        if (result.state != core::RecognitionExecutionState::queued)
+        if (!result.diagnostic.empty())
         {
-            if (!result.diagnostic.empty())
-            {
-                text += wxString::FromUTF8(" \xE2\x80\x94 ")
-                    + wxString::FromUTF8(result.diagnostic);
-            }
-            executionResultText_->SetLabel("Last result: " + text);
-            executionResultText_->Wrap(std::max(100, GetClientSize().GetWidth() - 64));
-            executionResultText_->GetParent()->Layout();
+            text += wxString::FromUTF8(" \xE2\x80\x94 ")
+                + wxString::FromUTF8(result.diagnostic);
         }
+        executionResultText_->SetLabel("Execution: " + text);
+        executionResultText_->Wrap(std::max(100, GetClientSize().GetWidth() - 64));
+        executionResultText_->GetParent()->Layout();
     }
 
     // Applies copied execution results only for the current listening session.
     void MainFrame::onExecutionResult(wxThreadEvent& event)
     {
         const auto payload = event.GetPayload<CommandOutputEventPayload>();
-        if (payload.generation == recognitionGeneration_)
+        if (recognitionLifecycle_.listening() && payload.generation == outputGeneration_
+            && !closing_)
         {
             showExecutionResult(payload.result);
         }
     }
 
+    // Keep the wx event target alive until every recognition/output callback
+    // source and audio worker has finished. A later timer tick performs Destroy.
+    void MainFrame::onClose(wxCloseEvent& event)
+    {
+        if (!event.CanVeto())
+        {
+            // Forced system close falls back to the destructor's ownership join.
+            event.Skip();
+            return;
+        }
+        event.Veto();
+        closing_ = true;
+        stopRecognition();
+        updateRecognitionControls();
+    }
+
     // Refreshes the level meter from its thread-safe audio snapshot.
     void MainFrame::onMeterTimer(wxTimerEvent&)
     {
+        pollShutdown();
+        if (closing_) return;
         const auto snapshot = meter_->snapshot();
         if (snapshot.channels.empty())
         {

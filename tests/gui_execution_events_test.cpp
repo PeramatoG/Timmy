@@ -116,6 +116,38 @@ namespace {
         transport::EmissionResult result_;
     };
 
+    class BlockingEmitter final : public transport::ICommandEmitter
+    {
+    public:
+        transport::EmissionResult emit(const command::SemanticCommand&) override
+        {
+            std::unique_lock lock(mutex_);
+            ++calls;
+            entered_ = true;
+            changed_.notify_all();
+            changed_.wait(lock, [&] { return released_; });
+            return {transport::EmissionState::succeeded, {}};
+        }
+        void waitEntered()
+        {
+            std::unique_lock lock(mutex_);
+            REQUIRE(changed_.wait_for(lock, 5s, [&] { return entered_; }));
+        }
+        void release()
+        {
+            std::lock_guard lock(mutex_);
+            released_ = true;
+            changed_.notify_all();
+        }
+        int calls = 0;
+
+    private:
+        std::mutex mutex_;
+        std::condition_variable changed_;
+        bool entered_ = false;
+        bool released_ = false;
+    };
+
     void processEvents() { wxAppConsole::GetInstance()->ProcessPendingEvents(); }
 
     void successAndFailure()
@@ -149,6 +181,40 @@ namespace {
                 ? ExecutionState::succeeded : ExecutionState::failed));
             REQUIRE(frontend.delivered[1].result.diagnostic == outcome.diagnostic);
         }
+    }
+
+    void liveRearmFiltersInFlightEvents()
+    {
+        Frontend frontend;
+        PostedResults notifications;
+        auto emitter = std::make_shared<BlockingEmitter>();
+        gui::CommandOutputSession session([&](auto, auto) { return emitter; });
+        REQUIRE(session.start({}).succeeded);
+        REQUIRE(session.submit(produced()).state == ExecutionState::ignored);
+        processEvents();
+        REQUIRE(frontend.delivered.empty() && frontend.discarded.empty());
+
+        REQUIRE(session.start(enabled(), notifications.observer(frontend)).succeeded);
+        REQUIRE(session.submit(produced()).state == ExecutionState::queued);
+        emitter->waitEntered();
+        REQUIRE(session.submit(produced()).state == ExecutionState::queued);
+        session.disarm();
+        REQUIRE(!session.active());
+        REQUIRE(session.submit(produced()).state == ExecutionState::ignored);
+        ++frontend.generation;
+        REQUIRE(session.start(enabled(), notifications.observer(frontend)).succeeded);
+        REQUIRE(session.submit(produced()).state == ExecutionState::queued);
+        emitter->release();
+        notifications.waitFor(4);
+        session.stop();
+        processEvents();
+        REQUIRE(emitter->calls == 2);
+        REQUIRE(frontend.discarded.size() == 2);
+        REQUIRE(frontend.delivered.size() == 2);
+        for (const auto& event : frontend.discarded) REQUIRE(event.generation == 1);
+        for (const auto& event : frontend.delivered) REQUIRE(event.generation == 2);
+        REQUIRE(frontend.discarded.back().result.state == ExecutionState::succeeded);
+        REQUIRE(frontend.delivered.back().result.state == ExecutionState::succeeded);
     }
 
     std::shared_ptr<std::size_t> restartAndShutdown()
@@ -210,6 +276,7 @@ int main(int argc, char** argv)
     REQUIRE(wxEntryStart(argc, argv));
     REQUIRE(wxAppConsole::GetInstance()->CallOnInit());
     successAndFailure();
+    liveRearmFiltersInFlightEvents();
     const auto handled = restartAndShutdown();
     REQUIRE(*handled == 4);
     processEvents();

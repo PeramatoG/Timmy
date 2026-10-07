@@ -43,13 +43,20 @@ namespace timmy::core {
         RecognitionCommandExecutor& operator=(const RecognitionCommandExecutor&) = delete;
 
         [[nodiscard]] RecognitionExecutionResult submit(const RecognitionTranscript& result);
+        // Close acceptance and discard waiting commands without joining or
+        // interrupting an in-flight emission. The idle worker remains reusable.
+        void pause();
+        // Reopen acceptance unless shutdown has started. Each dequeued command
+        // retains its observer through completion, including across pause/resume.
+        [[nodiscard]] bool resume(Observer observer = {});
         // Stops acceptance, discards waiting work, then joins the in-flight plan.
         // Safe to call repeatedly from frontend lifecycle threads.
         void shutdown();
 
     private:
         void run();
-        void publish(const RecognitionExecutionResult& result) noexcept;
+        static void publish(const Observer& observer,
+            const RecognitionExecutionResult& result) noexcept;
         CommandDispatcher dispatcher_;
         Observer observer_;
         const std::size_t capacity_;
@@ -58,6 +65,7 @@ namespace timmy::core {
         std::condition_variable ready_;
         std::deque<command::SemanticCommand> queue_;
         bool accepting_{true};
+        bool stopping_{false};
         std::thread worker_;
     };
 }
