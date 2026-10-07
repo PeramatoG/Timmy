@@ -12,6 +12,8 @@
 
 #include "grammar-parser.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <string_view>
 #include <vector>
 
@@ -19,60 +21,170 @@ namespace timmy::asr::detail {
 
     namespace {
 
-        constexpr const char* commandPhraseGrammar = R"GBNF(
-root ::= " " phrase punctuation?
-phrase ::= element (separator element)*
-element ::= word | number percent? | percent
-word ::= letter (letter | "-" | "'")*
-number ::= [0-9]+
-percent ::= "%"
-separator ::= " " | ", "
-punctuation ::= "." | "!" | "?"
-letter ::= [A-Za-z] | [À-Ö] | [Ø-ö] | [ø-ÿ]
-)GBNF";
-
-        // Appends non-empty hint values with stable readable separators.
-        void appendValues(
-            std::string& prompt,
-            std::string_view label,
-            const std::vector<std::string>& values)
+        // The upstream grammar parser assumes valid UTF-8. Reject malformed
+        // encodings, empty entries and ASCII controls before quoting literals.
+        bool isValidVocabularyEntry(std::string_view value)
         {
-            bool hasValue = false;
-            for (const auto& value : values)
+            if (value.empty() || value.front() == ' ' || value.back() == ' ')
             {
-                if (!value.empty())
+                return false;
+            }
+            for (std::size_t index = 0; index < value.size();)
+            {
+                const auto first = static_cast<unsigned char>(value[index++]);
+                if (first < 0x80U)
                 {
-                    hasValue = true;
-                    break;
+                    if (first < 0x20U || first == 0x7fU)
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+
+                std::size_t continuationCount;
+                std::uint32_t codePoint;
+                std::uint32_t minimum;
+                if (first >= 0xc2U && first <= 0xdfU)
+                {
+                    continuationCount = 1;
+                    codePoint = first & 0x1fU;
+                    minimum = 0x80U;
+                }
+                else if (first >= 0xe0U && first <= 0xefU)
+                {
+                    continuationCount = 2;
+                    codePoint = first & 0x0fU;
+                    minimum = 0x800U;
+                }
+                else if (first >= 0xf0U && first <= 0xf4U)
+                {
+                    continuationCount = 3;
+                    codePoint = first & 0x07U;
+                    minimum = 0x10000U;
+                }
+                else
+                {
+                    return false;
+                }
+                if (continuationCount > value.size() - index)
+                {
+                    return false;
+                }
+                for (std::size_t count = 0; count < continuationCount; ++count)
+                {
+                    const auto next = static_cast<unsigned char>(value[index++]);
+                    if ((next & 0xc0U) != 0x80U)
+                    {
+                        return false;
+                    }
+                    codePoint = (codePoint << 6U) | (next & 0x3fU);
+                }
+                if (codePoint < minimum || codePoint > 0x10ffffU
+                    || (codePoint >= 0xd800U && codePoint <= 0xdfffU))
+                {
+                    return false;
                 }
             }
-            if (!hasValue)
-            {
-                return;
-            }
+            return true;
+        }
 
-            if (!prompt.empty())
-            {
-                prompt += ' ';
-            }
-            prompt += label;
-            prompt += ": ";
-
-            bool first = true;
+        // Retains exact entries and their supplied order without empty branches.
+        std::vector<std::string> validVocabulary(
+            const std::vector<std::string>& values)
+        {
+            std::vector<std::string> vocabulary;
             for (const auto& value : values)
             {
-                if (value.empty())
+                if (isValidVocabularyEntry(value)
+                    && std::find(vocabulary.begin(), vocabulary.end(), value)
+                        == vocabulary.end())
+                {
+                    vocabulary.push_back(value);
+                }
+            }
+            return vocabulary;
+        }
+
+        // GBNF metacharacters are inert inside literals except quotes and backslashes.
+        std::string grammarLiteral(std::string_view value)
+        {
+            std::string literal = "\"";
+            for (const char byte : value)
+            {
+                if (byte == '"' || byte == '\\')
+                {
+                    literal += '\\';
+                }
+                literal += byte;
+            }
+            literal += '"';
+            return literal;
+        }
+
+        // This constrains recognition tokens only; semantic parsing owns order,
+        // target types, ranges and command validity. Whisper requires a leading space.
+        std::string commandPhraseGrammar(const std::vector<std::string>& vocabulary)
+        {
+            std::string grammar =
+                "root ::= \" \" phrase punctuation?\n"
+                "phrase ::= element (separator element)*\n"
+                "element ::= ";
+            if (!vocabulary.empty())
+            {
+                grammar += "vocabulary | ";
+            }
+            grammar += R"GBNF(number percent? | percent
+number ::= [0-9]+
+percent ::= "%"
+separator ::= " "+ | " "* "," " "*
+punctuation ::= "." | "!" | "?"
+)GBNF";
+            if (!vocabulary.empty())
+            {
+                grammar += "vocabulary ::= ";
+                for (std::size_t index = 0; index < vocabulary.size(); ++index)
+                {
+                    if (index != 0)
+                    {
+                        grammar += " | ";
+                    }
+                    grammar += grammarLiteral(vocabulary[index]);
+                }
+                grammar += '\n';
+            }
+            return grammar;
+        }
+
+        // Keep inference priming bounded as profiles grow; never truncate UTF-8
+        // or include the profile's representative command examples.
+        std::string vocabularyPrompt(const std::vector<std::string>& vocabulary)
+        {
+            constexpr std::size_t maximumBytes = 256;
+            constexpr std::size_t maximumEntries = 16;
+            constexpr std::string_view label = "Vocabulary: ";
+            std::string prompt;
+            std::size_t entryCount = 0;
+            for (const auto& value : vocabulary)
+            {
+                const auto separator = prompt.empty() ? label : std::string_view{", "};
+                const auto remaining = maximumBytes - prompt.size();
+                if (separator.size() + 1 > remaining
+                    || value.size() > remaining - separator.size() - 1)
                 {
                     continue;
                 }
-                if (!first)
-                {
-                    prompt += ", ";
-                }
+                prompt += separator;
                 prompt += value;
-                first = false;
+                if (++entryCount == maximumEntries)
+                {
+                    break;
+                }
             }
-            prompt += '.';
+            if (!prompt.empty())
+            {
+                prompt += '.';
+            }
+            return prompt;
         }
 
     } // namespace
@@ -82,16 +194,13 @@ letter ::= [A-Za-z] | [À-Ö] | [Ø-ö] | [ø-ÿ]
         const RecognitionHints& hints)
     {
         WhisperRecognitionGuidance guidance;
-        appendValues(guidance.initialPrompt, "Vocabulary", hints.vocabulary);
-        appendValues(
-            guidance.initialPrompt,
-            "Representative phrases",
-            hints.expectedPhrases);
+        const auto vocabulary = validVocabulary(hints.vocabulary);
+        guidance.initialPrompt = vocabularyPrompt(vocabulary);
 
         if (hints.constraintIntent
             == RecognitionConstraintIntent::commandPhrase)
         {
-            guidance.grammar = commandPhraseGrammar;
+            guidance.grammar = commandPhraseGrammar(vocabulary);
             guidance.startRule = "root";
             guidance.grammarPenalty = 20.0F;
         }

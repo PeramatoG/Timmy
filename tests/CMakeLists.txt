@@ -144,6 +144,24 @@ add_test(
     COMMAND timmy_whisper_asr_tests
 )
 
+add_executable(timmy_whisper_recognition_guidance_tests
+    whisper_recognition_guidance_test.cpp
+)
+target_link_libraries(timmy_whisper_recognition_guidance_tests PRIVATE timmy_core)
+FetchContent_GetProperties(whisper_cpp SOURCE_DIR timmy_whisper_source_dir)
+target_include_directories(timmy_whisper_recognition_guidance_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/modules/asr/src
+    ${timmy_whisper_source_dir}/examples
+    ${timmy_whisper_source_dir}/include
+    ${timmy_whisper_source_dir}/ggml/include
+)
+if(MSVC)
+    target_compile_options(timmy_whisper_recognition_guidance_tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(timmy_whisper_recognition_guidance_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME timmy.whisper_recognition_guidance COMMAND timmy_whisper_recognition_guidance_tests)
+
 add_executable(timmy_whisper_endpoint_tests
     whisper_endpoint_detector_test.cpp
 )
