@@ -43,6 +43,12 @@ namespace timmy::gui {
 
     } // namespace
 
+    command::CommandProfile commandProfileForOutput(const CommandOutputConfiguration& configuration)
+    {
+        return configuration.profile == OutputProfile::hydra2
+            ? command::hydra2CommandProfile(configuration.preClear) : command::CommandProfile{};
+    }
+
     CommandOutputSession::CommandOutputSession(EmitterFactory factory)
         : factory_(std::move(factory))
     {
@@ -113,7 +119,8 @@ namespace timmy::gui {
                     std::move(destination), std::move(profile));
             if (!emitter) return {false, "Command output emitter could not be created."};
             auto executor = std::make_unique<core::RecognitionCommandExecutor>(
-                core::CommandDispatcher(std::move(emitter)), std::move(observer));
+                core::CommandDispatcher(std::move(emitter), commandProfileForOutput(configuration)),
+                std::move(observer));
             configuration_ = configuration;
             executor_ = std::move(executor);
             armed_ = true;

@@ -22,6 +22,15 @@ namespace timmy::command {
     inline constexpr std::string_view canonicalHomeTo{"\x1f" "home_to"};
     inline constexpr std::string_view canonicalScopedRemove{"\x1f" "scoped_remove"};
 
+    struct CommandAlias
+    {
+        std::string spoken;
+        std::string canonical;
+    };
+    [[nodiscard]] std::vector<CommandAlias> defaultCommandVocabulary();
+    [[nodiscard]] std::vector<std::string> canonicalizeCommandText(std::string_view text,
+        const std::vector<CommandAlias>& vocabulary);
+
     // Exact spoken token/phrase aliases only; unknown words are left unchanged
     // so the semantic grammar can reject them. No typo-distance matching.
     [[nodiscard]] std::vector<std::string> canonicalizeCommandText(std::string_view text);

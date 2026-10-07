@@ -193,6 +193,16 @@ namespace timmy::transport {
     EmissionResult OscCommandEmitter::emit(
         const command::SemanticCommand& commandValue)
     {
+        return emitMapped([&] { return profile_->map(commandValue); });
+    }
+
+    EmissionResult OscCommandEmitter::emitRendered(const RenderedCommand& rendered)
+    {
+        return emitMapped([&] { return profile_->mapRendered(rendered); });
+    }
+
+    EmissionResult OscCommandEmitter::emitMapped(const std::function<OscMappingResult()>& map)
+    {
         const std::lock_guard lock(executionMutex_);
         if (destination_.host.empty())
         {
@@ -216,7 +226,7 @@ namespace timmy::transport {
                 "UDP sender is not available."};
         }
 
-        const auto mapped = profile_->map(commandValue);
+        const auto mapped = map();
         if (!mapped.plan || mapped.plan->empty())
         {
             return {EmissionState::failed, mapped.diagnostic.empty()

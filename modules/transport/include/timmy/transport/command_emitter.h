@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "timmy/command/semantic_command.h"
+#include "timmy/command/command_profile.h"
 
 #include <string>
 
@@ -28,14 +28,31 @@ namespace timmy::transport {
         std::string diagnostic;
     };
 
+    struct RenderedCommand
+    {
+        std::string text;
+        command::CommandIntent intent;
+        command::RenderingTarget target{command::RenderingTarget::nativeText};
+        std::vector<std::string> consoleKeys{};
+    };
+
     class ICommandEmitter
     {
     public:
         virtual ~ICommandEmitter();
 
+        // Text transports can override this boundary. Existing typed OSC
+        // adapters retain their typed compatibility contracts.
+        [[nodiscard]] virtual EmissionResult emitRendered(const RenderedCommand& rendered)
+        {
+            return emit(rendered.intent);
+        }
+
         [[nodiscard]]
-        virtual EmissionResult emit(
-            const command::SemanticCommand& command) = 0;
+        virtual EmissionResult emit(const command::SemanticCommand&)
+        {
+            return {EmissionState::failed, "This emitter requires a rendered command."};
+        }
     };
 
 } // namespace timmy::transport

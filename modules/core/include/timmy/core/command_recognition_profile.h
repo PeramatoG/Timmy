@@ -11,9 +11,10 @@
 #pragma once
 
 #include "timmy/asr/asr_types.h"
+#include "timmy/command/command_profile.h"
 
 namespace timmy::core {
 
-    [[nodiscard]] asr::RecognitionHints commandRecognitionHints();
+    [[nodiscard]] asr::RecognitionHints commandRecognitionHints(const command::CommandProfile& profile = {});
 
 } // namespace timmy::core

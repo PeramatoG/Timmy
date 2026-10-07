@@ -21,11 +21,20 @@ namespace timmy::command {
         std::string normalizedText;
     };
 
+    struct LexicalNormalizationConfiguration
+    {
+        bool stripTerminalPunctuation{true};
+    };
+
     class TranscriptNormalizer
     {
     public:
+        explicit TranscriptNormalizer(LexicalNormalizationConfiguration configuration = {})
+            : configuration_(configuration) {}
         [[nodiscard]]
         NormalizedTranscript normalize(std::string_view transcript) const;
+    private:
+        LexicalNormalizationConfiguration configuration_;
     };
 
 } // namespace timmy::command

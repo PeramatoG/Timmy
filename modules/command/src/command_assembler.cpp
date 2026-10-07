@@ -36,13 +36,16 @@ namespace timmy::command {
 
     } // namespace
 
+    CommandAssembler::CommandAssembler(SemanticParsingConfiguration configuration)
+        : parser_(std::move(configuration)) {}
+
     AssemblyResult CommandAssembler::accept(std::string_view normalizedFragment,
         const CommandContext& context)
     {
         if (normalizedFragment.empty() || normalizedFragment.size() > maxPendingLength)
             return {AssemblyState::rejected, {}};
 
-        const SemanticCommandParser parser;
+        const auto& parser = parser_;
         if (!pending_.empty() && isTestFragment(normalizedFragment)
             && pending_.size() + normalizedFragment.size() + 1 <= maxPendingLength)
         {

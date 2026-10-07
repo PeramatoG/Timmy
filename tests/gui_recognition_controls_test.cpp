@@ -49,6 +49,13 @@ namespace {
         wxTheApp->ProcessIdle();
     }
 
+    wxString displayedText(const wxStaticText& label)
+    {
+        auto text = label.GetLabel();
+        text.Replace("\n", " ");
+        return text;
+    }
+
     template<class Predicate>
     void waitFor(Predicate ready)
     {
@@ -273,6 +280,11 @@ namespace {
         pumpEvents();
         REQUIRE(fixture.label("Raw transcript:").GetLabel() == "Raw transcript: Channel 5 At 50");
         REQUIRE(fixture.label("Semantic command:").GetLabel().Contains("produced"));
+        REQUIRE(displayedText(fixture.label("Semantic command:")).Contains("Validation: accepted"));
+        REQUIRE(displayedText(fixture.label("Semantic command:")).Contains("Rendered command: CH 5 AT 5 0"));
+        const auto& stages = fixture.label("Semantic command:");
+        REQUIRE(stages.GetBestSize().GetWidth() + stages.GetPosition().x
+            <= stages.GetParent()->GetClientSize().GetWidth());
         REQUIRE(fixture.emitter->calls == 0 && fixture.factories == 1);
         REQUIRE(fixture.label("OSC output:").GetLabel() == "OSC output: Armed");
 
@@ -290,6 +302,7 @@ namespace {
         REQUIRE(fixture.emitter->calls == 1);
         fixture.emitter->release();
         waitFor([&] { return fixture.label("Execution:").GetLabel().Contains("Succeeded"); });
+        REQUIRE(displayedText(fixture.label("Execution:")).Contains("Rendered command: CH 6 AT 6 0"));
         REQUIRE(fixture.emitter->completed == 1);
 
         toggle(fixture.output(), true);
@@ -353,6 +366,36 @@ namespace {
         REQUIRE(fixture.backend->starts == 1 && fixture.emitter->calls == 0);
     }
 
+    void unsupportedRenderingRemainsObservable()
+    {
+        FrameFixture fixture;
+        fixture.host().ChangeValue("192.0.2.5");
+        click(fixture.recognition());
+        toggle(fixture.output(), true);
+        pumpEvents();
+
+        // All is a valid semantic selection, but Hydra has no verified key
+        // mapping. Keep the parsed intent and rejection visible without output.
+        fixture.backend->emit("fuera todo");
+        pumpEvents();
+        const auto semantic = displayedText(fixture.label("Semantic command:"));
+        REQUIRE(semantic.Contains("SetIntensity(Channel(All), 0%)"));
+        REQUIRE(semantic.Contains("Validation: accepted"));
+        REQUIRE(semantic.Contains("Rendering:") && semantic.Contains("Hydra II"));
+        REQUIRE(!semantic.Contains("Rendered command:"));
+        REQUIRE(fixture.label("Execution:").GetLabel().Contains("Failed"));
+        REQUIRE(fixture.emitter->calls == 0);
+        REQUIRE(fixture.output().GetValue() && fixture.backend->starts == 1);
+        fixture.listeningControls();
+
+        // An unsupported rendering must not disable subsequent valid commands.
+        fixture.backend->emit("enciende canal 1");
+        waitFor([&] { return fixture.label("Execution:").GetLabel().Contains("Succeeded"); });
+        REQUIRE(fixture.emitter->calls == 1);
+        REQUIRE(displayedText(fixture.label("Semantic command:")).Contains("Rendered command: CH 1 AT AT"));
+        REQUIRE(displayedText(fixture.label("Execution:")).Contains("Rendered command: CH 1 AT AT"));
+    }
+
     void linguisticContextResetsAcrossArms()
     {
         FrameFixture fixture;
@@ -409,6 +452,7 @@ int main(int argc, char** argv)
     REQUIRE(wxTheApp->CallOnInit());
     runtimeArmingAndAsyncShutdown();
     invalidArmKeepsRecognitionListening();
+    unsupportedRenderingRemainsObservable();
     linguisticContextResetsAcrossArms();
     wxTheApp->OnExit();
     wxEntryCleanup();

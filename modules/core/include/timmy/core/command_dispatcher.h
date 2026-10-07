@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "timmy/command/semantic_command.h"
+#include "timmy/command/command_processor.h"
 #include "timmy/transport/command_emitter.h"
 
 #include <memory>
@@ -30,13 +30,14 @@ namespace timmy::core {
     {
         CommandDispatchState state{CommandDispatchState::notDispatched};
         std::string diagnostic;
+        std::string renderedCommand{};
     };
 
     class CommandDispatcher final
     {
     public:
         explicit CommandDispatcher(
-            std::shared_ptr<transport::ICommandEmitter> emitter);
+            std::shared_ptr<transport::ICommandEmitter> emitter, command::CommandProfile profile = {});
 
         [[nodiscard]] CommandDispatchResult dispatch(
             const command::SemanticCommand& command);
@@ -45,6 +46,7 @@ namespace timmy::core {
 
     private:
         std::shared_ptr<transport::ICommandEmitter> emitter_;
+        command::CommandProfile profile_;
     };
 
 } // namespace timmy::core

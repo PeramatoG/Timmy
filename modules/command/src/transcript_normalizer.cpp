@@ -156,7 +156,7 @@ namespace timmy::command {
         result.normalizedText = normalizeWhitespace(transcript);
         result.normalizedText = normalizePunctuationSpacing(result.normalizedText);
         result.normalizedText = normalizePercentSpacing(result.normalizedText);
-        removeTerminalPunctuation(result.normalizedText);
+        if (configuration_.stripTerminalPunctuation) removeTerminalPunctuation(result.normalizedText);
         return result;
     }
 

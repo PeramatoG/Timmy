@@ -32,6 +32,7 @@ namespace timmy::cli {
             std::string profile = "generic";
             transport::Hydra2OscOptions hydra;
             bool hydraOptions = false;
+            bool dryRun = false;
             std::string host;
             std::uint32_t port = 0;
             std::string commandText;
@@ -44,6 +45,7 @@ namespace timmy::cli {
                 << "Usage:\n"
                 << "  timmy-cli osc send --host <host> --port <port> "
                    "--command \"Channel 1 At 50\"\n\n"
+                << "Use --dry-run --command <text> to inspect processing without a destination.\n"
                 << "Profiles: --profile generic (default) or hydra2.\n"
                 << "Hydra II: --key-hold-ms <ms> --key-gap-ms <ms> --pre-clear\n"
                 << "This path sends one explicitly supplied semantic command; "
@@ -71,6 +73,7 @@ namespace timmy::cli {
             for (int index = 1; index < argc; ++index)
             {
                 const std::string_view option = argv[index];
+                if (option == "--dry-run") { options.dryRun = true; continue; }
                 if (option == "--pre-clear")
                 {
                     options.hydra.preClear = true;
@@ -115,8 +118,8 @@ namespace timmy::cli {
                     return std::nullopt;
                 }
             }
-            if (options.host.empty() || options.port == 0
-                || options.port > 65535 || options.commandText.empty()
+            if ((!options.dryRun && (options.host.empty() || options.port == 0 || options.port > 65535))
+                || options.commandText.empty()
                 || (options.hydraOptions && options.profile != "hydra2"))
             {
                 return std::nullopt;
@@ -148,13 +151,23 @@ namespace timmy::cli {
             return 2;
         }
 
-        const command::SemanticCommandParser parser;
-        const auto parsed = parser.parse(options->commandText);
-        if (!parsed.command)
+        const auto languageProfile = options->profile == "hydra2"
+            ? command::hydra2CommandProfile(options->hydra.preClear) : command::CommandProfile{};
+        const auto processed = command::CommandProcessor{languageProfile}.process(options->commandText);
+        const auto& parsed = processed.parsed;
+        std::cout << "HEARD: " << processed.transcript.originalText
+            << "\nNORMALIZED: " << processed.transcript.normalizedText << '\n';
+        if (parsed.command) std::cout << "PARSED INTENT: " << command::describe(*parsed.command) << '\n';
+        std::cout << "VALIDATION: " << (processed.validation.accepted ? "accepted" : "rejected") << '\n';
+        if (processed.rendering.text) std::cout << "RENDERED COMMAND: " << *processed.rendering.text << '\n';
+        if (!parsed.command || !processed.validation.accepted || !processed.rendering.text)
         {
-            std::cerr << "Command is unsupported or invalid.\n";
+            std::cerr << "Command is unsupported or invalid. "
+                << processed.validation.diagnostic << " " << processed.rendering.diagnostic << '\n';
             return 2;
         }
+
+        if (options->dryRun) { std::cout << "OUTPUT/STATUS: dry run; no command emitted.\n"; return 0; }
 
         std::shared_ptr<const transport::IOscCommandProfile> profile;
         if (options->profile == "hydra2")
@@ -162,7 +175,7 @@ namespace timmy::cli {
         else profile = std::make_shared<transport::GenericOscCommandProfile>();
         auto emitter = std::make_shared<transport::OscCommandEmitter>(
             transport::OscDestination{options->host, options->port}, profile);
-        core::CommandDispatcher dispatcher(emitter);
+        core::CommandDispatcher dispatcher(emitter, languageProfile);
         const auto result = dispatcher.dispatch(*parsed.command);
         if (result.state != core::CommandDispatchState::succeeded)
         {

@@ -52,7 +52,10 @@ namespace timmy::transport {
         [[nodiscard]] EmissionResult emit(
             const command::SemanticCommand& command) override;
 
+        [[nodiscard]] EmissionResult emitRendered(const RenderedCommand& rendered) override;
+
     private:
+        [[nodiscard]] EmissionResult emitMapped(const std::function<OscMappingResult()>& map);
         // Serializes complete plans, including cleanup, on this emitter.
         std::mutex executionMutex_;
         std::function<void(std::chrono::milliseconds)> wait_;

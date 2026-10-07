@@ -46,6 +46,8 @@ namespace {
         transcript.assemblyState = core::RecognitionAssemblyState::complete;
         transcript.semanticState = core::RecognitionSemanticState::produced;
         transcript.semanticCommand = command::SemanticCommandParser{}.parse("Channel 5 At 50").command;
+        transcript.validation = command::validateIntent(*transcript.semanticCommand);
+        transcript.rendering = command::renderIntent(*transcript.semanticCommand);
         REQUIRE(transcript.semanticCommand.has_value());
         return transcript;
     }
@@ -179,6 +181,12 @@ namespace {
 
     void invalidConfigurations()
     {
+        const auto hydraLanguage = gui::commandProfileForOutput(enabled());
+        REQUIRE(command::CommandProcessor{hydraLanguage}.process("enciende canal 1").rendering.text == "CH 1 AT AT");
+        auto genericConfiguration = enabled();
+        genericConfiguration.profile = gui::OutputProfile::genericOsc;
+        REQUIRE(command::CommandProcessor{gui::commandProfileForOutput(genericConfiguration)}
+            .process("enciende canal 1").rendering.text == "Channel 1 At 100");
         FactoryProbe factory;
         gui::CommandOutputSession session(factory.factory());
         const auto reject = [&](const auto& configuration, const std::string& field) {

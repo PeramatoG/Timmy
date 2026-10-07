@@ -1,4 +1,7 @@
 add_library(timmy_command STATIC
+    src/command_profile.cpp
+    src/command_processor.cpp
+    src/hydra2_command_renderer.cpp
     src/command_assembler.cpp
     src/command_lexicon.cpp
     src/semantic_command.cpp

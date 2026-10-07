@@ -60,6 +60,8 @@ namespace timmy::command {
             {"home", "home"}, {"lleva", canonicalHomeTo},
             {"siguiente", "next"}, {"next", "next"},
             {"anterior", "previous"}, {"prev", "previous"}, {"previous", "previous"},
+            {"enciende", "on"}, {"apaga", "off"}, {"fuera", "off"},
+            {"on", "on"}, {"off", "off"},
             {"full", "full"}, {"tope", "full"}
         };
 
@@ -117,7 +119,22 @@ namespace timmy::command {
 
     } // namespace
 
+    std::vector<CommandAlias> defaultCommandVocabulary()
+    {
+        std::vector<CommandAlias> result;
+        for (const auto& alias : aliases)
+            result.push_back({std::string(alias.spoken), std::string(alias.canonical)});
+        return result;
+    }
+
     std::vector<std::string> canonicalizeCommandText(std::string_view text)
+    {
+        static const auto vocabulary = defaultCommandVocabulary();
+        return canonicalizeCommandText(text, vocabulary);
+    }
+
+    std::vector<std::string> canonicalizeCommandText(std::string_view text,
+        const std::vector<CommandAlias>& vocabulary)
     {
         for (const char value : text)
         {
@@ -133,17 +150,17 @@ namespace timmy::command {
             // Currently the only two-word alias is the exclusion "but not".
             const auto phrase = index + 1 < words.size()
                 ? words[index] + " " + words[index + 1] : std::string{};
-            const auto alias = std::find_if(std::begin(aliases), std::end(aliases),
-                [&](const Alias& candidate) { return candidate.spoken == phrase; });
-            if (!phrase.empty() && alias != std::end(aliases))
+            const auto alias = std::find_if(std::begin(vocabulary), std::end(vocabulary),
+                [&](const CommandAlias& candidate) { return candidate.spoken == phrase; });
+            if (!phrase.empty() && alias != std::end(vocabulary))
             {
                 canonical.emplace_back(alias->canonical);
                 ++index;
                 continue;
             }
-            const auto wordAlias = std::find_if(std::begin(aliases), std::end(aliases),
-                [&](const Alias& candidate) { return candidate.spoken == words[index]; });
-            canonical.emplace_back(wordAlias == std::end(aliases)
+            const auto wordAlias = std::find_if(std::begin(vocabulary), std::end(vocabulary),
+                [&](const CommandAlias& candidate) { return candidate.spoken == words[index]; });
+            canonical.emplace_back(wordAlias == std::end(vocabulary)
                 ? std::string_view(words[index]) : wordAlias->canonical);
         }
         return canonical;
