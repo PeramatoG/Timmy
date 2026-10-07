@@ -493,6 +493,33 @@ namespace {
         gui::CommandOutputSession& output_;
     };
 
+    void waitingCommandsAreBounded()
+    {
+        auto emitter = std::make_shared<BlockingEmitter>();
+        FrontendMailbox mailbox;
+        gui::CommandOutputSession session([&](auto, auto) { return emitter; });
+        REQUIRE(session.start(enabled(), [&](const auto& result) { mailbox.post(result); }).succeeded);
+        REQUIRE(session.submit(produced()).state == ExecutionState::queued);
+        emitter->waitEntered();
+        for (std::size_t i = 0; i < core::RecognitionCommandExecutor::defaultQueueCapacity; ++i)
+            REQUIRE(session.submit(produced()).state == ExecutionState::queued);
+        const auto overflow = session.submit(produced());
+        REQUIRE(overflow.state == ExecutionState::failed);
+        REQUIRE(overflow.diagnostic
+            == "Execution queue is full (4 waiting commands); command rejected.");
+        emitter->release();
+        mailbox.waitFor(2 * (1 + core::RecognitionCommandExecutor::defaultQueueCapacity));
+        session.stop();
+        REQUIRE(emitter->commands.size() == 5);
+        const auto events = mailbox.drain();
+        REQUIRE(events.size() == 10);
+        for (std::size_t i = 0; i < events.size(); i += 2)
+        {
+            REQUIRE(events[i].state == ExecutionState::queued);
+            REQUIRE(events[i + 1].state == ExecutionState::succeeded);
+        }
+    }
+
     void liveArmingPreservesRecognition()
     {
         auto emitter = std::make_shared<BlockingEmitter>();
@@ -523,8 +550,13 @@ namespace {
         speak("Channel 5 At 50");
         REQUIRE(frontend->submissions.back() == ExecutionState::queued);
         emitter->waitEntered();
-        speak("Group 3 At 25");
-        REQUIRE(frontend->submissions.back() == ExecutionState::queued);
+        for (std::size_t i = 0; i < core::RecognitionCommandExecutor::defaultQueueCapacity; ++i)
+        {
+            speak("Group 3 At 25");
+            REQUIRE(frontend->submissions.back() == ExecutionState::queued);
+        }
+        speak("Group 9 At Full");
+        REQUIRE(frontend->submissions.back() == ExecutionState::failed);
         // emit is still blocked, proving disarm does not wait for it to finish.
         session.disarm();
         session.disarm();
@@ -559,7 +591,8 @@ namespace {
         REQUIRE(newEvents.size() == 2 && newEvents.back().state == ExecutionState::succeeded);
         REQUIRE(emitter->commands == std::vector<std::string>({
             "SetIntensity(Channel(5), 50%)", "SetIntensity(Channel(6), 60%)"}));
-        REQUIRE(frontend->transcripts.size() == 5);
+        REQUIRE(frontend->transcripts.size()
+            == 5 + core::RecognitionCommandExecutor::defaultQueueCapacity);
         for (const auto& transcript : frontend->transcripts)
         {
             REQUIRE(!transcript.rawTranscript.empty());
@@ -616,5 +649,6 @@ int main()
     executionFailuresReachFrontend();
     lifecycleReleasesResources();
     recognitionOnlyStagesRemainVisible();
+    waitingCommandsAreBounded();
     liveArmingPreservesRecognition();
 }

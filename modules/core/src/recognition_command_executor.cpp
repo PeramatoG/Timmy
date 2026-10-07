@@ -36,7 +36,8 @@ namespace timmy::core {
             if (stopping_) return {RecognitionExecutionState::failed, "Execution is stopped."};
             if (!accepting_) return {};
             if (queue_.size() >= capacity_)
-                return {RecognitionExecutionState::failed, "Execution queue is full."};
+                return {RecognitionExecutionState::failed, "Execution queue is full ("
+                    + std::to_string(capacity_) + " waiting commands); command rejected."};
             queue_.push_back(*result.semanticCommand);
         }
         ready_.notify_one();

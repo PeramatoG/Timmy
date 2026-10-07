@@ -24,7 +24,8 @@ namespace timmy::transport {
             {"8", "/key8"}, {"9", "/key9"}, {"AT", "/key@"}, {"DOT", "/key."},
             {"C", "/keyC"}, {"RST", "/keyRST"}, {"REL", "/keyREL"},
             {"THRU", "/keyTHRU"}, {"EXCP", "/keyEXCP"}, {"CALL", "/keyCALL"},
-            {"HOME", "/keyHOME"}, {"OK", "/keyOK"}};
+            {"HOME", "/keyHOME"}, {"OK", "/keyOK"}, {"TEST", "/keyTEST"},
+            {"NEXT", "/keyNEXT"}, {"PREV", "/keyPREV"}};
         std::chrono::milliseconds hold{30};
         std::chrono::milliseconds gap{30};
         bool preClear = false;

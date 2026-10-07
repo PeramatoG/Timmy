@@ -69,6 +69,23 @@ int main()
     passed &= expectNormalization(normalizer, "abc123 %", "abc123 %");
     passed &= expectNormalization(
         normalizer, "modelo50%plus", "modelo50%plus");
+    passed &= expectNormalization(
+        normalizer, "  Canales 1 , 3 y 5 al 70 % . ",
+        "Canales 1, 3 y 5 al 70%");
+    passed &= expectNormalization(
+        normalizer, "Canales del 1 al 15 excepto 5 a 8 al 50%.",
+        "Canales del 1 al 15 excepto 5 a 8 al 50%");
+    passed &= expectNormalization(
+        normalizer, "Fixtures 1 a 6 a home!", "Fixtures 1 a 6 a home");
+    passed &= expectNormalization(normalizer, "Selecciona canales 1,",
+        "Selecciona canales 1,");
+    passed &= expectNormalization(normalizer, "Canales 1,", "Canales 1,");
+    passed &= expectNormalization(normalizer, "3,", "3,");
+    passed &= expectNormalization(normalizer, "3 through 5,", "3 through 5,");
+    passed &= expectNormalization(normalizer, "and 3,", "and 3,");
+    passed &= expectNormalization(normalizer, "except 5,", "except 5,");
+    passed &= expectNormalization(normalizer, "Canal 5 al 50,", "Canal 5 al 50");
+    passed &= expectNormalization(normalizer, "Clear editor,", "Clear editor");
     passed &= expectNormalization(normalizer, "   \t\r\n", "");
 
     return passed ? 0 : 1;

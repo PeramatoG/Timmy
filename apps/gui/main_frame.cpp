@@ -353,7 +353,7 @@ namespace timmy::gui {
         hydraHoldText_->SetToolTip(timingHint);
         hydraGapText_->SetToolTip(timingHint);
         addLabel("Hydra pre-clear:");
-        hydraPreClearCheck_ = new wxCheckBox(panel, wxID_ANY, "Clear before each command");
+        hydraPreClearCheck_ = new wxCheckBox(panel, wxID_ANY, "Clear before selection commands");
         hydraPreClearCheck_->SetValue(defaults.preClear);
         grid->Add(hydraPreClearCheck_, 0, wxALIGN_CENTER_VERTICAL);
         sizer->Add(grid, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);

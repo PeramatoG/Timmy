@@ -79,9 +79,9 @@ timmy-cli osc send --profile hydra2 --host 127.0.0.1 --port 8000 \
 ```
 
 Hydra II uses ordered remote-key pulses (integer `1` then `0` at the same
-address). `SetIntensity` selects CH, FXT or GRP, enters the target ID, then `@`
-and a two-digit percentage; 100/Full uses a second `@`. No reset or other
-catalog-only keys are emitted. `--pre-clear` optionally prefixes two C pulses;
+address). `SetIntensity` selects CH, FXT or GRP, enters the compact selection, then
+`@` and a two-digit percentage; 100/Full uses a second `@`. Ranges use THRU,
+additive list terms use OK, and excluded terms use EXCP. `--pre-clear` optionally prefixes two C pulses;
 it is disabled by default. Hold and gap default to 30 ms each, including the
 final gap. Adapt these to the console configuration.
 
@@ -90,6 +90,47 @@ applications can override individual OSC addresses without changing command
 semantics. `IOscCommandProfile` now returns an ordered `OscExecutionPlan` of
 messages or complete key pulses. Generic remains the default and still sends
 exactly one unchanged message, without waiting.
+
+### Practical selection, test and editor commands (CMD-040)
+
+CLI and GUI share the same deterministic command language through Core. Channel,
+fixture and group selections contain positive IDs, inclusive ranges, lists and
+exclusions. Ranges stay compact; they are never expanded into individual commands.
+For example, `Canales 1, 3 y 5 al 70` and `Channels 1 through 10 except 5 at 50`
+set the level of the whole selection. `full` and `tope` mean 100 percent.
+
+Hydra II additionally supports these operations:
+
+| Spoken command | Hydra key sequence |
+| --- | --- |
+| `Selecciona canales 1 a 10` | `CH 1 THRU 1 0 OK` |
+| `Libera canal 5` / `Release channel 5` | `CH 5 REL` |
+| `Test canal 21` / `Prueba canal 21` | `CH 2 1 TEST` |
+| `Test` / `Siguiente` / `Next test` | `TEST` |
+| `Siguiente canal` / `Next channel` | `CH NEXT` |
+| `Canal anterior` / `Previous channel` | `CH PREV` |
+| `Fixtures 1 a 6 a home` | `FXT 1 THRU 6 HOME` |
+| `Limpia editor` / `Borra todo el editor` / `Clear editor` | `RST` |
+
+Selection navigation also accepts fixture and group target types. HOME applies
+only to whole fixtures. Bare `siguiente` advances Hydra's TEST workflow; TIMMY
+does not calculate a new target. TEST, NEXT and PREV addresses default to
+`/keyTEST`, `/keyNEXT` and `/keyPREV`, and remain configurable in the key catalog.
+AdvanceTest and ClearEditor always emit exactly one key pulse, including when
+pre-clear is enabled. RST is emitted only for the explicit editor operation;
+bare `reset`, `borra` and `clear` are rejected.
+
+`Canal 5` and `Canales 1 a 10` remain pending until a level or action completes
+them. `Canal 10` followed by `test` completes a selection test rather than advancing
+an earlier test. Pending assembly holds at most 256 bytes and selections contain
+at most 32 compact terms; invalid fragments never execute. Recognition hints
+are covered by deterministic tests against this same Core pipeline.
+The existing singular `Canal 5 a 50` intensity alias remains supported; use
+plural `Canales 1 a 10` or explicit `Canal 1 thru 10` for a pending range.
+
+Generic OSC preserves its existing single-target intensity messages. Complex
+selections and the new operations return an unsupported diagnostic because the
+generic profile has no defined representation for them.
 
 Reuse one `OscCommandEmitter` for a destination: concurrent calls on that
 instance execute whole plans serially, including failure cleanup. Independent
@@ -102,7 +143,7 @@ not console acknowledgement; best-effort release cannot guarantee delivery.
 ### Live voice execution (E2E-010)
 
 `asr listen` remains transcript-only unless `--profile` is explicitly supplied.
-To send the existing SetIntensity commands to Hydra II:
+To send supported semantic commands to Hydra II:
 
 ```sh
 timmy-cli asr listen --model <whisper-model> --vad-model <silero-model> \
@@ -115,8 +156,9 @@ options require `hydra2`. `generic` is also supported.
 
 RAW, NORMALIZED, ASSEMBLY and SEMANTIC output remain visible. A single execution
 worker reports DISPATCH queued/succeeded/failed independently of transcript
-printing. Its FIFO holds up to 16 waiting commands; overflow is reported rather
-than blocking recognition. Repeated spoken commands are separate events. On
+printing. Its FIFO holds up to four waiting commands behind the one in flight in
+both CLI and GUI; overflow rejects the new command with a capacity diagnostic
+rather than blocking recognition or replaying it later. Repeated spoken commands are separate events. On
 Ctrl+C, capture and recognition stop first, waiting commands are discarded, and
 the current emitter plan finishes before the worker is joined.
 

@@ -64,7 +64,8 @@ int main()
 
     const auto& received = std::get<timmy::command::SetIntensity>(
         *emitter->receivedCommand);
-    require(std::get<timmy::command::Channel>(received.target).id == 5);
+    require(received.target.singleTarget().has_value());
+    require(std::get<timmy::command::Channel>(*received.target.singleTarget()).id == 5);
     require(received.level.percent() == 50);
     require(timmy::command::describe(command)
         == "SetIntensity(Channel(5), 50%)");

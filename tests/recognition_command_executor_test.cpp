@@ -99,7 +99,8 @@ int main()
         require(executor.submit(produced("Group 3 At 25")).state == State::queued);
         require(executor.submit(produced()).state == State::queued); // Intentional repeat.
         const auto overflow = executor.submit(produced());
-        require(overflow.state == State::failed && overflow.diagnostic == "Execution queue is full.");
+        require(overflow.state == State::failed && overflow.diagnostic
+            == "Execution queue is full (2 waiting commands); command rejected.");
         emitter->release();
         events.wait(6);
         executor.shutdown();
@@ -114,6 +115,30 @@ int main()
         }
         require(executor.submit(produced()).diagnostic == "Execution is stopped.");
         require(!executor.resume());
+    }
+    {
+        // Both frontends use this bounded default. The in-flight command does
+        // not consume a waiting slot, and overflow is never replayed later.
+        require(core::RecognitionCommandExecutor::defaultQueueCapacity == 4);
+        auto emitter = std::make_shared<RecordingEmitter>();
+        Events events;
+        core::RecognitionCommandExecutor executor(core::CommandDispatcher{emitter},
+            [&](const auto& event) { events.observe(event); });
+        require(executor.submit(produced()).state == State::queued);
+        emitter->waitEntered();
+        for (std::size_t i = 0; i < core::RecognitionCommandExecutor::defaultQueueCapacity; ++i)
+            require(executor.submit(produced("Group 3 At 25")).state == State::queued);
+        const auto overflow = executor.submit(produced("Channel 6 At 60"));
+        require(overflow.state == State::failed && overflow.diagnostic
+            == "Execution queue is full (4 waiting commands); command rejected.");
+        emitter->release();
+        events.wait(2 * (1 + core::RecognitionCommandExecutor::defaultQueueCapacity));
+        executor.shutdown();
+        require(emitter->commands.size() == 5 && !emitter->concurrent);
+        require(emitter->commands.front() == command::describe(*produced().semanticCommand));
+        for (std::size_t i = 1; i < emitter->commands.size(); ++i)
+            require(emitter->commands[i] == command::describe(*produced("Group 3 At 25").semanticCommand));
+        require(events.results.size() == 10);
     }
     {
         auto emitter = std::make_shared<RecordingEmitter>();
@@ -147,7 +172,9 @@ int main()
             [&](const auto& event) { firstArm.observe(event); });
         require(executor.submit(produced()).state == State::queued);
         emitter->waitEntered();
-        require(executor.submit(produced("Group 3 At 25")).state == State::queued);
+        for (std::size_t i = 0; i < core::RecognitionCommandExecutor::defaultQueueCapacity; ++i)
+            require(executor.submit(produced("Group 3 At 25")).state == State::queued);
+        require(executor.submit(produced()).state == State::failed);
         // Pause must return while emit is blocked and discard waiting work.
         executor.pause();
         executor.pause();

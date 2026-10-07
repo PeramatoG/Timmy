@@ -10,7 +10,9 @@
 
 #include "timmy/command/semantic_command.h"
 
+#include <algorithm>
 #include <string>
+#include <utility>
 #include <type_traits>
 
 namespace timmy::command {
@@ -37,29 +39,141 @@ namespace timmy::command {
     {
     }
 
-    // Produces transport-neutral diagnostic text for a semantic command.
+    namespace {
+
+        std::string targetName(TargetType type)
+        {
+            switch (type)
+            {
+            case TargetType::channel: return "Channel";
+            case TargetType::fixture: return "Fixture";
+            case TargetType::group: return "Group";
+            }
+            return "InvalidTarget";
+        }
+
+        std::string describeRanges(const std::vector<TargetRange>& ranges)
+        {
+            std::string result;
+            for (const auto& range : ranges)
+            {
+                if (!result.empty()) result += ", ";
+                result += std::to_string(range.first);
+                if (range.first != range.last)
+                {
+                    result += " through " + std::to_string(range.last);
+                }
+            }
+            return result;
+        }
+
+    } // namespace
+
+    TargetSelection::TargetSelection(TargetType targetType,
+        std::vector<TargetRange> includedRanges,
+        std::vector<TargetRange> excludedRanges)
+        : type(targetType), included(std::move(includedRanges)),
+          excluded(std::move(excludedRanges))
+    {
+    }
+
+    TargetSelection::TargetSelection(const LightingTarget& target)
+    {
+        std::visit([this](const auto& value) {
+            using Target = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<Target, Channel>) type = TargetType::channel;
+            else if constexpr (std::is_same_v<Target, Fixture>) type = TargetType::fixture;
+            else type = TargetType::group;
+            included.push_back({value.id, value.id});
+        }, target);
+    }
+
+    TargetSelection::TargetSelection(Channel target)
+        : TargetSelection(LightingTarget{target}) {}
+
+    TargetSelection::TargetSelection(Fixture target)
+        : TargetSelection(LightingTarget{target}) {}
+
+    TargetSelection::TargetSelection(Group target)
+        : TargetSelection(LightingTarget{target}) {}
+
+    bool TargetSelection::isValid() const
+    {
+        if ((type != TargetType::channel && type != TargetType::fixture
+                && type != TargetType::group)
+            || included.empty() || included.size() + excluded.size() > maxTerms)
+        {
+            return false;
+        }
+        const auto validRanges = [](const std::vector<TargetRange>& ranges) {
+            return std::all_of(ranges.begin(), ranges.end(), [](const auto& range) {
+                return range.first > 0 && range.first <= range.last;
+            });
+        };
+        return validRanges(included) && validRanges(excluded);
+    }
+
+    std::optional<LightingTarget> TargetSelection::singleTarget() const
+    {
+        if (!isValid() || included.size() != 1 || !excluded.empty()
+            || included.front().first != included.front().last)
+        {
+            return std::nullopt;
+        }
+        const auto id = included.front().first;
+        switch (type)
+        {
+        case TargetType::channel: return Channel{id};
+        case TargetType::fixture: return Fixture{id};
+        case TargetType::group: return Group{id};
+        }
+        return std::nullopt;
+    }
+
+    std::string describe(const TargetSelection& selection)
+    {
+        std::string result = targetName(selection.type) + "("
+            + describeRanges(selection.included);
+        if (!selection.excluded.empty())
+        {
+            result += " except " + describeRanges(selection.excluded);
+        }
+        return result + ")";
+    }
+
+    // Produces readable, transport-neutral diagnostics for every operation.
     std::string describe(const SemanticCommand& command)
     {
-        return std::visit([](const auto& value) {
-            return std::visit([&value](const auto& target) {
-                using Target = std::decay_t<decltype(target)>;
-                std::string targetName;
-                if constexpr (std::is_same_v<Target, Channel>)
-                {
-                    targetName = "Channel";
-                }
-                else if constexpr (std::is_same_v<Target, Fixture>)
-                {
-                    targetName = "Fixture";
-                }
-                else
-                {
-                    targetName = "Group";
-                }
-                return "SetIntensity(" + targetName + "("
-                    + std::to_string(target.id) + "), "
+        return std::visit([](const auto& value) -> std::string {
+            using Operation = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<Operation, SetIntensity>)
+            {
+                return "SetIntensity(" + describe(value.target) + ", "
                     + std::to_string(value.level.percent()) + "%)";
-            }, value.target);
+            }
+            else if constexpr (std::is_same_v<Operation, AdvanceTest>)
+            {
+                return "AdvanceTest()";
+            }
+            else if constexpr (std::is_same_v<Operation, ClearEditor>)
+            {
+                return "ClearEditor()";
+            }
+            else if constexpr (std::is_same_v<Operation, NavigateSelection>)
+            {
+                return "NavigateSelection(" + targetName(value.type) + ", "
+                    + (value.direction == SelectionDirection::next ? "Next" : "Previous")
+                    + ")";
+            }
+            else
+            {
+                std::string operation;
+                if constexpr (std::is_same_v<Operation, SelectSelection>) operation = "SelectSelection";
+                else if constexpr (std::is_same_v<Operation, ReleaseSelection>) operation = "ReleaseSelection";
+                else if constexpr (std::is_same_v<Operation, TestSelection>) operation = "TestSelection";
+                else operation = "HomeSelection";
+                return operation + "(" + describe(value.target) + ")";
+            }
         }, command);
     }
 

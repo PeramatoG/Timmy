@@ -33,11 +33,14 @@ namespace timmy::core {
     class RecognitionCommandExecutor final
     {
     public:
+        // Shared frontend default: at most four commands wait behind the one
+        // currently executing. A full queue rejects new commands without retry.
+        static constexpr std::size_t defaultQueueCapacity = 4;
         using Observer = std::function<void(const RecognitionExecutionResult&)>;
         // Observer runs on the execution worker, outside the queue lock. It must
         // not call shutdown or destroy the executor; exceptions are contained.
         RecognitionCommandExecutor(CommandDispatcher dispatcher,
-            Observer observer = {}, std::size_t capacity = 16);
+            Observer observer = {}, std::size_t capacity = defaultQueueCapacity);
         ~RecognitionCommandExecutor();
         RecognitionCommandExecutor(const RecognitionCommandExecutor&) = delete;
         RecognitionCommandExecutor& operator=(const RecognitionCommandExecutor&) = delete;
