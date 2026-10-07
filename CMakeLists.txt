@@ -33,6 +33,18 @@ add_subdirectory(modules/command)
 add_subdirectory(modules/transport)
 add_subdirectory(modules/core)
 
+# wx-free frontend configuration/lifecycle code is tested in headless builds too.
+if(TIMMY_BUILD_GUI OR BUILD_TESTING)
+    add_library(timmy_gui_output STATIC apps/gui/command_output_session.cpp)
+    target_include_directories(timmy_gui_output PUBLIC ${PROJECT_SOURCE_DIR}/apps/gui)
+    target_link_libraries(timmy_gui_output PUBLIC timmy_core)
+    if(MSVC)
+        target_compile_options(timmy_gui_output PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(timmy_gui_output PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
@@ -127,6 +139,7 @@ if(TIMMY_BUILD_GUI)
         PRIVATE
             timmy_audio
             timmy_core
+            timmy_gui_output
             ${TIMMY_WX_LIBRARIES}
     )
 
@@ -141,6 +154,19 @@ if(TIMMY_BUILD_GUI)
             -Wextra
             -Wpedantic
         )
+    endif()
+
+    if(BUILD_TESTING)
+        add_executable(timmy_gui_execution_events_tests tests/gui_execution_events_test.cpp)
+        target_link_libraries(timmy_gui_execution_events_tests PRIVATE
+            timmy_gui_output ${TIMMY_WX_LIBRARIES})
+        add_test(NAME timmy.gui_execution_events COMMAND timmy_gui_execution_events_tests)
+        set_tests_properties(timmy.gui_execution_events PROPERTIES TIMEOUT 20)
+        if(MSVC)
+            target_compile_options(timmy_gui_execution_events_tests PRIVATE /W4 /permissive-)
+        else()
+            target_compile_options(timmy_gui_execution_events_tests PRIVATE -Wall -Wextra -Wpedantic)
+        endif()
     endif()
 
 endif()

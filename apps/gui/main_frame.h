@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "command_output_session.h"
+
 #include "timmy/audio/audio_channel_selector.h"
 #include "timmy/audio/audio_device_info.h"
 #include "timmy/audio/audio_engine.h"
@@ -25,6 +27,7 @@
 #include <vector>
 
 class wxButton;
+class wxCheckBox;
 class wxChoice;
 class wxCommandEvent;
 class wxGauge;
@@ -47,12 +50,16 @@ namespace timmy::gui {
 
         void createAudioPage(wxNotebook* notebook);
         void createRecognitionPage(wxNotebook* notebook);
+        void createOutputPage(wxNotebook* notebook);
         void populateAudioDevices();
         void populateRecognitionEngines();
         void resolveDefaultResources();
         void startSelectedDevice();
         void stopRecognition();
         void updateRecognitionControls(bool listening);
+        void updateOutputControls();
+        CommandOutputConfiguration outputConfiguration() const;
+        void showExecutionResult(const core::RecognitionExecutionResult& result);
 
         void onDeviceSelected(wxCommandEvent& event);
         void onChannelSelected(wxCommandEvent& event);
@@ -62,6 +69,8 @@ namespace timmy::gui {
         void onRecognitionState(wxThreadEvent& event);
         void onRecognitionDiagnostic(wxThreadEvent& event);
         void onRecognitionTranscript(wxThreadEvent& event);
+        void onOutputConfigurationChanged(wxCommandEvent& event);
+        void onExecutionResult(wxThreadEvent& event);
         void onMeterTimer(wxTimerEvent& event);
 
         wxChoice* deviceChoice_ = nullptr;
@@ -79,6 +88,15 @@ namespace timmy::gui {
         wxStaticText* normalizedTranscriptText_ = nullptr;
         wxStaticText* assemblyText_ = nullptr;
         wxStaticText* semanticCommandText_ = nullptr;
+        wxCheckBox* outputEnabledCheck_ = nullptr;
+        wxChoice* outputProfileChoice_ = nullptr;
+        wxTextCtrl* outputHostText_ = nullptr;
+        wxTextCtrl* outputPortText_ = nullptr;
+        wxTextCtrl* hydraHoldText_ = nullptr;
+        wxTextCtrl* hydraGapText_ = nullptr;
+        wxCheckBox* hydraPreClearCheck_ = nullptr;
+        wxStaticText* executionStatusText_ = nullptr;
+        wxStaticText* executionResultText_ = nullptr;
 
         std::vector<audio::AudioDeviceInfo> audioDevices_;
         audio::AudioEngine audioEngine_;
@@ -86,6 +104,7 @@ namespace timmy::gui {
         std::shared_ptr<audio::AudioMeter> meter_;
         std::unique_ptr<core::RecognitionPipeline> recognitionPipeline_;
         std::shared_ptr<GuiRecognitionObserver> recognitionObserver_;
+        CommandOutputSession outputSession_;
         std::uint64_t recognitionGeneration_ = 0;
         wxTimer meterTimer_;
     };

@@ -98,7 +98,6 @@ in deterministic tests. The emitter validates every message before the first
 send, stops on failure, attempts to release the active key, and propagates the
 original error. Presses are never retried. UDP success means local submission,
 not console acknowledgement; best-effort release cannot guarantee delivery.
-Live recognition remains disconnected from emission.
 
 ### Live voice execution (E2E-010)
 
@@ -120,3 +119,28 @@ printing. Its FIFO holds up to 16 waiting commands; overflow is reported rather
 than blocking recognition. Repeated spoken commands are separate events. On
 Ctrl+C, capture and recognition stop first, waiting commands are discarded, and
 the current emitter plan finishes before the worker is joined.
+
+### GUI command output (GUI-020)
+
+The GUI retains its Audio and Recognition pages and adds an Output page.
+Command output is disabled by default, so listening still shows raw transcript,
+normalized transcript, assembly state/text and semantic command without sending.
+
+For Hydra II, select the audio device/channel and local recognition resources,
+then open Output, enable command output, select **LT Hydra II**, enter the console
+IP or hostname and use port **8000**. Hold and gap inherit the transport profile
+defaults (currently 30 ms each); pre-clear is off. **Generic OSC** uses the existing
+generic mapping and disables the Hydra controls. No output settings are persisted.
+
+Press **Start listening** on Recognition and speak an already supported command,
+for example `Channel 5 At 50`. Enabled output settings are validated before
+recognition starts and stay locked while listening. Recognition stages remain
+visible; Output reports Ready, Queued, Succeeded or Failed with the diagnostic and
+last result. Succeeded means local UDP delivery, not console acknowledgement.
+
+Stop listening, changing the audio device (or channel with output enabled), and
+application close stop recognition before shutting down execution. Pending
+commands are discarded, the active plan finishes, and the worker is joined before
+resources or GUI event targets are released. Microphone/Whisper/real Hydra II
+acceptance is a manual check; deterministic frontend tests use fake emitters and
+an in-memory recognition backend.
