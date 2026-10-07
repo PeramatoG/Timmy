@@ -129,7 +129,7 @@ namespace timmy::transport {
             }
             else if constexpr (std::is_same_v<Operation, command::ModifySelection>)
             {
-                return appendModification(keys, operation);
+                if (!appendModification(keys, operation)) return false;
             }
             else
             {
