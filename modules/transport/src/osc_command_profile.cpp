@@ -29,6 +29,12 @@ namespace timmy::transport {
             using Operation = std::decay_t<decltype(operation)>;
             if constexpr (std::is_same_v<Operation, command::SetIntensity>)
             {
+                const auto singleTarget = operation.target.singleTarget();
+                if (!singleTarget)
+                {
+                    return OscMappingResult{std::nullopt,
+                        "The generic OSC profile supports only single-target intensity commands."};
+                }
                 return std::visit([&operation](const auto& target) {
                     using Target = std::decay_t<decltype(target)>;
                     OscMessage message;
@@ -43,23 +49,23 @@ namespace timmy::transport {
                                 "Channel identifier exceeds the generic OSC integer range."};
                         }
                         message.address = "/timmy/channel/intensity";
-                        message.arguments = {
-                            static_cast<std::int32_t>(target.id), level };
+                        message.arguments.emplace_back(static_cast<std::int32_t>(target.id));
+                        message.arguments.emplace_back(level);
                     }
                     else if constexpr (std::is_same_v<Target, command::Fixture>)
                     {
                         message.address = "/timmy/fixture/"
                             + std::to_string(target.id) + "/intensity";
-                        message.arguments = {level};
+                        message.arguments.emplace_back(level);
                     }
                     else
                     {
                         message.address = "/timmy/group/intensity/"
                             + std::to_string(target.id);
-                        message.arguments = {level};
+                        message.arguments.emplace_back(level);
                     }
                     return OscMappingResult{OscExecutionPlan{std::move(message)}, {}};
-                }, operation.target);
+                }, *singleTarget);
             }
             return OscMappingResult{
                 std::nullopt,

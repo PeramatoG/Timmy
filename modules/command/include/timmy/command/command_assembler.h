@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "timmy/command/semantic_command_parser.h"
+
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -32,7 +34,7 @@ namespace timmy::command {
     class CommandAssembler
     {
     public:
-        static constexpr std::size_t maxPendingLength = 256;
+        static constexpr std::size_t maxPendingLength = SemanticCommandParser::maxCommandLength;
 
         [[nodiscard]]
         AssemblyResult accept(std::string_view normalizedFragment);

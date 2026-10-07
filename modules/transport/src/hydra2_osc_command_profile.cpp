@@ -13,6 +13,64 @@
 #include <utility>
 
 namespace timmy::transport {
+    namespace {
+        // Keeps console key names private to this transport profile.
+        std::optional<std::string> targetKey(command::TargetType type)
+        {
+            switch (type)
+            {
+            case command::TargetType::channel: return "CH";
+            case command::TargetType::fixture: return "FXT";
+            case command::TargetType::group: return "GRP";
+            }
+            return std::nullopt;
+        }
+
+        void appendNumber(std::vector<std::string>& keys, std::uint32_t number)
+        {
+            for (char digit : std::to_string(number)) keys.emplace_back(1, digit);
+        }
+
+        void appendRange(std::vector<std::string>& keys,
+            const command::TargetRange& range)
+        {
+            appendNumber(keys, range.first);
+            if (range.first != range.last)
+            {
+                keys.push_back("THRU");
+                appendNumber(keys, range.last);
+            }
+        }
+
+        // OK is Hydra's additive selection separator; ranges stay compact.
+        void appendIncluded(std::vector<std::string>& keys,
+            const std::vector<command::TargetRange>& terms)
+        {
+            for (std::size_t index = 0; index < terms.size(); ++index)
+            {
+                if (index != 0) keys.push_back("OK");
+                appendRange(keys, terms[index]);
+            }
+        }
+
+        bool appendSelection(std::vector<std::string>& keys,
+            const command::TargetSelection& selection)
+        {
+            const auto typeKey = targetKey(selection.type);
+            if (!selection.isValid() || !typeKey) return false;
+            keys.push_back(*typeKey);
+            appendIncluded(keys, selection.included);
+            for (const auto& excluded : selection.excluded)
+            {
+                // Each exclusion subtracts a term; an additive OK separator
+                // would instead risk putting that term back in the selection.
+                keys.push_back("EXCP");
+                appendRange(keys, excluded);
+            }
+            return true;
+        }
+    }
+
     Hydra2OscCommandProfile::Hydra2OscCommandProfile(Hydra2OscOptions options)
         : options_(std::move(options)) {}
 
@@ -20,24 +78,66 @@ namespace timmy::transport {
         const command::SemanticCommand& commandValue) const
     {
         std::vector<std::string> keys;
-        if (options_.preClear) keys = {"C", "C"};
-        std::visit([&](const command::SetIntensity& operation) {
-            std::visit([&](const auto& target) {
-                using Target = std::decay_t<decltype(target)>;
-                if constexpr (std::is_same_v<Target, command::Channel>) keys.push_back("CH");
-                else if constexpr (std::is_same_v<Target, command::Fixture>) keys.push_back("FXT");
-                else keys.push_back("GRP");
-                for (char digit : std::to_string(target.id)) keys.emplace_back(1, digit);
-            }, operation.target);
-            keys.push_back("AT");
-            const int level = operation.level.percent();
-            if (level == 100) keys.push_back("AT");
+        const bool valid = std::visit([&](const auto& operation) {
+            using Operation = std::decay_t<decltype(operation)>;
+            // Standalone actions must remain exactly one pulse even when the
+            // optional editor pre-clear is enabled for selection commands.
+            if constexpr (std::is_same_v<Operation, command::AdvanceTest>)
+            {
+                keys.push_back("TEST");
+            }
+            else if constexpr (std::is_same_v<Operation, command::ClearEditor>)
+            {
+                keys.push_back("RST");
+            }
             else
             {
-                keys.push_back(std::to_string(level / 10));
-                keys.push_back(std::to_string(level % 10));
+                if (options_.preClear) keys = {"C", "C"};
+                if constexpr (std::is_same_v<Operation, command::NavigateSelection>)
+                {
+                    const auto typeKey = targetKey(operation.type);
+                    if (!typeKey) return false;
+                    keys.push_back(*typeKey);
+                    switch (operation.direction)
+                    {
+                    case command::SelectionDirection::next: keys.push_back("NEXT"); break;
+                    case command::SelectionDirection::previous: keys.push_back("PREV"); break;
+                    default: return false;
+                    }
+                }
+                else
+                {
+                    if constexpr (std::is_same_v<Operation, command::HomeSelection>)
+                    {
+                        if (operation.target.type != command::TargetType::fixture)
+                            return false;
+                    }
+                    if (!appendSelection(keys, operation.target)) return false;
+                    if constexpr (std::is_same_v<Operation, command::SetIntensity>)
+                    {
+                        keys.push_back("AT");
+                        const int level = operation.level.percent();
+                        if (level == 100) keys.push_back("AT");
+                        else
+                        {
+                            keys.push_back(std::to_string(level / 10));
+                            keys.push_back(std::to_string(level % 10));
+                        }
+                    }
+                    else if constexpr (std::is_same_v<Operation, command::SelectSelection>)
+                        keys.push_back("OK");
+                    else if constexpr (std::is_same_v<Operation, command::ReleaseSelection>)
+                        keys.push_back("REL");
+                    else if constexpr (std::is_same_v<Operation, command::TestSelection>)
+                        keys.push_back("TEST");
+                    else if constexpr (std::is_same_v<Operation, command::HomeSelection>)
+                        keys.push_back("HOME");
+                }
             }
+            return true;
         }, commandValue);
+        if (!valid)
+            return {std::nullopt, "Invalid target selection or operation for Hydra II."};
         OscExecutionPlan plan;
         for (const auto& key : keys)
         {

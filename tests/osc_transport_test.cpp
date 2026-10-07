@@ -2,6 +2,7 @@
 #include "timmy/transport/osc_packet.h"
 
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -99,6 +100,47 @@ namespace {
         require(std::get<timmy::transport::OscMessage>(group.plan->front()).address == "/timmy/group/intensity/3");
         require(std::get<timmy::transport::OscMessage>(group.plan->front()).arguments.size() == 1);
         requireInteger(std::get<timmy::transport::OscMessage>(group.plan->front()).arguments[0], 55);
+    }
+
+    // New semantics have no implicit generic OSC representation.
+    void testUnsupportedCommands()
+    {
+        using namespace timmy::command;
+        const auto level = *IntensityLevel::fromPercent(50);
+        const std::vector<SemanticCommand> unsupported{
+            SetIntensity{TargetSelection{TargetType::channel, {{1, 10}}}, level},
+            SetIntensity{TargetSelection{TargetType::channel, {{1, 1}, {3, 3}}}, level},
+            SetIntensity{TargetSelection{TargetType::fixture, {{1, 10}}, {{5, 5}}}, level},
+            SetIntensity{TargetSelection{TargetType::group, {{0, 0}}}, level},
+            SetIntensity{TargetSelection{static_cast<TargetType>(999), {{1, 1}}}, level},
+            SelectSelection{Channel{1}},
+            ReleaseSelection{Channel{1}},
+            TestSelection{Fixture{1}},
+            AdvanceTest{},
+            ClearEditor{},
+            NavigateSelection{TargetType::channel, SelectionDirection::next},
+            HomeSelection{Fixture{1}}
+        };
+        const auto profile = std::make_shared<timmy::transport::GenericOscCommandProfile>();
+        auto sender = std::make_unique<RecordingSender>();
+        auto* recorder = sender.get();
+        timmy::transport::OscCommandEmitter emitter(
+            {"test", 8000}, profile, std::move(sender));
+        for (const auto& commandValue : unsupported)
+        {
+            const auto mapped = profile->map(commandValue);
+            require(!mapped.plan && !mapped.diagnostic.empty());
+            const auto result = emitter.emit(commandValue);
+            require(result.state == timmy::transport::EmissionState::failed);
+            require(result.diagnostic == mapped.diagnostic);
+        }
+        require(recorder->sendCount == 0);
+
+        const auto largeChannel = profile->map(setIntensity(
+            Channel{std::numeric_limits<std::uint32_t>::max()}, 50));
+        require(!largeChannel.plan);
+        require(largeChannel.diagnostic
+            == "Channel identifier exceeds the generic OSC integer range.");
     }
 
     // Verifies an OSC message is serialized to exact OSC 1.0 bytes.
@@ -223,6 +265,7 @@ namespace {
 int main()
 {
     testMappings();
+    testUnsupportedCommands();
     testSerialization();
     testPreSendFailures();
     testEmissionPropagation();

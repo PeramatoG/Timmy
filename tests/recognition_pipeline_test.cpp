@@ -1,4 +1,6 @@
 #include "timmy/core/recognition_pipeline.h"
+#include "timmy/core/command_recognition_profile.h"
+#include "timmy/transport/hydra2_osc_command_profile.h"
 
 #include <cassert>
 #include <memory>
@@ -141,10 +143,80 @@ int main()
 
     backend->emit("Channel 1 At 101");
     assert(observer->transcripts.back().assemblyState
-        == timmy::core::RecognitionAssemblyState::complete);
+        == timmy::core::RecognitionAssemblyState::rejected);
     assert(observer->transcripts.back().semanticState
-        == timmy::core::RecognitionSemanticState::unsupportedOrInvalid);
+        == timmy::core::RecognitionSemanticState::notAttempted);
     assert(!observer->transcripts.back().semanticCommand);
+
+    // Every representative recognition phrase must reach the same Core semantics.
+    const auto hints = timmy::core::commandRecognitionHints();
+    assert(hints.constraintIntent == timmy::asr::RecognitionConstraintIntent::commandPhrase);
+    for (const auto& phrase : hints.expectedPhrases)
+    {
+        backend->emit(phrase);
+        const auto& transcript = observer->transcripts.back();
+        assert(transcript.rawTranscript == phrase);
+        assert(transcript.assemblyState == timmy::core::RecognitionAssemblyState::complete);
+        assert(transcript.semanticState == timmy::core::RecognitionSemanticState::produced);
+        assert(transcript.semanticCommand);
+        assert(!timmy::command::describe(*transcript.semanticCommand).empty());
+    }
+
+    // Exercise the channel-check workflow from fake ASR through exact Hydra plans.
+    const timmy::transport::Hydra2OscCommandProfile hydra;
+    const auto expectPlan = [&](const std::string& phrase,
+                               const std::vector<std::string>& expectedAddresses) {
+        backend->emit(phrase);
+        const auto& transcript = observer->transcripts.back();
+        assert(transcript.assemblyState == timmy::core::RecognitionAssemblyState::complete);
+        assert(transcript.semanticState == timmy::core::RecognitionSemanticState::produced);
+        assert(transcript.semanticCommand);
+        const auto mapped = hydra.map(*transcript.semanticCommand);
+        assert(mapped.plan);
+        std::vector<std::string> actual;
+        for (const auto& step : *mapped.plan)
+        {
+            assert(std::holds_alternative<timmy::transport::OscKeyPulse>(step));
+            actual.push_back(std::get<timmy::transport::OscKeyPulse>(step).address);
+        }
+        assert(actual == expectedAddresses);
+    };
+    expectPlan("Test canal 21", {"/keyCH", "/key2", "/key1", "/keyTEST"});
+    expectPlan("Siguiente", {"/keyTEST"});
+    expectPlan("Siguiente", {"/keyTEST"});
+    expectPlan("Canales 30 a 40 al 50",
+        {"/keyCH", "/key3", "/key0", "/keyTHRU", "/key4", "/key0",
+         "/key@", "/key5", "/key0"});
+    expectPlan("Libera canales 30 a 40",
+        {"/keyCH", "/key3", "/key0", "/keyTHRU", "/key4", "/key0", "/keyREL"});
+    expectPlan("Fixtures 1 a 6 a home",
+        {"/keyFXT", "/key1", "/keyTHRU", "/key6", "/keyHOME"});
+    expectPlan("Limpia editor", {"/keyRST"});
+
+    backend->emit("Canales 1 a 10");
+    assert(observer->transcripts.back().assemblyState
+        == timmy::core::RecognitionAssemblyState::pending);
+    assert(!observer->transcripts.back().semanticCommand);
+    expectPlan("al 50", {"/keyCH", "/key1", "/keyTHRU", "/key1", "/key0",
+        "/key@", "/key5", "/key0"});
+    backend->emit("Canal 10");
+    assert(!observer->transcripts.back().semanticCommand);
+    expectPlan("test", {"/keyCH", "/key1", "/key0", "/keyTEST"});
+    expectPlan("test", {"/keyTEST"});
+
+    // A transcript-ending list comma cannot prematurely select the first item.
+    backend->emit("Selecciona canales 1,");
+    assert(observer->transcripts.back().normalizedTranscript == "Selecciona canales 1,");
+    assert(observer->transcripts.back().assemblyState
+        == timmy::core::RecognitionAssemblyState::pending);
+    assert(!observer->transcripts.back().semanticCommand);
+    backend->emit("3,");
+    assert(observer->transcripts.back().normalizedTranscript == "3,");
+    assert(observer->transcripts.back().assemblyState
+        == timmy::core::RecognitionAssemblyState::pending);
+    assert(!observer->transcripts.back().semanticCommand);
+    expectPlan("5", {"/keyCH", "/key1", "/keyOK", "/key3", "/keyOK",
+        "/key5", "/keyOK"});
 
     backend->emitDiagnostic({
         timmy::asr::AsrDiagnosticCode::recognitionFailure, "kept message" });

@@ -10,10 +10,12 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace timmy::command {
 
@@ -34,6 +36,40 @@ namespace timmy::command {
 
     using LightingTarget = std::variant<Channel, Fixture, Group>;
 
+    enum class TargetType
+    {
+        channel,
+        fixture,
+        group
+    };
+
+    // An inclusive span stays compact even for a large console selection.
+    struct TargetRange
+    {
+        std::uint32_t first;
+        std::uint32_t last;
+    };
+
+    struct TargetSelection
+    {
+        static constexpr std::size_t maxTerms = 32;
+
+        TargetType type{TargetType::channel};
+        std::vector<TargetRange> included;
+        std::vector<TargetRange> excluded;
+
+        TargetSelection() = default;
+        TargetSelection(TargetType type, std::vector<TargetRange> included,
+            std::vector<TargetRange> excluded = {});
+        TargetSelection(const LightingTarget& target);
+        TargetSelection(Channel target);
+        TargetSelection(Fixture target);
+        TargetSelection(Group target);
+
+        [[nodiscard]] bool isValid() const;
+        [[nodiscard]] std::optional<LightingTarget> singleTarget() const;
+    };
+
     class IntensityLevel
     {
     public:
@@ -48,11 +84,29 @@ namespace timmy::command {
 
     struct SetIntensity
     {
-        LightingTarget target;
+        TargetSelection target;
         IntensityLevel level;
     };
 
-    using SemanticCommand = std::variant<SetIntensity>;
+    struct SelectSelection { TargetSelection target; };
+    struct ReleaseSelection { TargetSelection target; };
+    struct TestSelection { TargetSelection target; };
+    struct HomeSelection { TargetSelection target; };
+    struct AdvanceTest {};
+    struct ClearEditor {};
+
+    enum class SelectionDirection { next, previous };
+    struct NavigateSelection
+    {
+        TargetType type;
+        SelectionDirection direction;
+    };
+
+    using SemanticCommand = std::variant<SetIntensity, SelectSelection,
+        ReleaseSelection, TestSelection, HomeSelection, AdvanceTest,
+        ClearEditor, NavigateSelection>;
+
+    [[nodiscard]] std::string describe(const TargetSelection& selection);
 
     [[nodiscard]] std::string describe(const SemanticCommand& command);
 
