@@ -595,6 +595,7 @@ namespace timmy::gui {
 
     void MainFrame::armOutput()
     {
+        if (recognitionPipeline_) recognitionPipeline_->discardPendingAssembly();
         auto configuration = frozenOutputConfiguration_;
         configuration.enabled = true;
         const auto generation = ++outputGeneration_;
@@ -638,6 +639,7 @@ namespace timmy::gui {
             {
                 armedOutputGeneration_.store(0, std::memory_order_release);
                 outputSession_.disarm();
+                if (recognitionPipeline_) recognitionPipeline_->discardPendingAssembly();
             }
         }
         updateOutputControls();

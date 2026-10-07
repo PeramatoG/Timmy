@@ -84,6 +84,7 @@ namespace timmy::core {
         [[nodiscard]] RecognitionPipelineState state() const;
         asr::AsrOperationResult start(const asr::AsrConfiguration& configuration);
         asr::AsrOperationResult stop();
+        // Resets both pending assembly and the minimal last-target linguistic context.
         void discardPendingAssembly();
 
     private:
@@ -102,6 +103,7 @@ namespace timmy::core {
         command::TranscriptNormalizer normalizer_;
         std::unique_ptr<command::CommandAssembler> assembler_;
         command::SemanticCommandParser semanticParser_;
+        command::CommandContext commandContext_;
         mutable std::mutex mutex_;
         std::shared_ptr<IRecognitionPipelineObserver> observer_;
         RecognitionPipelineState state_ = RecognitionPipelineState::stopped;

@@ -28,6 +28,7 @@ namespace timmy::command {
     {
         SemanticParseState state{SemanticParseState::unsupportedOrInvalid};
         std::optional<SemanticCommand> command;
+        std::optional<TargetType> explicitTargetType;
     };
 
     // Both assembly and semantic parsing use this one grammar classification.
@@ -36,6 +37,16 @@ namespace timmy::command {
     {
         CommandTextState state{CommandTextState::invalid};
         std::optional<SemanticCommand> command;
+        std::optional<TargetType> explicitTargetType;
+    };
+
+    // Linguistic context only: never stores the console's selected identifiers.
+    struct CommandContext
+    {
+        std::optional<TargetType> lastExplicitTargetType;
+
+        void observe(const SemanticParseResult& result);
+        void reset();
     };
 
     class SemanticCommandParser
@@ -43,8 +54,10 @@ namespace timmy::command {
     public:
         static constexpr std::size_t maxCommandLength = 256;
 
-        [[nodiscard]] CommandTextResult classify(std::string_view text) const;
-        [[nodiscard]] SemanticParseResult parse(std::string_view completeText) const;
+        [[nodiscard]] CommandTextResult classify(std::string_view text,
+            const CommandContext& context = {}) const;
+        [[nodiscard]] SemanticParseResult parse(std::string_view completeText,
+            const CommandContext& context = {}) const;
     };
 
 } // namespace timmy::command

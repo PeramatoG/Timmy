@@ -36,7 +36,8 @@ namespace timmy::command {
 
     } // namespace
 
-    AssemblyResult CommandAssembler::accept(std::string_view normalizedFragment)
+    AssemblyResult CommandAssembler::accept(std::string_view normalizedFragment,
+        const CommandContext& context)
     {
         if (normalizedFragment.empty() || normalizedFragment.size() > maxPendingLength)
             return {AssemblyState::rejected, {}};
@@ -46,14 +47,27 @@ namespace timmy::command {
             && pending_.size() + normalizedFragment.size() + 1 <= maxPendingLength)
         {
             std::string combined = "test " + pending_;
-            if (parser.classify(combined).state == CommandTextState::complete)
+            if (parser.classify(combined, context).state == CommandTextState::complete)
             {
                 pending_.clear();
                 return {AssemblyState::complete, std::move(combined)};
             }
         }
 
-        const auto fragment = parser.classify(normalizedFragment);
+        const auto fragment = parser.classify(normalizedFragment, context);
+        // A relative modifier can finish the explicit pending selection before
+        // using an older linguistic target. Other complete actions supersede it.
+        if (!pending_.empty() && fragment.command
+            && std::holds_alternative<ModifySelection>(*fragment.command)
+            && pending_.size() + normalizedFragment.size() + 1 <= maxPendingLength)
+        {
+            std::string combined = pending_ + " " + std::string(normalizedFragment);
+            if (parser.classify(combined, context).state == CommandTextState::complete)
+            {
+                pending_.clear();
+                return {AssemblyState::complete, std::move(combined)};
+            }
+        }
         if (fragment.state == CommandTextState::complete)
         {
             pending_.clear();
@@ -64,7 +78,7 @@ namespace timmy::command {
             && pending_.size() + normalizedFragment.size() + 1 <= maxPendingLength)
         {
             std::string combined = pending_ + " " + std::string(normalizedFragment);
-            const auto classification = parser.classify(combined);
+            const auto classification = parser.classify(combined, context);
             if (classification.state == CommandTextState::complete)
             {
                 pending_.clear();

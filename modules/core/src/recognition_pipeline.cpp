@@ -196,11 +196,12 @@ namespace timmy::core {
             {
                 return;
             }
-            assembly = assembler_->accept(normalized.normalizedText);
+            assembly = assembler_->accept(normalized.normalizedText, commandContext_);
             if (assembly.state == command::AssemblyState::complete)
             {
-                semantic = semanticParser_.parse(assembly.text);
+                semantic = semanticParser_.parse(assembly.text, commandContext_);
                 semanticState = coreSemanticState(semantic.state);
+                commandContext_.observe(semantic);
             }
             currentObserver = observer_;
         }
@@ -217,11 +218,12 @@ namespace timmy::core {
         }
     }
 
-    // Discards any incomplete command retained by the shared pipeline.
+    // Starts a fresh linguistic session without retaining an incomplete command.
     void RecognitionPipeline::discardPendingAssembly()
     {
         std::lock_guard lock(mutex_);
         assembler_->reset();
+        commandContext_.reset();
     }
 
     // Publishes an unchanged backend diagnostic to the current observer.

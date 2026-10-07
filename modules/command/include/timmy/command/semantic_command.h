@@ -94,6 +94,15 @@ namespace timmy::command {
     struct HomeSelection { TargetSelection target; };
     struct AdvanceTest {};
     struct ClearEditor {};
+    struct ClearSelection {};
+    struct ReleaseEditor {};
+
+    enum class SelectionModification { add, remove };
+    struct ModifySelection
+    {
+        SelectionModification modification;
+        TargetSelection target;
+    };
 
     enum class SelectionDirection { next, previous };
     struct NavigateSelection
@@ -104,7 +113,7 @@ namespace timmy::command {
 
     using SemanticCommand = std::variant<SetIntensity, SelectSelection,
         ReleaseSelection, TestSelection, HomeSelection, AdvanceTest,
-        ClearEditor, NavigateSelection>;
+        ClearEditor, ClearSelection, ReleaseEditor, ModifySelection, NavigateSelection>;
 
     [[nodiscard]] std::string describe(const TargetSelection& selection);
 

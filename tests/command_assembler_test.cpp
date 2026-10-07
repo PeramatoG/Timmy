@@ -17,6 +17,12 @@
 
 namespace {
 
+    bool expect(bool condition, std::string_view diagnostic)
+    {
+        if (!condition) std::cerr << diagnostic << '\n';
+        return condition;
+    }
+
     bool expectResult(const timmy::command::AssemblyResult& result,
         timmy::command::AssemblyState expectedState,
         std::string_view expectedText)
@@ -63,10 +69,12 @@ namespace {
 // Exercises bounded deterministic fragments and TEST progression precedence.
 int main()
 {
-    using timmy::command::AssemblyState;
-    using timmy::command::CommandAssembler;
+    using namespace timmy::command;
     CommandAssembler assembler;
     bool passed = true;
+
+    passed &= expectComplete(assembler.accept("Canal 5 al 50,"),
+        "Canal 5 al 50,", "SetIntensity(Channel(5), 50%)");
 
     passed &= expectResult(assembler.accept("Canal 4"),
         AssemblyState::pending, "Canal 4");
@@ -105,9 +113,9 @@ int main()
         AssemblyState::pending, "Canales 1 a 10");
     passed &= expectResult(assembler.accept("excepto"),
         AssemblyState::pending, "Canales 1 a 10 excepto");
-    passed &= expectResult(assembler.accept("5 a 8"),
-        AssemblyState::pending, "Canales 1 a 10 excepto 5 a 8");
-    passed &= expectComplete(assembler.accept("al 50"),
+    passed &= expectResult(assembler.accept("5 a 8 al"),
+        AssemblyState::pending, "Canales 1 a 10 excepto 5 a 8 al");
+    passed &= expectComplete(assembler.accept("50"),
         "Canales 1 a 10 excepto 5 a 8 al 50",
         "SetIntensity(Channel(1 through 10 except 5 through 8), 50%)");
 
@@ -132,9 +140,9 @@ int main()
         AssemblyState::pending, "Channels 1, 3 and 5");
     passed &= expectComplete(assembler.accept("at 70"),
         "Channels 1, 3 and 5 at 70", "SetIntensity(Channel(1, 3, 5), 70%)");
-    passed &= expectResult(assembler.accept("Canales 1 a 15 excepto 5 a 8"),
-        AssemblyState::pending, "Canales 1 a 15 excepto 5 a 8");
-    passed &= expectComplete(assembler.accept("a tope"),
+    passed &= expectResult(assembler.accept("Canales 1 a 15 excepto"),
+        AssemblyState::pending, "Canales 1 a 15 excepto");
+    passed &= expectComplete(assembler.accept("5 a 8 a tope"),
         "Canales 1 a 15 excepto 5 a 8 a tope",
         "SetIntensity(Channel(1 through 15 except 5 through 8), 100%)");
 
@@ -255,7 +263,7 @@ int main()
         "Channel 2 at 50", "SetIntensity(Channel(2), 50%)");
     passed &= expectPending(assembler, false);
 
-    // The acceptance workflow remains stateless after every completed action.
+    // Assembly keeps no context itself; callers supply a linguistic snapshot.
     passed &= expectComplete(assembler.accept("Test canal 21"),
         "Test canal 21", "TestSelection(Channel(21))");
     passed &= expectComplete(assembler.accept("Siguiente"), "Siguiente", "AdvanceTest()");
@@ -269,6 +277,61 @@ int main()
     passed &= expectComplete(assembler.accept("Limpia editor"),
         "Limpia editor", "ClearEditor()");
     passed &= expectPending(assembler, false);
+
+
+    // Explicit incomplete ranges accept their endpoint in a later fragment.
+    passed &= expectResult(assembler.accept("Selecciona canales del 1 al"),
+        AssemblyState::pending, "Selecciona canales del 1 al");
+    passed &= expectComplete(assembler.accept("10"),
+        "Selecciona canales del 1 al 10", "SelectSelection(Channel(1 through 10))");
+    passed &= expectResult(assembler.accept("dame canales 1 al"),
+        AssemblyState::pending, "dame canales 1 al");
+    passed &= expectComplete(assembler.accept("10"),
+        "dame canales 1 al 10", "SelectSelection(Channel(1 through 10))");
+
+    // A spoken modifier completes a retained absolute selection.
+    passed &= expectResult(assembler.accept("Channels 1 through 10"),
+        AssemblyState::pending, "Channels 1 through 10");
+    passed &= expectComplete(assembler.accept("plus 15"),
+        "Channels 1 through 10 plus 15", "SelectSelection(Channel(1 through 10, 15))");
+    passed &= expectResult(assembler.accept("Canales 1 al 10 y me quitas"),
+        AssemblyState::pending, "Canales 1 al 10 y me quitas");
+    passed &= expectComplete(assembler.accept("el 6"),
+        "Canales 1 al 10 y me quitas el 6", "SelectSelection(Channel(1 through 10 except 6))");
+
+    CommandContext context;
+    context.observe(SemanticCommandParser{}.parse("select group 2"));
+    passed &= expectResult(assembler.accept("Channels 1 through 10", context),
+        AssemblyState::pending, "Channels 1 through 10");
+    passed &= expectComplete(assembler.accept("plus 15", context),
+        "Channels 1 through 10 plus 15", "SelectSelection(Channel(1 through 10, 15))");
+    passed &= expect(context.lastExplicitTargetType == TargetType::group,
+        "Assembly mutated the caller's linguistic context");
+    passed &= expectResult(assembler.accept("Channels 1 through 10", context),
+        AssemblyState::pending, "Channels 1 through 10");
+    passed &= expectComplete(assembler.accept("remove fixture 7", context),
+        "remove fixture 7", "ModifySelection(Remove, Fixture(7))");
+    passed &= expectResult(assembler.accept("suma del 20 al", context),
+        AssemblyState::pending, "suma del 20 al");
+    const auto relativeRange = assembler.accept("25", context);
+    passed &= expectResult(relativeRange, AssemblyState::complete, "suma del 20 al 25");
+    const auto relativeParsed = SemanticCommandParser{}.parse(relativeRange.text, context);
+    passed &= expect(relativeParsed.command
+            && describe(*relativeParsed.command) == "ModifySelection(Add, Group(20 through 25))",
+        "A contextual split range did not resolve to the last explicit target");
+    const auto followup = assembler.accept("súmale el 4", context);
+    passed &= expectResult(followup, AssemblyState::complete, "súmale el 4");
+    const auto followupParsed = SemanticCommandParser{}.parse(followup.text, context);
+    passed &= expect(followupParsed.command
+            && describe(*followupParsed.command) == "ModifySelection(Add, Group(4))",
+        "Assembler and parser disagreed on a contextual follow-up");
+    context.reset();
+    passed &= expectResult(assembler.accept("add 4", context), AssemblyState::rejected, "");
+    passed &= expectResult(assembler.accept("remove 10", context), AssemblyState::rejected, "");
+    passed &= expectComplete(assembler.accept("limpia selección"),
+        "limpia selección", "ClearSelection()");
+    passed &= expectComplete(assembler.accept("cler all"), "cler all", "ClearEditor()");
+    passed &= expectComplete(assembler.accept("libera todo"), "libera todo", "ReleaseEditor()");
 
     return passed ? 0 : 1;
 }

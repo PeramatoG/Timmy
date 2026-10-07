@@ -159,6 +159,19 @@ namespace timmy::command {
             {
                 return "ClearEditor()";
             }
+            else if constexpr (std::is_same_v<Operation, ClearSelection>)
+            {
+                return "ClearSelection()";
+            }
+            else if constexpr (std::is_same_v<Operation, ReleaseEditor>)
+            {
+                return "ReleaseEditor()";
+            }
+            else if constexpr (std::is_same_v<Operation, ModifySelection>)
+            {
+                return "ModifySelection(" + std::string(value.modification == SelectionModification::add
+                    ? "Add" : "Remove") + ", " + describe(value.target) + ")";
+            }
             else if constexpr (std::is_same_v<Operation, NavigateSelection>)
             {
                 return "NavigateSelection(" + targetName(value.type) + ", "

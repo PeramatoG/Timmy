@@ -118,6 +118,12 @@ namespace {
             TestSelection{Fixture{1}},
             AdvanceTest{},
             ClearEditor{},
+            ClearSelection{},
+            ReleaseEditor{},
+            ModifySelection{SelectionModification::add, Channel{4}},
+            ModifySelection{SelectionModification::remove,
+                TargetSelection{TargetType::fixture, {{5, 8}, {10, 10}}}},
+            ModifySelection{static_cast<SelectionModification>(999), Group{1}},
             NavigateSelection{TargetType::channel, SelectionDirection::next},
             HomeSelection{Fixture{1}}
         };
