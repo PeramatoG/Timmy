@@ -9,6 +9,7 @@
  */
 
 #include "main_frame.h"
+#include "command_output_events.h"
 
 #include "timmy/audio/audio_device_enumerator.h"
 #include "timmy/core/asr_engine_factory.h"
@@ -17,6 +18,7 @@
 #include "timmy/command/semantic_command.h"
 
 #include <wx/button.h>
+#include <wx/checkbox.h>
 #include <wx/choice.h>
 #include <wx/filedlg.h>
 #include <wx/gauge.h>
@@ -31,6 +33,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <optional>
 #include <string>
 #include <utility>
@@ -160,7 +163,7 @@ namespace timmy::gui {
         std::uint64_t generation_;
     };
 
-    // Creates the native two-page GUI and initializes audio capture.
+    // Creates the native notebook pages and initializes audio capture.
     MainFrame::MainFrame()
         : wxFrame(nullptr, wxID_ANY, "TIMMY", wxDefaultPosition, wxSize(720, 520))
     {
@@ -177,6 +180,7 @@ namespace timmy::gui {
         auto* notebook = new wxNotebook(panel, wxID_ANY);
         createAudioPage(notebook);
         createRecognitionPage(notebook);
+        createOutputPage(notebook);
         mainSizer->Add(notebook, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
         panel->SetSizer(mainSizer);
 
@@ -187,6 +191,7 @@ namespace timmy::gui {
             recognitionDiagnosticEventId);
         Bind(wxEVT_THREAD, &MainFrame::onRecognitionTranscript, this,
             recognitionTranscriptEventId);
+        Bind(wxEVT_THREAD, &MainFrame::onExecutionResult, this, commandOutputEventId);
         meterTimer_.SetOwner(this);
         Bind(wxEVT_TIMER, &MainFrame::onMeterTimer, this);
         meterTimer_.Start(50);
@@ -197,7 +202,7 @@ namespace timmy::gui {
         Centre();
     }
 
-    // Stops and joins recognition before any GUI event target is destroyed.
+    // Joins recognition and execution before any GUI event target is destroyed.
     MainFrame::~MainFrame()
     {
         meterTimer_.Stop();
@@ -280,6 +285,58 @@ namespace timmy::gui {
         sizer->Add(semanticCommandText_, 0, wxALL, 8);
         panel->SetSizer(sizer);
         notebook->AddPage(panel, "Recognition", false);
+    }
+
+    // Edits frontend configuration; OSC mapping and execution remain in transport/Core.
+    void MainFrame::createOutputPage(wxNotebook* notebook)
+    {
+        const CommandOutputConfiguration defaults;
+        auto* panel = new wxPanel(notebook);
+        auto* sizer = new wxBoxSizer(wxVERTICAL);
+        outputEnabledCheck_ = new wxCheckBox(panel, wxID_ANY, "Enable command output");
+        outputEnabledCheck_->SetValue(defaults.enabled);
+        outputEnabledCheck_->Bind(wxEVT_CHECKBOX,
+            &MainFrame::onOutputConfigurationChanged, this);
+        sizer->Add(outputEnabledCheck_, 0, wxALL, 12);
+
+        auto* grid = new wxFlexGridSizer(2, 8, 12);
+        grid->AddGrowableCol(1);
+        auto addLabel = [&](const wxString& label) {
+            grid->Add(new wxStaticText(panel, wxID_ANY, label), 0,
+                wxALIGN_CENTER_VERTICAL);
+        };
+        auto addText = [&](const wxString& label, wxTextCtrl*& text,
+                           const std::string& value) {
+            addLabel(label);
+            text = new wxTextCtrl(panel, wxID_ANY, wxString::FromUTF8(value));
+            grid->Add(text, 1, wxEXPAND);
+        };
+        addLabel("Profile:");
+        outputProfileChoice_ = new wxChoice(panel, wxID_ANY);
+        outputProfileChoice_->Append("LT Hydra II");
+        outputProfileChoice_->Append("Generic OSC");
+        outputProfileChoice_->SetSelection(0);
+        outputProfileChoice_->Bind(wxEVT_CHOICE,
+            &MainFrame::onOutputConfigurationChanged, this);
+        grid->Add(outputProfileChoice_, 1, wxEXPAND);
+        addText("Host:", outputHostText_, defaults.host);
+        outputHostText_->SetHint("Console IP or hostname");
+        addText("Port:", outputPortText_, defaults.port);
+        addText("Hydra key hold (ms):", hydraHoldText_, defaults.keyHoldMs);
+        addText("Hydra key gap (ms):", hydraGapText_, defaults.keyGapMs);
+        addLabel("Hydra pre-clear:");
+        hydraPreClearCheck_ = new wxCheckBox(panel, wxID_ANY, "Clear before each command");
+        hydraPreClearCheck_->SetValue(defaults.preClear);
+        grid->Add(hydraPreClearCheck_, 0, wxALIGN_CENTER_VERTICAL);
+        sizer->Add(grid, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
+
+        executionStatusText_ = new wxStaticText(panel, wxID_ANY, "Execution status: Disabled");
+        executionResultText_ = new wxStaticText(panel, wxID_ANY, "Last result: -");
+        sizer->Add(executionStatusText_, 0, wxEXPAND | wxALL, 12);
+        sizer->Add(executionResultText_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
+        panel->SetSizer(sizer);
+        notebook->AddPage(panel, "Output", false);
+        updateOutputControls();
     }
 
     // Fills the GUI selector from the backend-neutral engine registry.
@@ -403,9 +460,10 @@ namespace timmy::gui {
             static_cast<unsigned int>(result.format.channelCount)));
     }
 
-    // Stops recognition, invalidates queued events, and releases its backend.
+    // Stops producers, invalidates pending submissions/events, and joins execution.
     void MainFrame::stopRecognition()
     {
+        const bool wasListening = recognitionPipeline_ != nullptr;
         ++recognitionGeneration_;
         if (recognitionPipeline_)
         {
@@ -414,9 +472,13 @@ namespace timmy::gui {
             recognitionPipeline_.reset();
         }
         recognitionObserver_.reset();
+        outputSession_.stop();
         if (recognitionButton_)
         {
             updateRecognitionControls(false);
+            executionStatusText_->SetLabel(outputEnabledCheck_->GetValue()
+                ? "Execution status: Ready" : "Execution status: Disabled");
+            if (wasListening) recognitionStatusText_->SetLabel("Stopped.");
         }
     }
 
@@ -428,6 +490,43 @@ namespace timmy::gui {
         modelPathText_->Enable(!listening);
         vadPathText_->Enable(!listening);
         languageChoice_->Enable(!listening);
+        updateOutputControls();
+    }
+
+    // Freezes output options for the whole recognition/execution lifecycle.
+    void MainFrame::updateOutputControls()
+    {
+        const bool idle = !recognitionPipeline_;
+        const bool enabled = idle && outputEnabledCheck_->GetValue();
+        const bool hydra = enabled && outputProfileChoice_->GetSelection() == 0;
+        outputEnabledCheck_->Enable(idle);
+        outputProfileChoice_->Enable(enabled);
+        outputHostText_->Enable(enabled);
+        outputPortText_->Enable(enabled);
+        hydraHoldText_->Enable(hydra);
+        hydraGapText_->Enable(hydra);
+        hydraPreClearCheck_->Enable(hydra);
+    }
+
+    CommandOutputConfiguration MainFrame::outputConfiguration() const
+    {
+        CommandOutputConfiguration configuration;
+        configuration.enabled = outputEnabledCheck_->GetValue();
+        configuration.profile = outputProfileChoice_->GetSelection() == 0
+            ? OutputProfile::hydra2 : OutputProfile::genericOsc;
+        configuration.host = outputHostText_->GetValue().ToStdString(wxConvUTF8);
+        configuration.port = outputPortText_->GetValue().ToStdString(wxConvUTF8);
+        configuration.keyHoldMs = hydraHoldText_->GetValue().ToStdString(wxConvUTF8);
+        configuration.keyGapMs = hydraGapText_->GetValue().ToStdString(wxConvUTF8);
+        configuration.preClear = hydraPreClearCheck_->GetValue();
+        return configuration;
+    }
+
+    void MainFrame::onOutputConfigurationChanged(wxCommandEvent&)
+    {
+        updateOutputControls();
+        executionStatusText_->SetLabel(outputEnabledCheck_->GetValue()
+            ? "Execution status: Ready" : "Execution status: Disabled");
     }
 
     // Restarts audio capture for a newly selected physical device.
@@ -444,6 +543,7 @@ namespace timmy::gui {
         {
             return;
         }
+        if (outputSession_.active()) stopRecognition();
         channelSelector_->setChannelIndex(static_cast<std::size_t>(selection));
         meter_->reset();
         levelGauge_->SetValue(0);
@@ -485,38 +585,64 @@ namespace timmy::gui {
         }
 
         const auto generation = ++recognitionGeneration_;
-        core::AsrEngineResources resources{
-            wxStringToPath(vadPathText_->GetValue())
-        };
-        auto backend = core::createAsrBackend(core::AsrEngineId::whisperCpp, resources);
-        recognitionPipeline_ = std::make_unique<core::RecognitionPipeline>(
-            channelSelector_, std::move(backend));
-        recognitionObserver_ = std::make_shared<GuiRecognitionObserver>(*this, generation);
-        recognitionPipeline_->setObserver(recognitionObserver_);
-
-        asr::AsrConfiguration configuration;
-        configuration.modelResourcePath = wxStringToPath(modelPathText_->GetValue());
-        const int language = languageChoice_->GetSelection();
-        if (language == 0)
+        const auto outputStart = outputSession_.start(outputConfiguration(),
+            commandOutputObserver(*this, generation));
+        if (!outputStart.succeeded)
         {
-            configuration.preferredLanguage = "es";
-        }
-        else if (language == 2)
-        {
-            configuration.preferredLanguage = "en";
-        }
-        configuration.recognitionHints = core::commandRecognitionHints();
-        const auto result = recognitionPipeline_->start(configuration);
-        if (!result.succeeded)
-        {
-            const wxString diagnostic = result.diagnostic
-                ? wxString::FromUTF8(result.diagnostic->message)
-                : wxString("Recognition could not start.");
-            stopRecognition();
-            recognitionStatusText_->SetLabel(diagnostic);
+            showExecutionResult({core::RecognitionExecutionState::failed,
+                outputStart.diagnostic});
+            recognitionStatusText_->SetLabel("Output configuration rejected: "
+                + wxString::FromUTF8(outputStart.diagnostic));
             return;
         }
-        updateRecognitionControls(true);
+        executionStatusText_->SetLabel(outputEnabledCheck_->GetValue()
+            ? "Execution status: Ready" : "Execution status: Disabled");
+        try
+        {
+            core::AsrEngineResources resources{
+                wxStringToPath(vadPathText_->GetValue())
+            };
+            auto backend = core::createAsrBackend(core::AsrEngineId::whisperCpp, resources);
+            recognitionPipeline_ = std::make_unique<core::RecognitionPipeline>(
+                channelSelector_, std::move(backend));
+            recognitionObserver_ = std::make_shared<GuiRecognitionObserver>(*this, generation);
+            recognitionPipeline_->setObserver(recognitionObserver_);
+
+            asr::AsrConfiguration configuration;
+            configuration.modelResourcePath = wxStringToPath(modelPathText_->GetValue());
+            const int language = languageChoice_->GetSelection();
+            if (language == 0)
+            {
+                configuration.preferredLanguage = "es";
+            }
+            else if (language == 2)
+            {
+                configuration.preferredLanguage = "en";
+            }
+            configuration.recognitionHints = core::commandRecognitionHints();
+            const auto result = recognitionPipeline_->start(configuration);
+            if (!result.succeeded)
+            {
+                const wxString diagnostic = result.diagnostic
+                    ? wxString::FromUTF8(result.diagnostic->message)
+                    : wxString("Recognition could not start.");
+                stopRecognition();
+                recognitionStatusText_->SetLabel(diagnostic);
+                return;
+            }
+            updateRecognitionControls(true);
+        }
+        catch (const std::exception& error)
+        {
+            stopRecognition();
+            recognitionStatusText_->SetLabel("Recognition could not start: "
+                + wxString::FromUTF8(error.what()));
+        }
+        catch (...)
+        {
+            stopRecognition();
+            recognitionStatusText_->SetLabel("Recognition could not start: unknown initialization failure.");
+        }
     }
 
     // Applies a current-session state event on the wxWidgets thread.
@@ -571,6 +697,48 @@ namespace timmy::gui {
                 command::describe(*payload.transcript.semanticCommand));
         }
         semanticCommandText_->SetLabel(semantic);
+
+        // Submission only enqueues the produced semantic command. The existing
+        // executor validates the event and performs dispatch/OSC on its worker.
+        const auto result = outputSession_.submit(payload.transcript);
+        if (result.state == core::RecognitionExecutionState::failed)
+        {
+            showExecutionResult(result);
+        }
+    }
+
+    void MainFrame::showExecutionResult(const core::RecognitionExecutionResult& result)
+    {
+        wxString text;
+        switch (result.state)
+        {
+        case core::RecognitionExecutionState::ignored: return;
+        case core::RecognitionExecutionState::queued: text = "Queued"; break;
+        case core::RecognitionExecutionState::succeeded: text = "Succeeded"; break;
+        case core::RecognitionExecutionState::failed: text = "Failed"; break;
+        }
+        executionStatusText_->SetLabel("Execution status: " + text);
+        if (result.state != core::RecognitionExecutionState::queued)
+        {
+            if (!result.diagnostic.empty())
+            {
+                text += wxString::FromUTF8(" \xE2\x80\x94 ")
+                    + wxString::FromUTF8(result.diagnostic);
+            }
+            executionResultText_->SetLabel("Last result: " + text);
+            executionResultText_->Wrap(std::max(100, GetClientSize().GetWidth() - 64));
+            executionResultText_->GetParent()->Layout();
+        }
+    }
+
+    // Applies copied execution results only for the current listening session.
+    void MainFrame::onExecutionResult(wxThreadEvent& event)
+    {
+        const auto payload = event.GetPayload<CommandOutputEventPayload>();
+        if (payload.generation == recognitionGeneration_)
+        {
+            showExecutionResult(payload.result);
+        }
     }
 
     // Refreshes the level meter from its thread-safe audio snapshot.
