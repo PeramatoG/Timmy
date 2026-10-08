@@ -37,7 +37,9 @@ namespace timmy::transport {
         explicit Hydra2OscCommandProfile(Hydra2OscOptions options = {});
         [[nodiscard]] OscMappingResult map(
             const command::SemanticCommand& command) const override;
+        [[nodiscard]] OscMappingResult mapRendered(const RenderedCommand& rendered) const override;
     private:
+        [[nodiscard]] OscMappingResult mapKeys(const std::vector<std::string>& keys) const;
         Hydra2OscOptions options_;
     };
 }

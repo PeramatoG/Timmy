@@ -13,7 +13,7 @@
 #include "timmy/asr/asr_backend.h"
 #include "timmy/audio/audio_channel_selector.h"
 #include "timmy/audio/audio_format_adapter.h"
-#include "timmy/command/semantic_command_parser.h"
+#include "timmy/command/command_processor.h"
 #include "timmy/command/transcript_normalizer.h"
 
 #include <memory>
@@ -58,6 +58,8 @@ namespace timmy::core {
         std::string assemblyText;
         RecognitionSemanticState semanticState{RecognitionSemanticState::notAttempted};
         std::optional<command::SemanticCommand> semanticCommand;
+        command::IntentValidationResult validation;
+        command::IntentRenderingResult rendering;
     };
 
     class IRecognitionPipelineObserver
@@ -74,7 +76,7 @@ namespace timmy::core {
     public:
         RecognitionPipeline(
             std::shared_ptr<audio::AudioChannelSelector> channelSelector,
-            std::shared_ptr<asr::IAsrBackend> backend);
+            std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile = {});
         ~RecognitionPipeline();
 
         RecognitionPipeline(const RecognitionPipeline&) = delete;
@@ -100,6 +102,7 @@ namespace timmy::core {
         std::shared_ptr<audio::AudioFormatAdapter> formatAdapter_;
         std::shared_ptr<asr::IAsrBackend> backend_;
         std::shared_ptr<BackendListener> backendListener_;
+        command::CommandProfile profile_;
         command::TranscriptNormalizer normalizer_;
         std::unique_ptr<command::CommandAssembler> assembler_;
         command::SemanticCommandParser semanticParser_;

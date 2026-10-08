@@ -22,7 +22,9 @@
 #include <wx/choice.h>
 #include <wx/filedlg.h>
 #include <wx/gauge.h>
-#include <wx/notebook.h>
+#include <wx/scrolwin.h>
+#include <wx/spinctrl.h>
+#include <wx/statbox.h>
 #include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
@@ -34,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -169,7 +172,7 @@ namespace timmy::gui {
         const std::atomic<std::uint64_t>& armedOutputGeneration_;
     };
 
-    // Creates the native notebook pages and initializes audio capture.
+    // Creates the native columns and initializes audio capture.
     MainFrame::MainFrame()
         : MainFrame(nullptr, {}, true)
     {
@@ -177,7 +180,7 @@ namespace timmy::gui {
 
     MainFrame::MainFrame(std::shared_ptr<asr::IAsrBackend> backend,
         CommandOutputSession::EmitterFactory emitterFactory, bool initializeAudio)
-        : wxFrame(nullptr, wxID_ANY, "TIMMY", wxDefaultPosition, wxSize(720, 520))
+        : wxFrame(nullptr, wxID_ANY, "TIMMY", wxDefaultPosition, wxSize(1400, 850))
         , backendOverride_(std::move(backend)), outputSession_(std::move(emitterFactory))
     {
         channelSelector_ = std::make_shared<audio::AudioChannelSelector>(0);
@@ -190,11 +193,14 @@ namespace timmy::gui {
         auto* title = new wxStaticText(panel, wxID_ANY,
             "TIMMY\nThe Imaginary Man, Minding You");
         mainSizer->Add(title, 0, wxALIGN_CENTER | wxALL, 12);
-        auto* notebook = new wxNotebook(panel, wxID_ANY);
-        createAudioPage(notebook);
-        createRecognitionPage(notebook);
-        createOutputPage(notebook);
-        mainSizer->Add(notebook, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
+        recognitionSettings_ = asr::defaultSettings(
+            core::asrSettingDescriptors(core::availableAsrEngines().front().id));
+        auto* columns = new wxBoxSizer(wxHORIZONTAL);
+        createAudioColumn(panel, columns);
+        createRecognitionColumn(panel, columns);
+        createOutputColumn(panel, columns);
+        mainSizer->Add(columns, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
+        SetMinSize(wxSize(1100, 500));
         panel->SetSizer(mainSizer);
 
         deviceChoice_->Bind(wxEVT_CHOICE, &MainFrame::onDeviceSelected, this);
@@ -234,10 +240,13 @@ namespace timmy::gui {
     }
 
     // Builds the native controls for audio device selection and metering.
-    void MainFrame::createAudioPage(wxNotebook* notebook)
+    void MainFrame::createAudioColumn(wxWindow* parent, wxBoxSizer* columns)
     {
-        auto* panel = new wxPanel(notebook);
+        auto* panel = new wxScrolledWindow(parent);
+        panel->SetScrollRate(10, 10);
+        panel->SetMinSize(wxSize(250, 200));
         auto* sizer = new wxBoxSizer(wxVERTICAL);
+        sizer->Add(new wxStaticText(panel, wxID_ANY, "Audio"), 0, wxALL, 8);
         auto addChoice = [&](const wxString& label, wxChoice*& choice) {
             auto* row = new wxBoxSizer(wxHORIZONTAL);
             row->Add(new wxStaticText(panel, wxID_ANY, label), 0,
@@ -258,14 +267,17 @@ namespace timmy::gui {
             "Searching for capture devices...");
         sizer->Add(audioStatusText_, 0, wxALL, 12);
         panel->SetSizer(sizer);
-        notebook->AddPage(panel, "Audio", true);
+        columns->Add(panel, 1, wxEXPAND | wxALL, 4);
     }
 
     // Builds the native controls for recognition resources and results.
-    void MainFrame::createRecognitionPage(wxNotebook* notebook)
+    void MainFrame::createRecognitionColumn(wxWindow* parent, wxBoxSizer* columns)
     {
-        auto* panel = new wxPanel(notebook);
+        auto* panel = new wxScrolledWindow(parent);
+        panel->SetScrollRate(10, 10);
+        panel->SetMinSize(wxSize(250, 200));
         auto* sizer = new wxBoxSizer(wxVERTICAL);
+        sizer->Add(new wxStaticText(panel, wxID_ANY, "Recognition"), 0, wxALL, 8);
         auto addChoice = [&](const wxString& label, wxChoice*& choice) {
             auto* row = new wxBoxSizer(wxHORIZONTAL);
             row->Add(new wxStaticText(panel, wxID_ANY, label), 0,
@@ -301,20 +313,83 @@ namespace timmy::gui {
         semanticCommandText_ = new wxStaticText(panel, wxID_ANY,
             "Semantic command: -");
         sizer->Add(recognitionStatusText_, 0, wxALL, 8);
-        sizer->Add(rawTranscriptText_, 0, wxALL, 8);
-        sizer->Add(normalizedTranscriptText_, 0, wxALL, 8);
-        sizer->Add(assemblyText_, 0, wxALL, 8);
-        sizer->Add(semanticCommandText_, 0, wxALL, 8);
+        sizer->Add(rawTranscriptText_, 0, wxEXPAND | wxALL, 8);
+        sizer->Add(normalizedTranscriptText_, 0, wxEXPAND | wxALL, 8);
+        sizer->Add(assemblyText_, 0, wxEXPAND | wxALL, 8);
+        sizer->Add(semanticCommandText_, 0, wxEXPAND | wxALL, 8);
+        wxStaticBoxSizer* sectionSizer = nullptr;
+        std::string section;
+        for (const auto& descriptor : core::asrSettingDescriptors(core::availableAsrEngines().front().id))
+        {
+            if (section != descriptor.section)
+            {
+                section = descriptor.section;
+                sectionSizer = new wxStaticBoxSizer(wxVERTICAL, panel, wxString::FromUTF8(section));
+                sizer->Add(sectionSizer, 0, wxEXPAND | wxALL, 8);
+            }
+            auto* owner = sectionSizer->GetStaticBox();
+            auto* row = new wxBoxSizer(wxHORIZONTAL);
+            row->Add(new wxStaticText(owner, wxID_ANY, wxString::FromUTF8(descriptor.label)),
+                1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+            wxWindow* control = nullptr;
+            const auto id = descriptor.id;
+            if (std::holds_alternative<bool>(descriptor.defaultValue))
+            {
+                auto* check = new wxCheckBox(owner, wxID_ANY, "");
+                check->Bind(wxEVT_CHECKBOX, [this, id, check](wxCommandEvent&) {
+                    if (recognitionLifecycle_.canConfigure() && !closing_)
+                        recognitionSettings_[id] = check->GetValue();
+                });
+                control = check;
+            }
+            else if (std::holds_alternative<int>(descriptor.defaultValue))
+            {
+                auto* spin = new wxSpinCtrl(owner, wxID_ANY);
+                spin->SetRange(static_cast<int>(descriptor.minimum.value_or(std::numeric_limits<int>::min())),
+                    static_cast<int>(descriptor.maximum.value_or(std::numeric_limits<int>::max())));
+                spin->Bind(wxEVT_SPINCTRL, [this, id, spin](wxSpinEvent&) {
+                    if (recognitionLifecycle_.canConfigure() && !closing_)
+                        recognitionSettings_[id] = spin->GetValue();
+                });
+                control = spin;
+            }
+            else
+            {
+                auto* spin = new wxSpinCtrlDouble(owner, wxID_ANY);
+                spin->SetRange(descriptor.minimum.value_or(std::numeric_limits<double>::lowest()),
+                    descriptor.maximum.value_or(std::numeric_limits<double>::max()));
+                spin->SetIncrement(0.1);
+                spin->SetDigits(3);
+                spin->Bind(wxEVT_SPINCTRLDOUBLE, [this, id, spin](wxSpinDoubleEvent&) {
+                    if (recognitionLifecycle_.canConfigure() && !closing_)
+                        recognitionSettings_[id] = spin->GetValue();
+                });
+                control = spin;
+            }
+            control->SetName(wxString::FromUTF8(id));
+            tuningControls_.emplace(id, control);
+            row->Add(control, 0);
+            sectionSizer->Add(row, 0, wxEXPAND | wxALL, 4);
+        }
+        resetRecognitionButton_ = new wxButton(panel, wxID_ANY, "Reset to defaults");
+        resetRecognitionButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            resetRecognitionSettings();
+        });
+        sizer->Add(resetRecognitionButton_, 0, wxALL, 8);
+        refreshRecognitionSettings();
         panel->SetSizer(sizer);
-        notebook->AddPage(panel, "Recognition", false);
+        columns->Add(panel, 2, wxEXPAND | wxALL, 4);
     }
 
     // Edits frontend configuration; OSC mapping and execution remain in transport/Core.
-    void MainFrame::createOutputPage(wxNotebook* notebook)
+    void MainFrame::createOutputColumn(wxWindow* parent, wxBoxSizer* columns)
     {
         const CommandOutputConfiguration defaults;
-        auto* panel = new wxPanel(notebook);
+        auto* panel = new wxScrolledWindow(parent);
+        panel->SetScrollRate(10, 10);
+        panel->SetMinSize(wxSize(250, 200));
         auto* sizer = new wxBoxSizer(wxVERTICAL);
+        sizer->Add(new wxStaticText(panel, wxID_ANY, "Output"), 0, wxALL, 8);
         outputEnabledCheck_ = new wxCheckBox(panel, wxID_ANY, "Enable OSC command output");
         outputEnabledCheck_->SetValue(defaults.enabled);
         outputEnabledCheck_->SetToolTip(
@@ -363,7 +438,7 @@ namespace timmy::gui {
         sizer->Add(executionStatusText_, 0, wxEXPAND | wxALL, 12);
         sizer->Add(executionResultText_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
         panel->SetSizer(sizer);
-        notebook->AddPage(panel, "Output", false);
+        columns->Add(panel, 1, wxEXPAND | wxALL, 4);
         updateOutputControls();
     }
 
@@ -401,6 +476,55 @@ namespace timmy::gui {
         {
             recognitionStatusText_->SetLabel(wxString::FromUTF8(vad.diagnostic));
         }
+    }
+
+    void MainFrame::refreshRecognitionSettings()
+    {
+        for (const auto& [id, control] : tuningControls_)
+        {
+            const auto& value = recognitionSettings_.at(id);
+            if (auto* check = dynamic_cast<wxCheckBox*>(control)) check->SetValue(std::get<bool>(value));
+            else if (auto* spin = dynamic_cast<wxSpinCtrl*>(control)) spin->SetValue(std::get<int>(value));
+            else if (auto* real = dynamic_cast<wxSpinCtrlDouble*>(control)) real->SetValue(std::get<double>(value));
+        }
+    }
+
+    void MainFrame::captureRecognitionSettings()
+    {
+        auto values = recognitionSettings_;
+        for (const auto& [id, control] : tuningControls_)
+        {
+            if (auto* check = dynamic_cast<wxCheckBox*>(control))
+            {
+                values[id] = check->GetValue();
+            }
+            else if (auto* spin = dynamic_cast<wxSpinCtrl*>(control))
+            {
+                long value = 0;
+                if (!spin->GetTextValue().ToLong(&value)
+                    || value < std::numeric_limits<int>::min()
+                    || value > std::numeric_limits<int>::max())
+                    throw std::invalid_argument("Invalid integer setting: " + id);
+                values[id] = static_cast<int>(value);
+            }
+            else if (auto* real = dynamic_cast<wxSpinCtrlDouble*>(control))
+            {
+                double value = 0;
+                if (!real->GetTextValue().ToDouble(&value))
+                    throw std::invalid_argument("Invalid floating-point setting: " + id);
+                values[id] = value;
+            }
+        }
+        recognitionSettings_ = asr::validatedSettings(
+            core::asrSettingDescriptors(core::availableAsrEngines().front().id), values);
+    }
+
+    void MainFrame::resetRecognitionSettings()
+    {
+        if (!recognitionLifecycle_.canConfigure() || closing_) return;
+        recognitionSettings_ = asr::defaultSettings(
+            core::asrSettingDescriptors(core::availableAsrEngines().front().id));
+        refreshRecognitionSettings();
     }
 
     // Discovers capture devices and starts the platform default selection.
@@ -569,6 +693,8 @@ namespace timmy::gui {
         modelBrowseButton_->Enable(idle);
         vadBrowseButton_->Enable(idle);
         languageChoice_->Enable(idle);
+        for (const auto& [id, control] : tuningControls_) control->Enable(idle);
+        resetRecognitionButton_->Enable(idle);
         updateOutputControls();
     }
 
@@ -704,6 +830,15 @@ namespace timmy::gui {
             return;
         }
 
+        try
+        {
+            captureRecognitionSettings();
+        }
+        catch (const std::exception& error)
+        {
+            recognitionStatusText_->SetLabel(wxString::FromUTF8(error.what()));
+            return;
+        }
         if (!recognitionLifecycle_.beginListening()) return;
         const auto generation = recognitionLifecycle_.generation();
         frozenOutputConfiguration_ = outputConfiguration();
@@ -715,9 +850,10 @@ namespace timmy::gui {
                 wxStringToPath(vadPathText_->GetValue())
             };
             auto backend = backendOverride_ ? backendOverride_
-                : core::createAsrBackend(core::AsrEngineId::whisperCpp, resources);
+                : core::createAsrBackend(core::availableAsrEngines().front().id, resources, recognitionSettings_);
+            const auto languageProfile = commandProfileForOutput(frozenOutputConfiguration_);
             recognitionPipeline_ = std::make_unique<core::RecognitionPipeline>(
-                channelSelector_, std::move(backend));
+                channelSelector_, std::move(backend), languageProfile);
             recognitionObserver_ = std::make_shared<GuiRecognitionObserver>(*this, generation,
                 armedOutputGeneration_);
             recognitionPipeline_->setObserver(recognitionObserver_);
@@ -733,7 +869,7 @@ namespace timmy::gui {
             {
                 configuration.preferredLanguage = "en";
             }
-            configuration.recognitionHints = core::commandRecognitionHints();
+            configuration.recognitionHints = core::commandRecognitionHints(languageProfile);
             const auto result = recognitionPipeline_->start(configuration);
             if (!result.succeeded)
             {
@@ -810,7 +946,23 @@ namespace timmy::gui {
             semantic += wxString::FromUTF8(" \xE2\x80\x94 ") + wxString::FromUTF8(
                 command::describe(*payload.transcript.semanticCommand));
         }
+        if (payload.transcript.semanticCommand) {
+            semantic += " | Validation: ";
+            semantic += payload.transcript.validation.accepted ? "accepted" : "rejected";
+            if (!payload.transcript.validation.diagnostic.empty())
+                semantic += " (" + wxString::FromUTF8(payload.transcript.validation.diagnostic) + ")";
+            if (!payload.transcript.rendering.diagnostic.empty())
+                semantic += " | Rendering: " + wxString::FromUTF8(payload.transcript.rendering.diagnostic);
+            if (payload.transcript.rendering.text)
+                semantic += " | Rendered command: " + wxString::FromUTF8(*payload.transcript.rendering.text);
+        }
         semanticCommandText_->SetLabel(semantic);
+        const int resultWidth = std::max(100,
+            semanticCommandText_->GetParent()->GetClientSize().GetWidth() - 16);
+        for (auto* label : {rawTranscriptText_, normalizedTranscriptText_,
+                assemblyText_, semanticCommandText_})
+            label->Wrap(resultWidth);
+        semanticCommandText_->GetParent()->Layout();
 
         // Submission only enqueues the produced semantic command. The existing
         // executor validates the event and performs dispatch/OSC on its worker.
@@ -837,6 +989,8 @@ namespace timmy::gui {
             text += wxString::FromUTF8(" \xE2\x80\x94 ")
                 + wxString::FromUTF8(result.diagnostic);
         }
+        if (!result.renderedCommand.empty())
+            text += " | Rendered command: " + wxString::FromUTF8(result.renderedCommand);
         executionResultText_->SetLabel("Execution: " + text);
         executionResultText_->Wrap(std::max(100, GetClientSize().GetWidth() - 64));
         executionResultText_->GetParent()->Layout();

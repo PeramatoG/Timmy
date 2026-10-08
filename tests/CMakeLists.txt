@@ -144,6 +144,24 @@ add_test(
     COMMAND timmy_whisper_asr_tests
 )
 
+add_executable(timmy_whisper_recognition_guidance_tests
+    whisper_recognition_guidance_test.cpp
+)
+target_link_libraries(timmy_whisper_recognition_guidance_tests PRIVATE timmy_core)
+FetchContent_GetProperties(whisper_cpp SOURCE_DIR timmy_whisper_source_dir)
+target_include_directories(timmy_whisper_recognition_guidance_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/modules/asr/src
+    ${timmy_whisper_source_dir}/examples
+    ${timmy_whisper_source_dir}/include
+    ${timmy_whisper_source_dir}/ggml/include
+)
+if(MSVC)
+    target_compile_options(timmy_whisper_recognition_guidance_tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(timmy_whisper_recognition_guidance_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME timmy.whisper_recognition_guidance COMMAND timmy_whisper_recognition_guidance_tests)
+
 add_executable(timmy_whisper_endpoint_tests
     whisper_endpoint_detector_test.cpp
 )
@@ -351,3 +369,38 @@ else()
     target_compile_options(timmy_command_lexicon_tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(timmy_command_context_tests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+add_executable(timmy_command_processor_tests command_processor_test.cpp)
+target_link_libraries(timmy_command_processor_tests PRIVATE timmy_core)
+add_test(NAME timmy.command_processor COMMAND timmy_command_processor_tests)
+if(MSVC)
+    target_compile_options(timmy_command_processor_tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(timmy_command_processor_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME timmy.cli_semantic_dry_run COMMAND timmy_cli osc send --dry-run
+    --command "canales del 2 al 40 al 50")
+set_tests_properties(timmy.cli_semantic_dry_run PROPERTIES
+    PASS_REGULAR_EXPRESSION "RENDERED COMMAND: Channel 2 Through 40 At 50")
+add_test(NAME timmy.cli_semantic_invalid COMMAND timmy_cli osc send --dry-run
+    --command "channel 1 at 101")
+set_tests_properties(timmy.cli_semantic_invalid PROPERTIES WILL_FAIL TRUE)
+
+add_test(NAME timmy.cli_hydra_rendering_dry_run COMMAND timmy_cli osc send --dry-run
+    --profile hydra2 --pre-clear --command "enciende los canales del 2 al 40")
+set_tests_properties(timmy.cli_hydra_rendering_dry_run PROPERTIES
+    PASS_REGULAR_EXPRESSION "RENDERED COMMAND: C C CH 2 THRU 4 0 AT AT")
+
+add_executable(timmy_recognition_settings_tests recognition_settings_test.cpp)
+target_link_libraries(timmy_recognition_settings_tests PRIVATE timmy_core)
+target_include_directories(timmy_recognition_settings_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/modules/asr/src
+    ${timmy_whisper_source_dir}/include
+    ${timmy_whisper_source_dir}/ggml/include
+)
+if(MSVC)
+    target_compile_options(timmy_recognition_settings_tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(timmy_recognition_settings_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME timmy.recognition_settings COMMAND timmy_recognition_settings_tests)

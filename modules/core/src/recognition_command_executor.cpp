@@ -31,6 +31,13 @@ namespace timmy::core {
             || !result.semanticCommand
             || result.assemblyState != RecognitionAssemblyState::complete)
             return {};
+        if (!result.validation.accepted || !result.rendering.text)
+            return {RecognitionExecutionState::failed,
+                !result.validation.accepted
+                    ? (result.validation.diagnostic.empty() ? "Recognition intent was not accepted by semantic validation."
+                        : result.validation.diagnostic)
+                    : (result.rendering.diagnostic.empty() ? "Recognition intent could not be rendered."
+                        : result.rendering.diagnostic)};
         {
             std::lock_guard lock(mutex_);
             if (stopping_) return {RecognitionExecutionState::failed, "Execution is stopped."};
@@ -101,7 +108,7 @@ namespace timmy::core {
                 const auto result = dispatcher_.dispatch(command);
                 execution = {result.state == CommandDispatchState::succeeded
                     ? RecognitionExecutionState::succeeded : RecognitionExecutionState::failed,
-                    result.diagnostic};
+                    result.diagnostic, result.renderedCommand};
             }
             catch (const std::exception& error)
             {

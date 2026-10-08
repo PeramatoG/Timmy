@@ -209,10 +209,17 @@ namespace timmy::command {
 
     } // namespace
 
+    SemanticCommandParser::SemanticCommandParser(SemanticParsingConfiguration configuration)
+        : configuration_(std::move(configuration)) {}
+
     CommandTextResult SemanticCommandParser::classify(std::string_view text,
         const CommandContext& context) const
     {
         if (text.empty() || text.size() > maxCommandLength) return {};
+        auto words = canonicalizeCommandText(text, configuration_.vocabulary);
+        if (words.empty()) return {};
+        const bool prefixLevel = words[0] == "on" || words[0] == "off" || words[0] == "full";
+        const bool prefixOff = words[0] == "off";
         // A numeric sentence comma can finish intensity, but a selection's
         // terminal comma is a pending list connector. Keep that distinction in
         // the grammar rather than transcript formatting.
@@ -223,7 +230,7 @@ namespace timmy::command {
             if (byte >= 0x80U || std::isspace(byte) == 0) break;
             commaCandidate.remove_suffix(1);
         }
-        if (!commaCandidate.empty() && commaCandidate.back() == ',')
+        if (!prefixLevel && !commaCandidate.empty() && commaCandidate.back() == ',')
         {
             commaCandidate.remove_suffix(1);
             while (!commaCandidate.empty())
@@ -239,8 +246,9 @@ namespace timmy::command {
                     && std::holds_alternative<SetIntensity>(*candidate.command)) return candidate;
             }
         }
-        const auto words = canonicalizeCommandText(text);
-        if (words.empty()) return {};
+        // Prefix actions reuse selection grammar directly. Preserve its pending
+        // range/list states; do not append synthetic tokens to an ASR fragment.
+        if (prefixLevel) words[0] = "set";
 
         if (auto command = scopedEditorAction(words)) return complete(std::move(*command));
 
@@ -268,15 +276,21 @@ namespace timmy::command {
         std::size_t index = action == Action::none ? 0 : 1;
         if (index < words.size() && words[index] == canonicalArticle) ++index;
         if (index == words.size()) return action != Action::none ? pending() : CommandTextResult{};
-        const auto type = targetType(words[index]);
+        const auto explicitType = targetType(words[index]);
+        const auto type = explicitType ? explicitType : (prefixLevel ? configuration_.defaultTarget : std::nullopt);
         if (!type) return {};
-        const bool plural = words[index].back() == 's';
-        ++index;
+        const bool plural = explicitType && words[index].back() == 's';
+        if (explicitType) ++index;
         bool incomplete = false;
         TargetSelection selection{*type, {}};
         const bool selectionAction = action == Action::select || action == Action::release
             || action == Action::test || action == Action::home || action == Action::homeTo;
-        if (!parseRanges(words, index, selection.included, selectionAction,
+        if (index < words.size() && words[index] == "all")
+        {
+            selection.all = true;
+            ++index;
+        }
+        else if (!parseRanges(words, index, selection.included, selectionAction || (prefixLevel && plural),
                 plural || selectionAction, incomplete, TargetSelection::maxTerms))
             return incomplete ? pending() : CommandTextResult{};
 
@@ -313,6 +327,8 @@ namespace timmy::command {
 
         if (index == words.size())
         {
+            if (prefixLevel)
+                return complete(SetIntensity{selection, *IntensityLevel::fromPercent(prefixOff ? 0 : 100)}, explicitType);
             switch (action)
             {
             case Action::select: return complete(SelectSelection{selection}, type);
@@ -332,6 +348,9 @@ namespace timmy::command {
             }
         }
 
+        // An on/off prefix supplies the value. Reject an additional value clause
+        // rather than silently overriding either part of the spoken command.
+        if (prefixLevel) return {};
         const bool acceptsIntensity = action == Action::none || action == Action::intensity;
         const bool acceptsHome = *type == TargetType::fixture
             && (action == Action::none || action == Action::homeTo);
@@ -345,7 +364,7 @@ namespace timmy::command {
             if (acceptsIntensity)
             {
                 const auto level = parseLevel(words[index + 1]);
-                if (level) return complete(SetIntensity{selection, *level}, type);
+                if (level) return complete(SetIntensity{selection, *level}, explicitType);
             }
         }
         return {};

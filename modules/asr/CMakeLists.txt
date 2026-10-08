@@ -23,6 +23,8 @@ FetchContent_MakeAvailable(whisper_cpp)
 
 add_library(timmy_asr STATIC
     src/asr_backend.cpp
+    src/configurable_settings.cpp
+    src/whisper_configuration.cpp
     src/whisper_command_decoding.cpp
     src/whisper_endpoint_detector.cpp
     src/whisper_recognition_guidance.cpp
@@ -45,6 +47,11 @@ target_link_libraries(timmy_asr
 )
 
 if(MSVC)
+    # Keep upstream numeric-conversion warnings confined to whisper.
+    target_compile_options(whisper PRIVATE /wd4244)
+    # Only the upstream grammar parser has an unused internal helper.
+    set_property(SOURCE ${whisper_cpp_SOURCE_DIR}/examples/grammar-parser.cpp
+        APPEND PROPERTY COMPILE_OPTIONS /wd4505)
     target_compile_options(timmy_asr PRIVATE
         /W4
         /permissive-

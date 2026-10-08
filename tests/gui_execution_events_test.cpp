@@ -46,6 +46,8 @@ namespace {
         transcript.assemblyState = core::RecognitionAssemblyState::complete;
         transcript.semanticState = core::RecognitionSemanticState::produced;
         transcript.semanticCommand = command::SemanticCommandParser{}.parse("Channel 5 At 50").command;
+        transcript.validation = command::validateIntent(*transcript.semanticCommand);
+        transcript.rendering = command::renderIntent(*transcript.semanticCommand);
         REQUIRE(transcript.semanticCommand.has_value());
         return transcript;
     }
@@ -177,9 +179,11 @@ namespace {
             REQUIRE(frontend.delivered[0].generation == frontend.generation);
             REQUIRE(frontend.delivered[1].generation == frontend.generation);
             REQUIRE(frontend.delivered[0].result.state == ExecutionState::queued);
+            REQUIRE(frontend.delivered[0].result.renderedCommand.empty());
             REQUIRE(frontend.delivered[1].result.state == (success
                 ? ExecutionState::succeeded : ExecutionState::failed));
             REQUIRE(frontend.delivered[1].result.diagnostic == outcome.diagnostic);
+            REQUIRE(frontend.delivered[1].result.renderedCommand == "CH 5 AT 5 0");
         }
     }
 

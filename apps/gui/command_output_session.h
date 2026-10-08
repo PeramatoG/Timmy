@@ -43,6 +43,8 @@ namespace timmy::gui {
         bool operator==(const CommandOutputConfiguration&) const = default;
     };
 
+    [[nodiscard]] command::CommandProfile commandProfileForOutput(const CommandOutputConfiguration& configuration);
+
     struct CommandOutputStartResult
     {
         bool succeeded = false;

@@ -11,6 +11,7 @@
 #pragma once
 
 #include "timmy/command/semantic_command.h"
+#include "timmy/command/command_profile.h"
 
 #include <cstddef>
 #include <optional>
@@ -53,11 +54,15 @@ namespace timmy::command {
     {
     public:
         static constexpr std::size_t maxCommandLength = 256;
+        explicit SemanticCommandParser(SemanticParsingConfiguration configuration = {});
 
         [[nodiscard]] CommandTextResult classify(std::string_view text,
             const CommandContext& context = {}) const;
         [[nodiscard]] SemanticParseResult parse(std::string_view completeText,
             const CommandContext& context = {}) const;
+
+    private:
+        SemanticParsingConfiguration configuration_;
     };
 
 } // namespace timmy::command

@@ -31,6 +31,8 @@ namespace {
         result.assemblyState = core::RecognitionAssemblyState::complete;
         result.semanticState = core::RecognitionSemanticState::produced;
         result.semanticCommand = command::SemanticCommandParser{}.parse(text).command;
+        result.validation = command::validateIntent(*result.semanticCommand);
+        result.rendering = command::renderIntent(*result.semanticCommand);
         require(result.semanticCommand.has_value());
         return result;
     }
@@ -163,12 +165,13 @@ namespace {
             std::make_shared<transport::Hydra2OscCommandProfile>(options),
             std::move(sender), [](auto) {});
         Events events;
-        core::RecognitionCommandExecutor executor(core::CommandDispatcher{emitter},
+        const auto languageProfile = command::hydra2CommandProfile(options.preClear);
+        core::RecognitionCommandExecutor executor(core::CommandDispatcher{emitter, languageProfile},
             [&](const auto& event) { events.observe(event); });
         auto backend = std::make_shared<FakeBackend>();
         auto observer = std::make_shared<ExecutionObserver>(executor);
         core::RecognitionPipeline pipeline(
-            std::make_shared<audio::AudioChannelSelector>(), backend);
+            std::make_shared<audio::AudioChannelSelector>(), backend, languageProfile);
         pipeline.setObserver(observer);
         require(pipeline.start({}).succeeded);
 
@@ -200,6 +203,14 @@ namespace {
             require(recorded->packets() == expectedPackets);
         };
 
+        // Every token is allowed recognition vocabulary, but these sequences
+        // must still fail semantic parsing and leave the sender untouched.
+        for (const auto* phrase : {"channel group 5", "channel 5 at 105", "clear selection all"})
+        {
+            pipeline.discardPendingAssembly();
+            expectIgnored(phrase);
+        }
+        pipeline.discardPendingAssembly();
         expectIgnored("súmale el 4");
         expectPlan("  Dame los canales del 1 al 10 y me quitas el 6.  ",
             {"/keyC", "/keyC", "/keyCH", "/key1", "/keyTHRU", "/key1", "/key0",
@@ -282,6 +293,10 @@ int main()
         require(executor.submit(invalid).state == State::ignored);
         invalid = produced(); invalid.semanticCommand.reset();
         require(executor.submit(invalid).state == State::ignored);
+        invalid = produced(); invalid.validation.accepted = false;
+        require(executor.submit(invalid).state == State::failed);
+        invalid = produced(); invalid.rendering.text.reset();
+        require(executor.submit(invalid).state == State::failed);
         require(executor.submit(produced()).state == State::queued);
         emitter->waitEntered();
         require(executor.submit(produced("Group 3 At 25")).state == State::queued);

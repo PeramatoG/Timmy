@@ -1,8 +1,8 @@
 # TIMMY — Project Charter and Architecture Intent
 
 **Working expansion:** *The Imaginary Man, Minding You*  
-**Document status:** Draft 0.2  
-**Date:** 2026-10-02  
+**Document status:** Draft 0.3
+**Date:** 2026-10-07
 **Intended repository location:** `docs/PROJECT_CHARTER.md`  
 **Primary implementation language:** C++20  
 **Primary GUI toolkit:** wxWidgets  
@@ -19,9 +19,9 @@ The initial practical objective is deliberately simple:
 
 1. capture audio from a user-selected input;
 2. recognize a short spoken command;
-3. normalize the recognized text through configurable rules;
-4. optionally validate or filter the resulting command;
-5. emit that command to an external application or console, initially through OSC.
+3. apply deterministic lexical cleanup and parse a structured `CommandIntent`;
+4. validate the intent and render target command syntax;
+5. emit the accepted command to an external application or console, initially through OSC.
 
 Typical spoken input may include native console syntax, approximate natural-language equivalents, or small bilingual variations such as:
 
@@ -87,8 +87,8 @@ The following concerns must have explicit boundaries:
 - audio device discovery and capture;
 - audio processing and metering;
 - speech recognition;
-- command normalization;
-- command validation/filtering;
+- lexical normalization and semantic parsing;
+- semantic validation and target rendering;
 - command emission/transport;
 - application orchestration and state;
 - CLI frontend;
@@ -118,15 +118,18 @@ The initial execution path should remain inspectable and predictable:
 Audio
   -> ASR
   -> Transcript
-  -> Normalization
-  -> Optional validation/filtering
+  -> Lexical normalization
+  -> Semantic parser
+  -> CommandIntent
+  -> Semantic validation
+  -> Console/profile renderer
   -> Command text
-  -> Emitter
+  -> ICommandEmitter
 ```
 
 A general-purpose LLM is not part of the required command path.
 
-If natural-language interpretation is added later, it should be an optional layer. Basic operation must never become dependent on an opaque cloud model deciding what a console command means.
+Natural-language interpretation in the normal path is deterministic and compositional. An optional future local semantic fallback may run only after deterministic parsing fails, produce a `CommandIntent` candidate, and use the same validator and renderer. It must never directly emit commands or bypass validation. No model dependency is required.
 
 ### 3.5 Observable behavior
 
@@ -135,10 +138,12 @@ TIMMY should make each significant processing step visible to logs, tests and fr
 For example:
 
 ```text
-HEARD:      "canal cinco a tope"
-NORMALIZED: "Fixture 5 At Full"
+HEARD:      "enciende canal 5"
+NORMALIZED: "enciende canal 5"
+PARSED INTENT: SetIntensity(Channel(5), 100%)
 VALIDATION: accepted
-OUTPUT:     OSC /cmd "Fixture 5 At Full"
+RENDERED COMMAND: "Channel 5 At 100"
+OUTPUT:     selected emitter
 STATUS:     sent
 ```
 
@@ -373,98 +378,106 @@ The decision to replace the default backend should be based on TIMMY-specific me
 
 ---
 
-## 8. Command normalization and filtering
+## 8. Command language and semantic processing
 
-The command-processing layer belongs **outside** the recognizer.
+`timmy_command` owns lexical normalization, compositional parsing, the bounded
+`CommandIntent` model, semantic validation and command-text rendering. ASR only
+answers “what text was spoken?” The parser answers “what does this supported
+command mean?” The renderer selects target syntax; neither parser nor renderer
+owns OSC, audio devices, backend grammar APIs or GUI controls.
 
-The ASR backend should answer a question similar to:
+`CommandIntent` names the existing `SemanticCommand` variant. Operations cover
+TIMMY's currently supported intensity and selection/editor capabilities, not a
+universal lighting-console model. `TargetSelection` stores compact inclusive
+ranges (single items and lists are compositions of ranges), exclusions, or an
+explicit `all` flag. All never means an invented numeric identifier interval.
 
-> What text was spoken?
+### 8.1 Lexical normalization and compositional grammar
 
-The command layer should answer:
+`TranscriptNormalizer` performs ordered whitespace, punctuation and percent
+cleanup without generating console commands. The grammar lexer uses ordered
+exact token/phrase aliases, including Spanish and English vocabulary. Unknown
+words remain unknown so the parser rejects unsupported expressions. No global
+substring replacement, fuzzy matching, or per-sentence replacement inventory is
+required. Prefix on/off terms combine with the same selection grammar used for
+explicit intensity commands.
 
-> What command text should TIMMY send?
+Representative supported phrases include `enciende canal 1`, `apaga canal 10`,
+`fuera todo`, `enciende los canales del 2 al 40`, and
+`canales del 2 al 40 al 50`. The default TIMMY language profile explicitly sets
+Channel as the omitted target for prefix intensity commands (`apaga 10`). This
+profile default is separate from the existing last-explicit-target linguistic
+context for relative selection edits. Numeric fragments cannot silently replace
+pending selections. Generic parser/assembler instances have no default target.
+Prefix intensity supplies the level; extra value clauses are rejected. Ambiguous
+singular forms such as `apaga canal 10 al 50` are rejected; plural selection,
+`del ... al ...`, or explicit `through`/`hasta` makes a range clear.
 
-Examples of normalization may include:
+### 8.2 Profile configuration
 
-```text
-"a tope"       -> "At Full"
-"al máximo"    -> "At Full"
-"at 100%"      -> "At Full"
-"apaga"        -> "At 0"
-"at zero"      -> "At 0"
-```
-
-Console-specific profiles may provide further transformations:
-
-```text
-Generic Spanish -> grandMA3
-"canal"         -> "Fixture"
-
-Generic Spanish -> Eos
-"canal"         -> "Chan"
-```
-
-However, TIMMY must also support near-pass-through operation for users who prefer to speak native console syntax with minimal transformation.
-
-### 8.1 Avoid blind string replacement
-
-Peratext's dictionary mechanism is useful prior art, but TIMMY should avoid unrestricted global substring replacement.
-
-Normalization rules should eventually support structured properties such as:
-
-```text
-id
-priority
-enabled
-match type: token / phrase / regex
-pattern
-replacement
-language/profile scope
-```
-
-Rules should be deterministic, ordered and testable.
-
-### 8.2 Command profiles
-
-A command profile may provide two different kinds of information:
+`CommandProfile` is an ordinary C++ value model with distinct domains:
 
 ```text
-CommandProfile
-    +-> RecognitionHints -> ASR backend
-    +-> NormalizationRules -> Command processor
-    +-> ValidationRules -> Validator
+recognition: backend-neutral terms and examples
+normalization: lexical formatting configuration
+parsing: ordered semantic vocabulary and explicit default target
+validation: supported intent constraints and identifier limits
+rendering: target command-language vocabulary
 ```
 
-This allows domain vocabulary to improve recognition without merging console semantics into the ASR implementation.
+These values are serializable independently of GUI controls; a persistent file
+format and GUI profile editor are deferred. Core adapts recognition vocabulary
+to generic `RecognitionHints`. Whisper GBNF remains inside the ASR adapter.
+Recognition guidance may be derived from the profile without being authoritative
+for parsing or validation.
 
----
+### 8.3 Rendering and observability
 
-## 9. Validation and safety
+`CommandProcessor` runs transcript cleanup, deterministic parsing, validation and
+rendering. Core recognition assembly uses the same command services and profile
+configuration. CLI and GUI display the shared intent, validation and rendered
+text. `osc send --dry-run --command <text>` exercises processing without audio,
+models, sockets or a console. `describe(intent)` remains a semantic diagnostic,
+not target command syntax.
 
-TIMMY should not pretend to fully understand every command supported by every target console.
+Two renderers demonstrate the boundary: configurable TIMMY native text and the
+current Hydra II console key syntax. Hydra rendering owns target keys, compact
+range/list/exclusion syntax, operation keys and optional pre-clear; it has no OSC
+addresses, packet serialization or transport timing. The Hydra OSC adapter only
+maps rendered keys to configured addresses and executes key pulses. Semantic
+interpretation is not repeated by the production Hydra transport path.
 
-The initial validator may therefore remain lightweight.
+`ICommandEmitter` accepts a rendered command carrying text, optional console key
+tokens and the validated intent for typed compatibility adapters. Existing generic
+OSC messages retain their typed mapping; native text is not falsely presented as
+their wire payload. The legacy semantic emitter/profile entry points remain as
+compatibility APIs. Hydra's legacy profile entry point delegates syntax generation
+to the same renderer rather than keeping a second grammar in transport.
 
-Possible modes may include:
+CLI recognition and GUI recognition/execution use the same selected language
+profile. GUI output configuration is frozen for the full listening lifecycle, and
+its wx-free profile adapter supplies both recognition and output dispatch. Both
+frontends expose the selected renderer's text, including rendering rejection
+reasons. Execution results also carry the actual rendered command sent to the
+emitter. Broader console text profiles are intentionally deferred.
 
-```text
-Off
-Basic
-Strict profile
-```
+## 9. Semantic validation
 
-`Off` allows normalized text to pass through.
+Semantic validation follows parsing and precedes rendering and dispatch. It
+checks selection structure, identifiers, operation-specific constraints and
+profile policy such as whether `all` is allowed. Dispatcher repeats validation
+for directly constructed intents, so future fallback candidates cannot bypass
+this boundary. A failed validation produces a diagnostic and no emission.
 
-`Basic` may reject empty, incomplete, malformed or otherwise obviously unusable results.
+Transport profiles independently reject unsupported mappings. In particular,
+`all` is representable and renderable as TIMMY native text, but the Hydra renderer
+and generic OSC adapter reject it because no verified all-target mapping exists. Parser success never
+promises that every selected output adapter supports the operation.
 
-`Strict profile` may later validate a deliberately supported command subset.
-
-Potentially destructive operations such as record, store, delete, patch, clear-all or similar operations may later receive additional policy, confirmation or an armed mode. Such policy belongs in the command/safety layer, not the ASR backend.
-
-The conservative fallback is always:
-
-> If TIMMY cannot produce a sufficiently reliable command, send nothing and explain why.
+Potential future destructive-operation policy belongs here, outside ASR. Optional
+local semantic fallback must return candidates to this same path and must not
+send OSC or console text directly. Broader grammar coverage, ASR grammar
+generation and AI interpretation are not required for normal execution.
 
 ---
 
@@ -480,7 +493,7 @@ Conceptually:
 class ICommandEmitter {
 public:
     virtual ~ICommandEmitter() = default;
-    virtual SendResult send(const CommandMessage& command) = 0;
+    virtual EmissionResult emitRendered(const RenderedCommand& command);
 };
 ```
 
@@ -531,7 +544,7 @@ Examples:
 - the audio Core discovers devices; the GUI displays them;
 - the audio Core computes dBFS; the GUI draws the meter;
 - the ASR Core reports a transcript; the GUI renders it;
-- the command Core reports normalization; the GUI renders before/after text;
+- the command Core reports normalized text, parsed intent, validation and rendering; the GUI displays those results;
 - the emitter reports delivery status; the GUI displays it.
 
 The GUI should be replaceable without rewriting the application engine.
@@ -826,8 +839,10 @@ Initial ASR:        whisper.cpp
 Initial model:      Whisper Small multilingual Q5_1
 ASR strategy:       replaceable backends
 First ASR rival:    NeMo-Speech.cpp / Nemotron
-Normalization:      independent command layer
-Validation:         independent optional layer
+Normalization:      lexical cleanup in command layer
+Parsing:            deterministic compositional CommandIntent
+Validation:         semantic policy before rendering/emission
+Rendering:          target syntax separate from semantic meaning
 Initial transport:  OSC behind ICommandEmitter
 Internet:           optional; not required for normal use
 License:            GPL-3.0-or-later, pending final confirmation

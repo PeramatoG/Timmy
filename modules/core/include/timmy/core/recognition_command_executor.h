@@ -26,6 +26,7 @@ namespace timmy::core {
     {
         RecognitionExecutionState state{RecognitionExecutionState::ignored};
         std::string diagnostic;
+        std::string renderedCommand{};
     };
 
     // One submission represents one semantic event. Identical submissions remain

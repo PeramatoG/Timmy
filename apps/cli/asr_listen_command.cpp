@@ -109,6 +109,7 @@ namespace timmy::cli {
                     ? "succeeded" : "failed";
                 std::cout << "DISPATCH: " << label;
                 if (!result.diagnostic.empty()) std::cout << " — " << result.diagnostic;
+                if (!result.renderedCommand.empty()) std::cout << " — " << result.renderedCommand;
                 std::cout << '\n' << std::flush;
             }
 
@@ -144,12 +145,17 @@ namespace timmy::cli {
                     std::cout << " — " << transcript.assemblyText;
                 }
                 std::cout << '\n'
-                    << "SEMANTIC: " << semanticName(transcript.semanticState);
+                    << "PARSED INTENT: " << semanticName(transcript.semanticState);
                 if (transcript.semanticCommand)
                 {
                     std::cout << " — "
                         << command::describe(*transcript.semanticCommand);
                 }
+                std::cout << "\nVALIDATION: " << (!transcript.semanticCommand ? "not attempted" : transcript.validation.accepted ? "accepted" : "rejected");
+                if (!transcript.validation.diagnostic.empty()) std::cout << " — " << transcript.validation.diagnostic;
+                if (transcript.rendering.text) std::cout << "\nRENDERED COMMAND: " << *transcript.rendering.text;
+                else if (!transcript.rendering.diagnostic.empty())
+                    std::cout << "\nRENDERING: rejected — " << transcript.rendering.diagnostic;
                 std::cout << '\n' << std::flush;
                 lock.unlock();
                 if (executor)
@@ -319,7 +325,9 @@ namespace timmy::cli {
         auto backend = core::createAsrBackend(core::AsrEngineId::whisperCpp,
             { options.vadModelPath });
         auto selector = std::make_shared<audio::AudioChannelSelector>(0);
-        core::RecognitionPipeline pipeline(selector, std::move(backend));
+        const auto languageProfile = options.profile == "hydra2"
+            ? command::hydra2CommandProfile(options.hydra.preClear) : command::CommandProfile{};
+        core::RecognitionPipeline pipeline(selector, std::move(backend), languageProfile);
         auto observer = std::make_shared<ConsoleRecognitionObserver>();
         std::unique_ptr<core::RecognitionCommandExecutor> executor;
         if (!options.profile.empty())
@@ -331,7 +339,7 @@ namespace timmy::cli {
             auto emitter = std::make_shared<transport::OscCommandEmitter>(
                 transport::OscDestination{options.host, options.port}, profile);
             executor = std::make_unique<core::RecognitionCommandExecutor>(
-                core::CommandDispatcher(emitter),
+                core::CommandDispatcher(emitter, languageProfile),
                 [observer](const auto& result) { observer->onExecution(result); });
             observer->executor = executor.get();
         }
@@ -340,7 +348,7 @@ namespace timmy::cli {
         asr::AsrConfiguration asrConfiguration;
         asrConfiguration.modelResourcePath = options.modelPath;
         asrConfiguration.preferredLanguage = options.preferredLanguage;
-        asrConfiguration.recognitionHints = core::commandRecognitionHints();
+        asrConfiguration.recognitionHints = core::commandRecognitionHints(languageProfile);
         const auto asrStart = pipeline.start(asrConfiguration);
         if (!asrStart.succeeded)
         {
