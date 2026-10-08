@@ -25,17 +25,28 @@ namespace timmy::core {
         return engines;
     }
 
+    const std::vector<asr::SettingDescriptor>& asrSettingDescriptors(AsrEngineId engine)
+    {
+        switch (engine)
+        {
+        case AsrEngineId::whisperCpp: return asr::whisperSettingDescriptors();
+        }
+        throw std::invalid_argument("Unknown ASR engine.");
+    }
+
     // Constructs the selected backend while containing engine-specific setup.
     std::shared_ptr<asr::IAsrBackend> createAsrBackend(
         AsrEngineId engine,
-        const AsrEngineResources& resources)
+        const AsrEngineResources& resources,
+        const asr::SettingValues& settings)
     {
         switch (engine)
         {
         case AsrEngineId::whisperCpp:
             return std::make_shared<asr::WhisperAsrBackend>(
                 asr::WhisperAsrBackendOptions{
-                    resources.voiceActivityModelPath
+                    resources.voiceActivityModelPath,
+                    asr::validatedSettings(asrSettingDescriptors(engine), settings)
                 });
         }
         throw std::invalid_argument("Unknown ASR engine.");

@@ -16,6 +16,9 @@
 #include <wx/choice.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
+#include <wx/spinctrl.h>
+#include <wx/notebook.h>
+#include <wx/scrolwin.h>
 
 #include <atomic>
 #include <chrono>
@@ -73,6 +76,9 @@ namespace {
     {
         for (auto* child : parent.GetChildren())
         {
+            if (child->GetName().StartsWith("whisper.") || child->GetName().StartsWith("vad.")) continue;
+            if (auto* button = dynamic_cast<wxButton*>(child);
+                button && button->GetLabel() == "Reset to defaults") continue;
             if (auto* control = dynamic_cast<Control*>(child)) controls.push_back(control);
             collect(*child, controls);
         }
@@ -208,6 +214,13 @@ namespace {
             choices[1]->Enable();
             frame->Show();
             pumpEvents();
+            for (const auto& descriptor : core::asrSettingDescriptors(core::AsrEngineId::whisperCpp))
+            {
+                auto* control = wxWindow::FindWindowByName(wxString::FromUTF8(descriptor.id), frame);
+                REQUIRE(control != nullptr && control->IsEnabled());
+                tuning.push_back(control);
+            }
+            REQUIRE(tuning.size() == 14);
         }
         ~FrameFixture()
         {
@@ -238,6 +251,14 @@ namespace {
             REQUIRE(!buttons[0]->IsEnabled() && !buttons[1]->IsEnabled());
             REQUIRE(!checkboxes[1]->IsEnabled());
             REQUIRE(output().IsEnabled());
+            for (auto* control : tuning) REQUIRE(!control->IsEnabled());
+            REQUIRE(!reset().IsEnabled());
+        }
+        wxButton& reset()
+        {
+            auto* button = dynamic_cast<wxButton*>(wxWindow::FindWindowByLabel("Reset to defaults", frame));
+            REQUIRE(button != nullptr);
+            return *button;
         }
         void responsive()
         {
@@ -252,6 +273,7 @@ namespace {
         gui::MainFrame* frame = nullptr;
         bool destroyed = false;
         int factories = 0;
+        std::vector<wxWindow*> tuning;
         std::vector<wxChoice*> choices;
         std::vector<wxTextCtrl*> texts;
         std::vector<wxButton*> buttons;
@@ -432,6 +454,88 @@ namespace {
         REQUIRE(fixture.factories == 1);
     }
 
+    void recognitionTuningAndColumns()
+    {
+        FrameFixture fixture;
+        std::vector<wxNotebook*> notebooks;
+        collect(*fixture.frame, notebooks);
+        REQUIRE(notebooks.empty());
+        std::vector<wxScrolledWindow*> columns;
+        collect(*fixture.frame, columns);
+        REQUIRE(columns.size() == 3);
+        for (auto* column : columns) REQUIRE(column->IsShownOnScreen());
+        REQUIRE(columns[0]->GetPosition().x < columns[1]->GetPosition().x);
+        REQUIRE(columns[1]->GetPosition().x < columns[2]->GetPosition().x);
+        auto checkDefaults = [&] {
+            for (const auto& descriptor : core::asrSettingDescriptors(core::AsrEngineId::whisperCpp))
+            {
+                auto* control = wxWindow::FindWindowByName(wxString::FromUTF8(descriptor.id), fixture.frame);
+                if (auto* check = dynamic_cast<wxCheckBox*>(control))
+                    REQUIRE(check->GetValue() == std::get<bool>(descriptor.defaultValue));
+                else if (auto* spin = dynamic_cast<wxSpinCtrl*>(control))
+                    REQUIRE(spin->GetValue() == std::get<int>(descriptor.defaultValue));
+                else if (auto* real = dynamic_cast<wxSpinCtrlDouble*>(control))
+                    REQUIRE(real->GetValue() == std::get<double>(descriptor.defaultValue));
+                else REQUIRE(false);
+            }
+        };
+        checkDefaults();
+        auto* threads = dynamic_cast<wxSpinCtrl*>(wxWindow::FindWindowByName("whisper.threads", fixture.frame));
+        REQUIRE(threads != nullptr);
+        const auto model = fixture.texts[0]->GetValue();
+        const auto vad = fixture.texts[1]->GetValue();
+        const auto language = fixture.choices[3]->GetSelection();
+        const auto host = fixture.host().GetValue();
+        for (const auto& descriptor : core::asrSettingDescriptors(core::AsrEngineId::whisperCpp))
+        {
+            auto* control = wxWindow::FindWindowByName(wxString::FromUTF8(descriptor.id), fixture.frame);
+            if (auto* check = dynamic_cast<wxCheckBox*>(control))
+                toggle(*check, !std::get<bool>(descriptor.defaultValue));
+            else if (auto* spin = dynamic_cast<wxSpinCtrl*>(control))
+            {
+                spin->SetValue(std::get<int>(descriptor.defaultValue) + 1);
+                wxSpinEvent changed(wxEVT_SPINCTRL, spin->GetId());
+                changed.SetEventObject(spin);
+                spin->GetEventHandler()->ProcessEvent(changed);
+            }
+            else if (auto* real = dynamic_cast<wxSpinCtrlDouble*>(control))
+            {
+                real->SetValue(std::get<double>(descriptor.defaultValue) / 2);
+                wxSpinDoubleEvent changed(wxEVT_SPINCTRLDOUBLE, real->GetId());
+                changed.SetEventObject(real);
+                real->GetEventHandler()->ProcessEvent(changed);
+            }
+        }
+        click(fixture.reset());
+        REQUIRE(fixture.texts[0]->GetValue() == model && fixture.texts[1]->GetValue() == vad);
+        REQUIRE(fixture.choices[3]->GetSelection() == language && fixture.host().GetValue() == host);
+        checkDefaults();
+        fixture.frame->SetSize(1100, 500);
+        pumpEvents();
+        for (auto* column : columns) REQUIRE(column->IsShownOnScreen());
+        click(fixture.recognition());
+        waitFor([&] { return fixture.backend->starts == 1; });
+        fixture.listeningControls();
+        // Even a synthetic event cannot reset settings during a session.
+        threads->SetValue(7);
+        click(fixture.reset());
+        REQUIRE(threads->GetValue() == 7);
+        fixture.backend->blockStop();
+        click(fixture.recognition());
+        waitFor([&] { return fixture.backend->stopEntered.load(); });
+        for (auto* control : fixture.tuning) REQUIRE(!control->IsEnabled());
+        REQUIRE(!fixture.reset().IsEnabled());
+        fixture.backend->releaseStop();
+        waitFor([&] { return fixture.recognition().GetLabel() == "Start listening"; });
+        for (auto* control : fixture.tuning) REQUIRE(control->IsEnabled());
+        REQUIRE(fixture.reset().IsEnabled());
+        click(fixture.reset());
+        checkDefaults();
+        click(fixture.recognition());
+        waitFor([&] { return fixture.backend->starts == 2; });
+        fixture.listeningControls();
+    }
+
     class TestApp final : public wxApp
     {
     public:
@@ -450,6 +554,7 @@ int main(int argc, char** argv)
 {
     REQUIRE(wxEntryStart(argc, argv));
     REQUIRE(wxTheApp->CallOnInit());
+    recognitionTuningAndColumns();
     runtimeArmingAndAsyncShutdown();
     invalidArmKeepsRecognitionListening();
     unsupportedRenderingRemainsObservable();

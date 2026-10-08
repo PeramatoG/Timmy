@@ -390,3 +390,17 @@ add_test(NAME timmy.cli_hydra_rendering_dry_run COMMAND timmy_cli osc send --dry
     --profile hydra2 --pre-clear --command "enciende los canales del 2 al 40")
 set_tests_properties(timmy.cli_hydra_rendering_dry_run PROPERTIES
     PASS_REGULAR_EXPRESSION "RENDERED COMMAND: C C CH 2 THRU 4 0 AT AT")
+
+add_executable(timmy_recognition_settings_tests recognition_settings_test.cpp)
+target_link_libraries(timmy_recognition_settings_tests PRIVATE timmy_core)
+target_include_directories(timmy_recognition_settings_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/modules/asr/src
+    ${timmy_whisper_source_dir}/include
+    ${timmy_whisper_source_dir}/ggml/include
+)
+if(MSVC)
+    target_compile_options(timmy_recognition_settings_tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(timmy_recognition_settings_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME timmy.recognition_settings COMMAND timmy_recognition_settings_tests)

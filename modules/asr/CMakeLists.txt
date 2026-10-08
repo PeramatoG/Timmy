@@ -23,6 +23,8 @@ FetchContent_MakeAvailable(whisper_cpp)
 
 add_library(timmy_asr STATIC
     src/asr_backend.cpp
+    src/configurable_settings.cpp
+    src/whisper_configuration.cpp
     src/whisper_command_decoding.cpp
     src/whisper_endpoint_detector.cpp
     src/whisper_recognition_guidance.cpp
