@@ -9,6 +9,7 @@
  */
 
 #include "main_frame.h"
+#include "benchmark_dialog.h"
 #include "command_output_events.h"
 
 #include "timmy/audio/audio_device_enumerator.h"
@@ -20,7 +21,9 @@
 #include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/choice.h>
+#include <wx/collpane.h>
 #include <wx/filedlg.h>
+#include <wx/filename.h>
 #include <wx/gauge.h>
 #include <wx/scrolwin.h>
 #include <wx/spinctrl.h>
@@ -38,6 +41,7 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -132,15 +136,41 @@ namespace timmy::gui {
 
     } // namespace
 
+    // Preserve presentation for recorded attempts even if Stop invalidates their
+    // queued wx events. This frontend mailbox never changes Core result gating.
+    class MainFrame::BenchmarkResults final
+    {
+    public:
+        using Result = std::pair<core::RecognitionBenchmarkAttempt, core::RecognitionTranscript>;
+        void add(const core::RecognitionBenchmarkAttempt& attempt,
+            const core::RecognitionTranscript& transcript)
+        {
+            std::lock_guard lock(mutex_);
+            results_.emplace_back(attempt, transcript);
+        }
+        std::vector<Result> take()
+        {
+            std::lock_guard lock(mutex_);
+            std::vector<Result> results;
+            results.swap(results_);
+            return results;
+        }
+    private:
+        std::mutex mutex_;
+        std::vector<Result> results_;
+    };
+
     class MainFrame::GuiRecognitionObserver final
         : public core::IRecognitionPipelineObserver
     {
     public:
         GuiRecognitionObserver(wxEvtHandler& target, std::uint64_t generation,
             const std::atomic<std::uint64_t>& armedOutputGeneration,
-            std::shared_ptr<core::RecognitionBenchmarkSession> benchmark = {})
+            std::shared_ptr<core::RecognitionBenchmarkSession> benchmark = {},
+            std::shared_ptr<BenchmarkResults> benchmarkResults = {})
             : target_(target), generation_(generation),
-              armedOutputGeneration_(armedOutputGeneration), benchmark_(std::move(benchmark))
+              armedOutputGeneration_(armedOutputGeneration), benchmark_(std::move(benchmark)),
+              benchmarkResults_(std::move(benchmarkResults))
         {
         }
 
@@ -170,6 +200,7 @@ namespace timmy::gui {
                 {
                     attempt = benchmark_->record(transcript);
                     if (!attempt) return; // Review waits for explicit Next/Retry.
+                    benchmarkResults_->add(*attempt, transcript);
                 }
                 catch (const std::exception& error)
                 {
@@ -190,6 +221,7 @@ namespace timmy::gui {
         std::uint64_t generation_;
         const std::atomic<std::uint64_t>& armedOutputGeneration_;
         const std::shared_ptr<core::RecognitionBenchmarkSession> benchmark_;
+        const std::shared_ptr<BenchmarkResults> benchmarkResults_;
     };
 
     // Creates the native columns and initializes audio capture.
@@ -281,6 +313,8 @@ namespace timmy::gui {
         sizer->Add(new wxStaticText(panel, wxID_ANY, "Input level:"), 0,
             wxLEFT | wxRIGHT | wxTOP, 12);
         levelGauge_ = new wxGauge(panel, wxID_ANY, 1000);
+        levelGauge_->SetName("audio.level");
+        levelGauge_->SetForegroundColour(wxColour(70, 180, 100));
         sizer->Add(levelGauge_, 0, wxEXPAND | wxALL, 12);
         levelText_ = new wxStaticText(panel, wxID_ANY, "Peak: 0.0000   RMS: 0.0000");
         sizer->Add(levelText_, 0, wxLEFT | wxRIGHT, 12);
@@ -299,59 +333,110 @@ namespace timmy::gui {
         panel->SetMinSize(wxSize(250, 200));
         auto* sizer = new wxBoxSizer(wxVERTICAL);
         sizer->Add(new wxStaticText(panel, wxID_ANY, "Recognition"), 0, wxALL, 8);
+        auto* selection = new wxStaticBoxSizer(wxVERTICAL, panel, "Recognition engine");
+        auto* selectionOwner = selection->GetStaticBox();
+        auto* resources = new wxFlexGridSizer(2, 4, 6);
+        resources->AddGrowableCol(1);
+        const auto addLabel = [&](const wxString& label) {
+            resources->Add(new wxStaticText(selectionOwner, wxID_ANY, label), 0,
+                wxALIGN_CENTER_VERTICAL);
+        };
         auto addChoice = [&](const wxString& label, wxChoice*& choice) {
-            auto* row = new wxBoxSizer(wxHORIZONTAL);
-            row->Add(new wxStaticText(panel, wxID_ANY, label), 0,
-                wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-            choice = new wxChoice(panel, wxID_ANY);
-            row->Add(choice, 1, wxEXPAND);
-            sizer->Add(row, 0, wxEXPAND | wxALL, 8);
+            addLabel(label);
+            choice = new wxChoice(selectionOwner, wxID_ANY);
+            resources->Add(choice, 1, wxEXPAND);
         };
         auto addPath = [&](const wxString& label, wxTextCtrl*& text, wxButton*& button,
                            void (MainFrame::*handler)(wxCommandEvent&)) {
+            addLabel(label);
             auto* row = new wxBoxSizer(wxHORIZONTAL);
-            row->Add(new wxStaticText(panel, wxID_ANY, label), 0,
-                wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-            text = new wxTextCtrl(panel, wxID_ANY);
-            row->Add(text, 1, wxEXPAND | wxRIGHT, 8);
-            button = new wxButton(panel, wxID_ANY, "Browse...");
+            text = new wxTextCtrl(selectionOwner, wxID_ANY);
+            row->Add(text, 1, wxEXPAND | wxRIGHT, 4);
+            button = new wxButton(selectionOwner, wxID_ANY, "Browse...");
             button->Bind(wxEVT_BUTTON, handler, this);
             row->Add(button, 0);
-            sizer->Add(row, 0, wxEXPAND | wxALL, 8);
+            resources->Add(row, 1, wxEXPAND);
         };
-        addChoice("Recognition engine:", engineChoice_);
+        addChoice("Engine:", engineChoice_);
         addPath("ASR model:", modelPathText_, modelBrowseButton_, &MainFrame::onBrowseModel);
         addPath("VAD model:", vadPathText_, vadBrowseButton_, &MainFrame::onBrowseVadModel);
         addChoice("Language:", languageChoice_);
-        recognitionButton_ = new wxButton(panel, wxID_ANY, "Start listening");
+        selection->Add(resources, 0, wxEXPAND | wxALL, 4);
+        auto* engineHint = new wxStaticText(selectionOwner, wxID_ANY,
+            "Settings below belong to the selected engine.");
+        selection->Add(engineHint, 0, wxALL, 4);
+        sizer->Add(selection, 0, wxEXPAND | wxALL, 4);
+        auto* session = new wxStaticBoxSizer(wxVERTICAL, panel, "Recognition session");
+        auto* sessionOwner = session->GetStaticBox();
+        recognitionButton_ = new wxButton(sessionOwner, wxID_ANY, "Start listening");
         recognitionButton_->Bind(wxEVT_BUTTON, &MainFrame::onToggleRecognition, this);
-        sizer->Add(recognitionButton_, 0, wxALL, 8);
-        recognitionStatusText_ = new wxStaticText(panel, wxID_ANY, "Stopped.");
-        rawTranscriptText_ = new wxStaticText(panel, wxID_ANY, "Raw transcript: -");
-        normalizedTranscriptText_ = new wxStaticText(panel, wxID_ANY,
-            "Normalized transcript: -");
-        assemblyText_ = new wxStaticText(panel, wxID_ANY, "Assembly: -");
-        semanticCommandText_ = new wxStaticText(panel, wxID_ANY,
-            "Semantic command: -");
-        sizer->Add(recognitionStatusText_, 0, wxALL, 8);
-        sizer->Add(rawTranscriptText_, 0, wxEXPAND | wxALL, 8);
-        sizer->Add(normalizedTranscriptText_, 0, wxEXPAND | wxALL, 8);
-        sizer->Add(assemblyText_, 0, wxEXPAND | wxALL, 8);
-        sizer->Add(semanticCommandText_, 0, wxEXPAND | wxALL, 8);
+        auto* sessionRow = new wxBoxSizer(wxHORIZONTAL);
+        sessionRow->Add(recognitionButton_, 0, wxRIGHT, 6);
+        recognitionStatusText_ = new wxStaticText(sessionOwner, wxID_ANY, "Stopped.");
+        recognitionStatusText_->SetMinSize(wxSize(1, -1));
+        sessionRow->Add(recognitionStatusText_, 1, wxALIGN_CENTER_VERTICAL);
+        session->Add(sessionRow, 0, wxEXPAND | wxALL, 4);
+        rawTranscriptText_ = new wxStaticText(sessionOwner, wxID_ANY, "Raw transcript: -");
+        session->Add(rawTranscriptText_, 0, wxEXPAND | wxALL, 4);
+        auto* details = new wxCollapsiblePane(sessionOwner, wxID_ANY, "Transcript details",
+            wxDefaultPosition, wxDefaultSize, wxCP_NO_TLW_RESIZE);
+        auto* detailsOwner = details->GetPane();
+        auto* detailsSizer = new wxBoxSizer(wxVERTICAL);
+        normalizedTranscriptText_ = new wxStaticText(detailsOwner, wxID_ANY, "Normalized transcript: -");
+        assemblyText_ = new wxStaticText(detailsOwner, wxID_ANY, "Assembly: -");
+        semanticCommandText_ = new wxStaticText(detailsOwner, wxID_ANY, "Semantic command: -");
+        for (auto* text : {normalizedTranscriptText_, assemblyText_, semanticCommandText_})
+        {
+            text->SetMinSize(wxSize(1, -1));
+            detailsSizer->Add(text, 0, wxEXPAND | wxBOTTOM, 4);
+        }
+        detailsOwner->SetSizer(detailsSizer);
+        session->Add(details, 0, wxEXPAND | wxALL, 4);
+        details->Bind(wxEVT_COLLAPSIBLEPANE_CHANGED, [panel](wxCollapsiblePaneEvent&) {
+            panel->Layout();
+            panel->FitInside();
+        });
+        sizer->Add(session, 0, wxEXPAND | wxALL, 4);
+        auto* benchmark = new wxStaticBoxSizer(wxVERTICAL, panel, "Recognition benchmark");
+        auto* owner = benchmark->GetStaticBox();
+        benchmarkPathSummary_ = new wxStaticText(owner, wxID_ANY,
+            "Guided live test. Select a JSONL file in the benchmark window.");
+        benchmarkPathSummary_->SetMinSize(wxSize(1, -1));
+        benchmark->Add(benchmarkPathSummary_, 0, wxEXPAND | wxALL, 4);
+        benchmarkOpenButton_ = new wxButton(owner, wxID_ANY, "Open benchmark...");
+        benchmarkOpenButton_->SetName("benchmark.open");
+        benchmarkOpenButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { openBenchmark(); });
+        benchmark->Add(benchmarkOpenButton_, 0, wxALL, 4);
+        sizer->Add(benchmark, 0, wxEXPAND | wxALL, 4);
         wxStaticBoxSizer* sectionSizer = nullptr;
+        wxFlexGridSizer* settingsGrid = nullptr;
+        std::vector<wxFlexGridSizer*> settingsGrids;
         std::string section;
         for (const auto& descriptor : core::asrSettingDescriptors(core::availableAsrEngines().front().id))
         {
             if (section != descriptor.section)
             {
                 section = descriptor.section;
-                sectionSizer = new wxStaticBoxSizer(wxVERTICAL, panel, wxString::FromUTF8(section));
-                sizer->Add(sectionSizer, 0, wxEXPAND | wxALL, 8);
+                sectionSizer = new wxStaticBoxSizer(wxVERTICAL, panel,
+                    sectionSizer ? wxString::FromUTF8(section) : wxString("Engine settings"));
+                sectionSizer->GetStaticBox()->SetToolTip(wxString::FromUTF8(section));
+                sizer->Add(sectionSizer, 0, wxEXPAND | wxALL, 4);
+                settingsGrid = new wxFlexGridSizer(4, 3, 6);
+                settingsGrid->AddGrowableCol(0);
+                settingsGrid->AddGrowableCol(2);
+                settingsGrids.push_back(settingsGrid);
+                sectionSizer->Add(settingsGrid, 0, wxEXPAND | wxALL, 4);
             }
             auto* owner = sectionSizer->GetStaticBox();
-            auto* row = new wxBoxSizer(wxHORIZONTAL);
-            row->Add(new wxStaticText(owner, wxID_ANY, wxString::FromUTF8(descriptor.label)),
-                1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+            wxString label = wxString::FromUTF8(descriptor.label);
+            label.Replace("Thread count (0 = automatic)", "Threads");
+            label.Replace("Temperature increment", "Temp. increment");
+            label.Replace("Compact vocabulary prompt", "Vocabulary prompt");
+            label.Replace("Minimum", "Min.");
+            label.Replace("Maximum", "Max.");
+            auto* settingLabel = new wxStaticText(owner, wxID_ANY, label);
+            settingLabel->SetToolTip(wxString::FromUTF8(descriptor.label));
+            settingsGrid->Add(settingLabel, 0, wxALIGN_CENTER_VERTICAL);
             wxWindow* control = nullptr;
             const auto id = descriptor.id;
             if (std::holds_alternative<bool>(descriptor.defaultValue))
@@ -389,64 +474,31 @@ namespace timmy::gui {
             }
             control->SetName(wxString::FromUTF8(id));
             tuningControls_.emplace(id, control);
-            row->Add(control, 0);
-            sectionSizer->Add(row, 0, wxEXPAND | wxALL, 4);
+            control->SetToolTip(wxString::FromUTF8(descriptor.label));
+            if (!dynamic_cast<wxCheckBox*>(control)) control->SetMinSize(wxSize(120, -1));
+            settingsGrid->Add(control, 0, wxALIGN_CENTER_VERTICAL);
         }
+        // Pair short properties when there is space; keep one pair per row on
+        // smaller windows rather than squeezing labels or numeric input.
+        panel->Bind(wxEVT_SIZE, [panel, settingsGrids](wxSizeEvent& event) {
+            const int columns = panel->GetClientSize().x >= 620 ? 4 : 2;
+            for (auto* grid : settingsGrids)
+            {
+                if (grid->GetCols() == columns) continue;
+                if (columns == 2) grid->RemoveGrowableCol(2);
+                grid->SetCols(columns);
+                if (columns == 4) grid->AddGrowableCol(2);
+            }
+            panel->Layout();
+            panel->FitInside();
+            event.Skip();
+        });
         resetRecognitionButton_ = new wxButton(panel, wxID_ANY, "Reset to defaults");
         resetRecognitionButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
             resetRecognitionSettings();
         });
         sizer->Add(resetRecognitionButton_, 0, wxALL, 8);
         refreshRecognitionSettings();
-        auto* benchmark = new wxStaticBoxSizer(wxVERTICAL, panel, "Recognition benchmark");
-        auto* owner = benchmark->GetStaticBox();
-        auto* actions = new wxBoxSizer(wxHORIZONTAL);
-        const auto button = [&](const char* label, const char* name) {
-            auto* control = new wxButton(owner, wxID_ANY, label);
-            control->SetName(name);
-            actions->Add(control, 0, wxRIGHT, 4);
-            return control;
-        };
-        benchmarkStartButton_ = button("Start benchmark", "benchmark.start");
-        benchmarkStopButton_ = button("Stop benchmark", "benchmark.stop");
-        benchmark->Add(actions, 0, wxALL, 4);
-        benchmarkStartButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { startBenchmark(); });
-        benchmarkStopButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-            if (!benchmarkSession_ || recognitionLifecycle_.stopping() || closing_) return;
-            benchmarkNavigation_ = BenchmarkNavigation::none;
-            stopRecognition();
-        });
-        benchmarkCaseText_ = new wxStaticText(owner, wxID_ANY, "Case / progress: -");
-        benchmarkPhraseText_ = new wxStaticText(owner, wxID_ANY, "Phrase to speak: -");
-        benchmarkResultText_ = new wxStaticText(owner, wxID_ANY, "Last result: -");
-        for (auto* text : {benchmarkCaseText_, benchmarkPhraseText_, benchmarkResultText_})
-        {
-            text->SetName("benchmark.label");
-            benchmark->Add(text, 0, wxEXPAND | wxALL, 4);
-        }
-        actions = new wxBoxSizer(wxHORIZONTAL);
-        benchmarkNextButton_ = button("Next", "benchmark.next");
-        benchmarkRetryButton_ = button("Retry", "benchmark.retry");
-        benchmarkNoResultButton_ = button("No result", "benchmark.noResult");
-        benchmarkNoResultButton_->SetToolTip("Record an attempt when you spoke the phrase but no final ASR result arrived.");
-        benchmarkNoResultButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { recordBenchmarkNoResult(); });
-        benchmarkNextButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { navigateBenchmark(false); });
-        benchmarkRetryButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { navigateBenchmark(true); });
-        benchmark->Add(actions, 0, wxALL, 4);
-        benchmarkPathText_ = new wxTextCtrl(owner, wxID_ANY, wxEmptyString);
-        benchmarkPathText_->SetName("benchmark.path");
-        benchmark->Add(new wxStaticText(owner, wxID_ANY, "JSONL result file (append):"), 0, wxALL, 4);
-        benchmark->Add(benchmarkPathText_, 0, wxEXPAND | wxALL, 4);
-        benchmarkBrowseButton_ = new wxButton(owner, wxID_ANY, "Select JSONL file...");
-        benchmarkBrowseButton_->SetName("benchmark.browse");
-        benchmarkBrowseButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-            if (!recognitionLifecycle_.canConfigure() || benchmarkSession_ || closing_) return;
-            wxFileDialog dialog(this, "Select benchmark result file", wxStandardPaths::Get().GetDocumentsDir(),
-                "timmy-live-v1.jsonl", "JSONL files (*.jsonl)|*.jsonl", wxFD_SAVE);
-            if (dialog.ShowModal() == wxID_OK) benchmarkPathText_->SetValue(dialog.GetPath());
-        });
-        benchmark->Add(benchmarkBrowseButton_, 0, wxALL, 4);
-        sizer->Add(benchmark, 0, wxEXPAND | wxALL, 8);
         panel->SetSizer(sizer);
         columns->Add(panel, 2, wxEXPAND | wxALL, 4);
     }
@@ -468,40 +520,52 @@ namespace timmy::gui {
             &MainFrame::onOutputConfigurationChanged, this);
         sizer->Add(outputEnabledCheck_, 0, wxALL, 12);
 
-        auto* grid = new wxFlexGridSizer(2, 8, 12);
+        auto* grid = new wxFlexGridSizer(2, 4, 6);
+        wxWindow* settingsOwner = panel;
         grid->AddGrowableCol(1);
         auto addLabel = [&](const wxString& label) {
-            grid->Add(new wxStaticText(panel, wxID_ANY, label), 0,
+            grid->Add(new wxStaticText(settingsOwner, wxID_ANY, label), 0,
                 wxALIGN_CENTER_VERTICAL);
         };
         auto addText = [&](const wxString& label, wxTextCtrl*& text,
                            const std::string& value) {
             addLabel(label);
-            text = new wxTextCtrl(panel, wxID_ANY, wxString::FromUTF8(value));
+            text = new wxTextCtrl(settingsOwner, wxID_ANY, wxString::FromUTF8(value));
             grid->Add(text, 1, wxEXPAND);
         };
-        addLabel("Profile:");
-        outputProfileChoice_ = new wxChoice(panel, wxID_ANY);
+        auto* profileBox = new wxStaticBoxSizer(wxVERTICAL, panel, "Output profile");
+        auto* profileOwner = profileBox->GetStaticBox();
+        auto* profileRow = new wxBoxSizer(wxHORIZONTAL);
+        profileRow->Add(new wxStaticText(profileOwner, wxID_ANY, "Profile:"), 0,
+            wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        outputProfileChoice_ = new wxChoice(profileOwner, wxID_ANY);
         outputProfileChoice_->Append("LT Hydra II");
         outputProfileChoice_->Append("Generic OSC");
         outputProfileChoice_->SetSelection(0);
         outputProfileChoice_->Bind(wxEVT_CHOICE,
             &MainFrame::onOutputConfigurationChanged, this);
-        grid->Add(outputProfileChoice_, 1, wxEXPAND);
+        profileRow->Add(outputProfileChoice_, 1, wxEXPAND);
+        profileBox->Add(profileRow, 0, wxEXPAND | wxALL, 4);
+        profileBox->Add(new wxStaticText(profileOwner, wxID_ANY,
+            "Settings below belong to this profile."), 0, wxALL, 4);
+        sizer->Add(profileBox, 0, wxEXPAND | wxALL, 4);
+        auto* settings = new wxStaticBoxSizer(wxVERTICAL, panel, "Profile settings");
+        settingsOwner = settings->GetStaticBox();
         addText("Host:", outputHostText_, defaults.host);
         outputHostText_->SetHint("Console IP or hostname");
         addText("Port:", outputPortText_, defaults.port);
-        addText("Hydra key hold (ms):", hydraHoldText_, defaults.keyHoldMs);
-        addText("Hydra key gap (ms):", hydraGapText_, defaults.keyGapMs);
+        addText("Key hold (ms):", hydraHoldText_, defaults.keyHoldMs);
+        addText("Key gap (ms):", hydraGapText_, defaults.keyGapMs);
         const auto timingHint = wxString::Format("Maximum %u ms; default 30 ms",
             static_cast<unsigned int>(maximumHydraTimingMs));
         hydraHoldText_->SetToolTip(timingHint);
         hydraGapText_->SetToolTip(timingHint);
-        addLabel("Hydra pre-clear:");
-        hydraPreClearCheck_ = new wxCheckBox(panel, wxID_ANY, "Clear before selection commands");
+        addLabel("Pre-clear:");
+        hydraPreClearCheck_ = new wxCheckBox(settingsOwner, wxID_ANY, "Clear before selection");
         hydraPreClearCheck_->SetValue(defaults.preClear);
         grid->Add(hydraPreClearCheck_, 0, wxALIGN_CENTER_VERTICAL);
-        sizer->Add(grid, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
+        settings->Add(grid, 0, wxEXPAND | wxALL, 4);
+        sizer->Add(settings, 0, wxEXPAND | wxALL, 4);
 
         executionStatusText_ = new wxStaticText(panel, wxID_ANY, "OSC output: Disarmed");
         executionResultText_ = new wxStaticText(panel, wxID_ANY, "Execution: -");
@@ -742,6 +806,7 @@ namespace timmy::gui {
         }
         if (benchmarkSession_)
         {
+            drainBenchmarkResults();
             if (benchmarkNavigation_ != BenchmarkNavigation::none
                 && recognitionLifecycle_.diagnostic().empty())
             {
@@ -756,6 +821,7 @@ namespace timmy::gui {
             try { benchmarkSession_->close(); }
             catch (const std::exception& error) { stopDiagnostic_ = wxString::FromUTF8(error.what()); }
             benchmarkSession_.reset();
+            benchmarkResults_.reset();
             benchmarkNavigation_ = BenchmarkNavigation::none;
         }
         updateRecognitionControls();
@@ -764,6 +830,11 @@ namespace timmy::gui {
         recognitionStatusText_->SetLabel(!diagnostic.empty()
             ? wxString::FromUTF8(diagnostic)
             : (stopDiagnostic_.empty() ? wxString("Stopped.") : stopDiagnostic_));
+        if (benchmarkDialog_)
+        {
+            benchmarkDialog_->stopped(!diagnostic.empty() ? wxString::FromUTF8(diagnostic) : stopDiagnostic_);
+            if (benchmarkCloseRequested_) { benchmarkDialog_->Hide(); benchmarkCloseRequested_ = false; }
+        }
         stopDiagnostic_.clear();
     }
 
@@ -771,7 +842,7 @@ namespace timmy::gui {
     // regardless of whether command output is armed.
     void MainFrame::updateRecognitionControls()
     {
-        const bool idle = recognitionLifecycle_.canConfigure() && !closing_;
+        const bool idle = recognitionLifecycle_.canConfigure() && !closing_ && !benchmarkSession_;
         const bool stopping = recognitionLifecycle_.stopping() || closing_;
         recognitionButton_->SetLabel(stopping ? "Stopping..."
             : (recognitionLifecycle_.listening() ? "Stop listening" : "Start listening"));
@@ -793,7 +864,7 @@ namespace timmy::gui {
     // Freezes output options for the whole recognition/execution lifecycle.
     void MainFrame::updateOutputControls()
     {
-        const bool idle = recognitionLifecycle_.canConfigure() && !closing_;
+        const bool idle = recognitionLifecycle_.canConfigure() && !closing_ && !benchmarkSession_;
         const bool hydra = idle && outputProfileChoice_->GetSelection() == 0;
         outputEnabledCheck_->Enable(!recognitionLifecycle_.stopping() && !closing_ && !benchmarkSession_);
         outputProfileChoice_->Enable(idle);
@@ -920,15 +991,15 @@ namespace timmy::gui {
 
     void MainFrame::startBenchmark()
     {
-        if (!recognitionLifecycle_.canStart() || benchmarkSession_ || closing_) return;
-        if (benchmarkPathText_->GetValue().empty())
+        if (!benchmarkDialog_ || !recognitionLifecycle_.canStart() || benchmarkSession_ || closing_) return;
+        if (benchmarkDialog_->resultPath().empty())
         {
-            benchmarkResultText_->SetLabel("Last result: Select a JSONL result file first.");
+            benchmarkDialog_->showError("Select a JSONL result file first.");
             return;
         }
-        if (wxStringToPath(benchmarkPathText_->GetValue()).extension() != ".jsonl")
+        if (wxStringToPath(benchmarkDialog_->resultPath()).extension() != ".jsonl")
         {
-            benchmarkResultText_->SetLabel("Last result: Result file must have a .jsonl extension.");
+            benchmarkDialog_->showError("Result file must have a .jsonl extension.");
             return;
         }
         armedOutputGeneration_.store(0, std::memory_order_release);
@@ -942,9 +1013,7 @@ namespace timmy::gui {
 
     void MainFrame::showBenchmarkAttempt(const core::RecognitionBenchmarkAttempt& attempt)
     {
-        benchmarkResultText_->SetLabel(wxString::FromUTF8("Last result: " + attempt.caseId
-            + " attempt " + std::to_string(attempt.attempt) + (attempt.passed ? " PASS" : " FAIL")
-            + (attempt.outcome == core::BenchmarkRecognitionOutcome::noResult ? " (No ASR result)" : "")));
+        benchmarkDialog_->showAttempt(attempt);
         updateBenchmarkControls();
     }
 
@@ -979,30 +1048,65 @@ namespace timmy::gui {
         stopRecognition();
     }
 
+    void MainFrame::openBenchmark()
+    {
+        if (closing_) return;
+        benchmarkCloseRequested_ = false;
+        if (!benchmarkDialog_)
+        {
+            benchmarkDialog_ = new BenchmarkDialog(this, {
+                [this] { startBenchmark(); },
+                [this] {
+                    if (!benchmarkSession_ || recognitionLifecycle_.stopping() || closing_) return;
+                    benchmarkNavigation_ = BenchmarkNavigation::none;
+                    stopRecognition();
+                },
+                [this] { navigateBenchmark(false); },
+                [this] { navigateBenchmark(true); },
+                [this] { recordBenchmarkNoResult(); },
+                [this] { closeBenchmark(); },
+                [this](const wxString& path) {
+                    benchmarkPathSummary_->SetLabel(path.empty() ? wxString("JSONL file: not selected") : "JSONL: " + wxFileName(path).GetFullName());
+                    benchmarkPathSummary_->SetToolTip(path);
+                    benchmarkPathSummary_->Wrap(std::max(100, benchmarkPathSummary_->GetParent()->GetClientSize().x - 16));
+                    benchmarkPathSummary_->GetParent()->Layout();
+                }
+            });
+        }
+        updateBenchmarkControls();
+        benchmarkDialog_->Show();
+        benchmarkDialog_->Raise();
+    }
+
+    void MainFrame::closeBenchmark()
+    {
+        if (!benchmarkDialog_ || closing_) return;
+        if (!benchmarkSession_) { benchmarkDialog_->Hide(); return; }
+        benchmarkCloseRequested_ = true;
+        benchmarkNavigation_ = BenchmarkNavigation::none;
+        stopRecognition();
+    }
+
     void MainFrame::updateBenchmarkControls()
     {
+        benchmarkOpenButton_->Enable(!closing_);
+        if (!benchmarkDialog_) return;
+        drainBenchmarkResults();
         const bool active = benchmarkSession_ != nullptr;
-        const bool idle = recognitionLifecycle_.canConfigure() && !closing_ && !active;
-        const bool listening = recognitionLifecycle_.listening() && !closing_;
-        const bool reviewed = active && listening && !benchmarkSession_->awaitingResult();
-        benchmarkStartButton_->Enable(idle);
-        benchmarkStopButton_->Enable(active && listening);
-        benchmarkNextButton_->Enable(reviewed && benchmarkSession_->index() + 1 < core::liveBenchmarkCases().size());
-        benchmarkRetryButton_->Enable(reviewed);
-        benchmarkNoResultButton_->Enable(active && listening && benchmarkSession_->awaitingResult());
-        benchmarkBrowseButton_->Enable(idle);
-        benchmarkPathText_->Enable(idle);
-        if (active)
+        benchmarkDialog_->updateControls(recognitionLifecycle_.canConfigure() && !closing_,
+            active, recognitionLifecycle_.listening(), recognitionLifecycle_.stopping() || closing_,
+            active && benchmarkSession_->awaitingResult(),
+            active && benchmarkSession_->index() + 1 == core::liveBenchmarkCases().size());
+    }
+
+    void MainFrame::drainBenchmarkResults()
+    {
+        if (!benchmarkResults_ || !benchmarkDialog_) return;
+        for (const auto& [attempt, transcript] : benchmarkResults_->take())
         {
-            const auto index = benchmarkSession_->index();
-            const auto& test = core::liveBenchmarkCases().at(index);
-            benchmarkCaseText_->SetLabel(wxString::FromUTF8("Case / progress: " + test.id + " / "
-                + test.category + " (" + std::to_string(index + 1) + "/"
-                + std::to_string(core::liveBenchmarkCases().size()) + ")"));
-            benchmarkPhraseText_->SetLabel("Phrase to speak: " + wxString::FromUTF8(test.phrase));
-            benchmarkPhraseText_->Wrap(std::max(100, benchmarkPhraseText_->GetParent()->GetClientSize().GetWidth() - 16));
+            benchmarkDialog_->showDetails(transcript);
+            benchmarkDialog_->showAttempt(attempt);
         }
-        benchmarkCaseText_->GetParent()->Layout();
     }
 
     // Starts or stops one generation of recognition from the selected channel.
@@ -1027,6 +1131,7 @@ namespace timmy::gui {
         catch (const std::exception& error)
         {
             recognitionStatusText_->SetLabel(wxString::FromUTF8(error.what()));
+            if (benchmarkStartRequested_ && benchmarkDialog_) benchmarkDialog_->showError(wxString::FromUTF8(error.what()));
             return;
         }
         if (!recognitionLifecycle_.beginListening()) return;
@@ -1061,19 +1166,21 @@ namespace timmy::gui {
             if (benchmarkStartRequested_)
             {
                 benchmarkSession_ = std::make_shared<core::RecognitionBenchmarkSession>(
-                    wxStringToPath(benchmarkPathText_->GetValue()),
+                    wxStringToPath(benchmarkDialog_->resultPath()),
                     core::RecognitionBenchmarkSnapshot{backendOverride_ ? "injected" : "whisper.cpp", configuration,
                         resources.voiceActivityModelPath, settings, languageProfile,
                         {deviceChoice_->GetStringSelection().ToStdString(wxConvUTF8), channelSelector_->channelIndex(),
                             channelChoice_->GetSelection() == wxNOT_FOUND ? std::nullopt
                                 : std::optional<std::string>{channelChoice_->GetStringSelection().ToStdString(wxConvUTF8)}}});
                 benchmarkStartRequested_ = false;
-                benchmarkResultText_->SetLabel("Last result: -");
+                benchmarkResults_ = std::make_shared<BenchmarkResults>();
+                benchmarkDialog_->beginSession(benchmarkSession_->snapshot());
             }
+            if (benchmarkSession_) benchmarkDialog_->setCase(benchmarkSession_->index());
             recognitionPipeline_ = std::make_unique<core::RecognitionPipeline>(
                 channelSelector_, std::move(backend), languageProfile, benchmarkSession_ != nullptr);
             recognitionObserver_ = std::make_shared<GuiRecognitionObserver>(*this, generation,
-                armedOutputGeneration_, benchmarkSession_);
+                armedOutputGeneration_, benchmarkSession_, benchmarkResults_);
             recognitionPipeline_->setObserver(recognitionObserver_);
             updateRecognitionControls();
             const auto result = recognitionPipeline_->start(configuration);
@@ -1179,7 +1286,7 @@ namespace timmy::gui {
         semanticCommandText_->GetParent()->Layout();
         if (benchmarkSession_ && payload.benchmarkAttempt)
         {
-            showBenchmarkAttempt(*payload.benchmarkAttempt);
+            updateBenchmarkControls();
         }
 
         // Submission only enqueues the produced semantic command. The existing

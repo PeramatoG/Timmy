@@ -129,6 +129,7 @@ if(TIMMY_BUILD_GUI)
     add_executable(timmy_gui WIN32
         apps/gui/timmy_app.cpp
         apps/gui/main_frame.cpp
+        apps/gui/benchmark_dialog.cpp
     )
 
     set_target_properties(timmy_gui PROPERTIES
@@ -170,7 +171,8 @@ if(TIMMY_BUILD_GUI)
 
         add_executable(timmy_gui_recognition_controls_tests
             tests/gui_recognition_controls_test.cpp
-            apps/gui/main_frame.cpp)
+            apps/gui/main_frame.cpp
+            apps/gui/benchmark_dialog.cpp)
         target_include_directories(timmy_gui_recognition_controls_tests PRIVATE
             ${PROJECT_SOURCE_DIR}/apps/gui)
         target_link_libraries(timmy_gui_recognition_controls_tests PRIVATE

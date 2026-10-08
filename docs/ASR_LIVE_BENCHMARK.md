@@ -1,9 +1,33 @@
 # Guided live recognition benchmark (ASR-BENCH-010)
 
 In the Recognition column, select the engine, local model and VAD model, language,
-and recognition tuning as usual. Select a `.jsonl` result file (or enter its path),
-then press **Start benchmark**. Files are appended to, so sessions can share one
-file; every line carries a distinct session ID and a UTC timestamp.
+and recognition tuning as usual. Press **Open benchmark...** in the compact
+Recognition benchmark section. In the dedicated window, select a `.jsonl` result
+file (or enter its path), then press **Start benchmark**. The configuration freezes
+at Start, rather than when the window opens. Files are appended to, so sessions
+can share one file; every line carries a distinct session ID and a UTC timestamp.
+
+The primary view shows the corpus version, result path, frozen engine/model/
+language/profile summary, case/category/progress, phrase, operator instructions
+and last result. PASS is green, FAIL is red, and active states have a neutral blue
+accent. The states guide starting, listening/waiting, operator review, stopping
+and finishing. Listening and waiting for speech end/recognition share one state:
+the current backend-neutral API does not publish speech-boundary progress events.
+There are no automatic timeouts. **Details** expands to show raw/normalized
+transcripts, assembly, semantic command, validation/rendering and available timings.
+
+PASS and FAIL counters count recorded attempts, including retries. **No result**
+is a subset of those counts, so an expected non-command with no ASR result adds
+to both PASS and No result. Starting a new session resets the displayed counters.
+At the final case the state is **Finished**; Retry remains available and the main
+configuration stays frozen until Stop or Close completes. Closing the benchmark
+window waits asynchronously for its recognition resources before hiding it.
+Reopening reuses the window and retains the selected path and last session summary.
+
+The main GUI separates engine selection, session controls and engine/VAD settings.
+Short tuning properties share rows in wider windows and stack in narrower ones.
+Output profile selection is separated from profile settings; transcript details
+can be collapsed to keep the main recognition view compact.
 
 The definitive initial `timmy-live-v1` corpus contains 36 standalone cases:
 channels/fixtures/groups, 0/50/100 intensity, ranges, lists, exclusions,

@@ -210,7 +210,8 @@ generic mapping and disables the Hydra controls. Hydra hold and gap each accept
 No output settings are persisted. Configuration can be edited while stopped,
 including while **Enable OSC command output** is unchecked.
 
-Recognition tuning is separated into **Whisper / Advanced** and **VAD / Endpoint**.
+Recognition tuning is separated into **Engine settings** (currently Whisper)
+and **VAD / Endpoint**.
 Thread count **0** keeps automatic selection clamped to 1–4; all tuning starts with
 the existing command-mode defaults. Endpoint durations are edited in milliseconds
 and converted to 16 kHz samples inside the backend. **Reset to defaults** restores
@@ -281,10 +282,13 @@ compatibility boundary and the future validated semantic fallback extension poin
 
 ### Guided live recognition benchmark (ASR-BENCH-010)
 
-Use **Recognition benchmark** in the Recognition column to run the 36-case
-`timmy-live-v1` corpus with the current frozen ASR configuration. Select a JSONL
-result file, Start benchmark, speak the displayed phrase, then choose Next or
-Retry after reviewing PASS/FAIL. Use **No result** when no final ASR result arrives.
+Choose **Open benchmark...** under Recognition benchmark to open the dedicated
+operator window for the 36-case `timmy-live-v1` corpus. Select a JSONL result file,
+press **Start benchmark**, speak the prominently displayed phrase, then choose
+**Next** or **Retry** after reviewing PASS/FAIL. State instructions, attempt counts
+and a frozen configuration summary guide the session; technical transcripts and
+timings are available under **Details**. Use **No result** when no final ASR result
+arrives, and **Stop benchmark** or **Close** to release the frozen configuration.
 OSC stays disarmed throughout the session. Results compare semantic commands and
 include the explicit recognition outcome, frozen audio source, tuning, language
 and optional inference/audio timings. See [the benchmark guide](docs/ASR_LIVE_BENCHMARK.md)

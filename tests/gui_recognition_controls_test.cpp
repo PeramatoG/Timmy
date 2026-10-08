@@ -19,6 +19,10 @@
 #include <wx/spinctrl.h>
 #include <wx/notebook.h>
 #include <wx/scrolwin.h>
+#include <wx/dialog.h>
+#include <wx/collpane.h>
+#include <wx/gauge.h>
+#include <wx/sizer.h>
 
 #include <atomic>
 #include <chrono>
@@ -239,6 +243,11 @@ namespace {
         }
         wxStaticText& label(const wxString& prefix)
         {
+            if (prefix == "Last result:") {
+                auto* result = dynamic_cast<wxStaticText*>(wxWindow::FindWindowByName("benchmark.result", frame));
+                REQUIRE(result != nullptr);
+                return *result;
+            }
             for (auto* label : labels)
                 if (label->GetLabel().StartsWith(prefix)) return *label;
             REQUIRE(false);
@@ -471,6 +480,10 @@ namespace {
         for (auto* column : columns) REQUIRE(column->IsShownOnScreen());
         REQUIRE(columns[0]->GetPosition().x < columns[1]->GetPosition().x);
         REQUIRE(columns[1]->GetPosition().x < columns[2]->GetPosition().x);
+        auto* launcher = wxWindow::FindWindowByName("benchmark.open", fixture.frame);
+        REQUIRE(launcher != nullptr);
+        REQUIRE(launcher->GetScreenPosition().y + launcher->GetSize().y
+            <= columns[1]->GetScreenPosition().y + columns[1]->GetClientSize().y);
         auto checkDefaults = [&] {
             for (const auto& descriptor : core::asrSettingDescriptors(core::AsrEngineId::whisperCpp))
             {
@@ -485,6 +498,15 @@ namespace {
             }
         };
         checkDefaults();
+        auto* settingLabel = wxWindow::FindWindowByLabel("Threads", fixture.frame);
+        REQUIRE(settingLabel != nullptr);
+        auto* propertyGrid = dynamic_cast<wxFlexGridSizer*>(settingLabel->GetContainingSizer());
+        REQUIRE(propertyGrid != nullptr && propertyGrid->GetCols() == 4);
+        REQUIRE(wxWindow::FindWindowByLabel("Engine settings", fixture.frame) != nullptr);
+        REQUIRE(wxWindow::FindWindowByLabel("Output profile", fixture.frame) != nullptr);
+        REQUIRE(wxWindow::FindWindowByLabel("Profile settings", fixture.frame) != nullptr);
+        auto* meter = dynamic_cast<wxGauge*>(wxWindow::FindWindowByName("audio.level", fixture.frame));
+        REQUIRE(meter != nullptr && meter->GetForegroundColour().Green() > meter->GetForegroundColour().Red());
         auto* threads = dynamic_cast<wxSpinCtrl*>(wxWindow::FindWindowByName("whisper.threads", fixture.frame));
         REQUIRE(threads != nullptr);
         const auto model = fixture.texts[0]->GetValue();
@@ -517,6 +539,7 @@ namespace {
         checkDefaults();
         fixture.frame->SetSize(1100, 500);
         pumpEvents();
+        REQUIRE(propertyGrid->GetCols() == 2);
         for (auto* column : columns) REQUIRE(column->IsShownOnScreen());
         click(fixture.recognition());
         waitFor([&] { return fixture.backend->starts == 1; });
@@ -544,6 +567,12 @@ namespace {
     template<class Control>
     Control& benchmarkControl(FrameFixture& fixture, const char* name)
     {
+        if (!wxWindow::FindWindowByName("benchmark.window", fixture.frame))
+        {
+            auto* launcher = dynamic_cast<wxButton*>(wxWindow::FindWindowByName("benchmark.open", fixture.frame));
+            REQUIRE(launcher != nullptr);
+            click(*launcher);
+        }
         auto* control = dynamic_cast<Control*>(wxWindow::FindWindowByName(name, fixture.frame));
         REQUIRE(control != nullptr);
         return *control;
@@ -598,6 +627,14 @@ namespace {
         pumpEvents();
         REQUIRE(resultLines(path).size() == 1 && next.IsEnabled() && retry.IsEnabled());
         REQUIRE(fixture.label("Last result:").GetLabel().Contains("es-num-1 attempt 1 PASS"));
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel() == "Waiting for operator decision");
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.instruction").GetLabel().Contains("Next or Retry"));
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.counts").GetLabel() == "PASS: 1   FAIL: 0   No result: 0");
+        const auto passColour = fixture.label("Last result:").GetForegroundColour();
+        REQUIRE(passColour.Green() > passColour.Red());
+        const auto frozenSummary = benchmarkControl<wxStaticText>(fixture, "benchmark.summary").GetLabel();
+        REQUIRE(frozenSummary.Contains("Frozen engine: injected") && frozenSummary.Contains("Language: es"));
+        REQUIRE(benchmarkControl<wxTextCtrl>(fixture, "benchmark.detailsText").GetValue().Contains("Raw transcript: Channel 1 At 50"));
         fixture.backend->blockStop();
         click(retry);
         waitFor([&] { return fixture.backend->stopEntered.load(); });
@@ -612,6 +649,10 @@ namespace {
         fixture.backend->emit("Channel 5 At 50");
         pumpEvents();
         REQUIRE(fixture.label("Last result:").GetLabel().Contains("es-num-1 attempt 2 FAIL"));
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.summary").GetLabel() == frozenSummary);
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.counts").GetLabel() == "PASS: 1   FAIL: 1   No result: 0");
+        const auto failColour = fixture.label("Last result:").GetForegroundColour();
+        REQUIRE(failColour.Red() > failColour.Green());
         auto lines = resultLines(path);
         REQUIRE(lines.size() == 2);
         REQUIRE(lines.back().find("\"attempt_number\":2") != std::string::npos);
@@ -633,6 +674,7 @@ namespace {
             REQUIRE(fixture.emitter->calls == 0 && fixture.factories == 0);
         }
         REQUIRE(!next.IsEnabled() && retry.IsEnabled());
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel() == "Finished");
         REQUIRE(resultLines(path).size() == core::liveBenchmarkCases().size() + 1);
         click(stop);
         waitFor([&] { return start.IsEnabled(); });
@@ -666,6 +708,8 @@ namespace {
         click(stop);
         waitFor([&] { return start.IsEnabled(); });
         REQUIRE(resultLines(path).size() == 1);
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.counts").GetLabel() == "PASS: 1   FAIL: 0   No result: 0");
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 1 PASS"));
         click(start);
         fixture.backend->emit("Channel 1 At 50");
         pumpEvents();
@@ -705,6 +749,8 @@ namespace {
         fixture.choices[1]->GetEventHandler()->ProcessEvent(channelChanged);
         click(start);
         REQUIRE(noResult.IsEnabled() && !next.IsEnabled() && !retry.IsEnabled());
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel().Contains("Listening"));
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.instruction").GetLabel().Contains("Speak the displayed phrase once"));
         REQUIRE(!fixture.choices[0]->IsEnabled() && !fixture.choices[1]->IsEnabled());
         fixture.choices[0]->SetString(0, "synthetic-changed-device");
         fixture.choices[1]->SetString(1, "synthetic-changed-channel");
@@ -714,6 +760,7 @@ namespace {
         REQUIRE(fixture.label("Raw transcript:").GetLabel().Contains("No ASR result"));
         REQUIRE(!noResult.IsEnabled() && next.IsEnabled() && retry.IsEnabled());
         REQUIRE(resultLines(path).size() == 1);
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.counts").GetLabel() == "PASS: 0   FAIL: 1   No result: 1");
         click(noResult);
         fixture.backend->emit("Channel 1 At 50"); // Late results cannot overwrite the manual outcome.
         pumpEvents();
@@ -772,6 +819,61 @@ namespace {
         std::filesystem::remove(path);
     }
 
+    void dedicatedBenchmarkOpenCloseAndLayout()
+    {
+        FrameFixture fixture;
+        auto* open = dynamic_cast<wxButton*>(wxWindow::FindWindowByName("benchmark.open", fixture.frame));
+        REQUIRE(open != nullptr);
+        REQUIRE(wxWindow::FindWindowByName("benchmark.start", fixture.frame) == nullptr);
+        click(*open);
+        auto& dialog = benchmarkControl<wxDialog>(fixture, "benchmark.window");
+        pumpEvents();
+        REQUIRE(dialog.IsShown());
+        auto& start = benchmarkControl<wxButton>(fixture, "benchmark.start");
+        REQUIRE(wxGetTopLevelParent(&start) == &dialog);
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel() == "Ready to start");
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.corpus").GetLabel().Contains(core::liveBenchmarkCorpusVersion));
+        auto& details = benchmarkControl<wxCollapsiblePane>(fixture, "benchmark.details");
+        REQUIRE(details.IsCollapsed());
+        const auto path = std::filesystem::temp_directory_path() / "timmy-gui-dialog-close.jsonl";
+        std::filesystem::remove(path);
+        auto& file = benchmarkControl<wxTextCtrl>(fixture, "benchmark.path");
+        file.SetValue(wxString::FromUTF8(path.string()));
+        click(start);
+        pumpEvents();
+        details.Collapse(false);
+        wxCollapsiblePaneEvent expanded(&details, details.GetId(), false);
+        details.GetEventHandler()->ProcessEvent(expanded);
+        dialog.SetSize(520, 480);
+        pumpEvents();
+        for (const auto* name : {"benchmark.start", "benchmark.stop", "benchmark.next",
+                "benchmark.retry", "benchmark.noResult", "benchmark.close"})
+        {
+            auto& button = benchmarkControl<wxButton>(fixture, name);
+            REQUIRE(button.IsShownOnScreen());
+            REQUIRE(button.GetRect().GetRight() <= dialog.GetClientSize().x);
+            REQUIRE(button.GetRect().GetBottom() <= dialog.GetClientSize().y);
+        }
+        fixture.backend->blockStop();
+        dialog.Close(); // Title-bar close waits for the same asynchronous shutdown.
+        waitFor([&] { return fixture.backend->stopEntered.load(); });
+        REQUIRE(dialog.IsShown() && !start.IsEnabled());
+        REQUIRE(!fixture.texts[0]->IsEnabled() && !fixture.host().IsEnabled());
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel().Contains("Stopping"));
+        fixture.responsive();
+        fixture.backend->releaseStop();
+        waitFor([&] { return !dialog.IsShown(); });
+        REQUIRE(fixture.texts[0]->IsEnabled() && fixture.host().IsEnabled());
+        REQUIRE(fixture.factories == 0 && fixture.emitter->calls == 0);
+        click(*open);
+        REQUIRE(wxWindow::FindWindowByName("benchmark.window", fixture.frame) == &dialog);
+        REQUIRE(dialog.IsShown() && file.GetValue() == wxString::FromUTF8(path.string()));
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel() == "Stopped");
+        click(benchmarkControl<wxButton>(fixture, "benchmark.close"));
+        REQUIRE(!dialog.IsShown());
+        std::filesystem::remove(path);
+    }
+
     class TestApp final : public wxApp
     {
     public:
@@ -790,6 +892,7 @@ int main(int argc, char** argv)
 {
     REQUIRE(wxEntryStart(argc, argv));
     REQUIRE(wxTheApp->CallOnInit());
+    dedicatedBenchmarkOpenCloseAndLayout();
     benchmarkNoResultAndFrozenAudioSource();
     guidedBenchmarkControlsAndIsolation();
     benchmarkStopPreservesUnprocessedResultAndRecoversFailure();
