@@ -404,3 +404,20 @@ else()
     target_compile_options(timmy_recognition_settings_tests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME timmy.recognition_settings COMMAND timmy_recognition_settings_tests)
+
+add_executable(timmy_recognition_benchmark_tests recognition_benchmark_test.cpp)
+target_link_libraries(timmy_recognition_benchmark_tests PRIVATE timmy_core)
+add_test(NAME timmy.recognition_benchmark COMMAND timmy_recognition_benchmark_tests)
+if(MSVC)
+    target_compile_options(timmy_recognition_benchmark_tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(timmy_recognition_benchmark_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+# Additional strict JSON decoding uses the standard library only; the C++ tests
+# remain available on developer machines without a Python interpreter.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME timmy.benchmark_jsonl COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/benchmark_jsonl_test.py
+        $<TARGET_FILE:timmy_recognition_benchmark_tests>)
+endif()

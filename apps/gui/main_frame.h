@@ -19,6 +19,7 @@
 #include "timmy/audio/audio_meter.h"
 #include "timmy/core/recognition_pipeline.h"
 #include "timmy/core/asr_engine_factory.h"
+#include "timmy/core/recognition_benchmark.h"
 
 #include <wx/frame.h>
 #include <wx/timer.h>
@@ -66,6 +67,12 @@ namespace timmy::gui {
         void resolveDefaultResources();
         void startSelectedDevice();
         void stopRecognition();
+        void startRecognition();
+        void startBenchmark();
+        void navigateBenchmark(bool retry);
+        void recordBenchmarkNoResult();
+        void showBenchmarkAttempt(const core::RecognitionBenchmarkAttempt& attempt);
+        void updateBenchmarkControls();
         void pollShutdown();
         void updateRecognitionControls();
         void updateOutputControls();
@@ -106,6 +113,20 @@ namespace timmy::gui {
         wxButton* vadBrowseButton_ = nullptr;
         wxChoice* languageChoice_ = nullptr;
         wxButton* recognitionButton_ = nullptr;
+        wxButton* benchmarkStartButton_ = nullptr;
+        wxButton* benchmarkStopButton_ = nullptr;
+        wxButton* benchmarkNextButton_ = nullptr;
+        wxButton* benchmarkRetryButton_ = nullptr;
+        wxButton* benchmarkNoResultButton_ = nullptr;
+        wxButton* benchmarkBrowseButton_ = nullptr;
+        wxTextCtrl* benchmarkPathText_ = nullptr;
+        wxStaticText* benchmarkCaseText_ = nullptr;
+        wxStaticText* benchmarkPhraseText_ = nullptr;
+        wxStaticText* benchmarkResultText_ = nullptr;
+        std::shared_ptr<core::RecognitionBenchmarkSession> benchmarkSession_;
+        enum class BenchmarkNavigation { none, next, retry };
+        BenchmarkNavigation benchmarkNavigation_{BenchmarkNavigation::none};
+        bool benchmarkStartRequested_{false};
         wxStaticText* recognitionStatusText_ = nullptr;
         wxStaticText* rawTranscriptText_ = nullptr;
         wxStaticText* normalizedTranscriptText_ = nullptr;

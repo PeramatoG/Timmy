@@ -61,11 +61,19 @@ namespace timmy::asr {
         final
     };
 
+    // Durations describe actual inference input/work; absent for backends without metrics.
+    struct RecognitionMetrics
+    {
+        std::optional<double> audioDurationSeconds;
+        std::optional<double> inferenceDurationSeconds;
+    };
+
     struct AsrResult
     {
         std::string transcript;
         AsrResultKind kind = AsrResultKind::final;
         std::optional<std::string> detectedLanguage;
+        RecognitionMetrics metrics{};
     };
 
     enum class AsrDiagnosticCode

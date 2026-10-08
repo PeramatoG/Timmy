@@ -77,7 +77,7 @@ namespace timmy::core {
     // Creates a pipeline attached to an existing selected audio channel.
     RecognitionPipeline::RecognitionPipeline(
         std::shared_ptr<audio::AudioChannelSelector> channelSelector,
-        std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile)
+        std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile, bool isolateUtterances)
         : channelSelector_(std::move(channelSelector)),
           formatAdapter_(std::make_shared<audio::AudioFormatAdapter>()),
           backend_(std::move(backend)),
@@ -85,7 +85,8 @@ namespace timmy::core {
           profile_(std::move(profile)),
           normalizer_(profile_.normalization),
           assembler_(std::make_unique<command::CommandAssembler>(profile_.parsing)),
-          semanticParser_(profile_.parsing)
+          semanticParser_(profile_.parsing),
+          isolateUtterances_(isolateUtterances)
     {
         backend_->setResultListener(backendListener_);
         formatAdapter_->addConsumer(backend_);
@@ -201,6 +202,11 @@ namespace timmy::core {
             {
                 return;
             }
+            if (isolateUtterances_)
+            {
+                assembler_->reset();
+                commandContext_.reset();
+            }
             assembly = assembler_->accept(normalized.normalizedText, commandContext_);
             if (assembly.state == command::AssemblyState::complete)
             {
@@ -226,7 +232,9 @@ namespace timmy::core {
                 semanticState,
                 std::move(semantic.command),
                 std::move(validation),
-                std::move(rendering)
+                std::move(rendering),
+                result.detectedLanguage,
+                result.metrics
             });
         }
     }
