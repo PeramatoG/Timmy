@@ -520,7 +520,7 @@ namespace {
         threads->SetValue(7);
         click(fixture.reset());
         REQUIRE(threads->GetValue() == 7);
-        fixture.backend->holdStop();
+        fixture.backend->blockStop();
         click(fixture.recognition());
         waitFor([&] { return fixture.backend->stopEntered.load(); });
         for (auto* control : fixture.tuning) REQUIRE(!control->IsEnabled());
