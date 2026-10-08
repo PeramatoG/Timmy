@@ -1,5 +1,6 @@
 """Validate benchmark output with an independent strict JSON decoder."""
 import json
+from pathlib import Path
 import subprocess
 import sys
 
@@ -23,7 +24,8 @@ assert entry["result"] == "PASS" and entry["expected_no_command"] is False
 assert entry["attempt_number"] == 2 and entry["retry_number"] == 1
 assert entry["metrics"] == {"audio_duration_seconds": 2.5, "inference_duration_seconds": 0.75}
 snapshot = entry["recognition_settings"]
-assert snapshot["model_path"] == "models/niño.bin" and snapshot["vad_model_path"] == "models/vad.bin"
+assert snapshot["model_path"] == str(Path("models/niño.bin"))
+assert snapshot["vad_model_path"] == str(Path("models/vad.bin"))
 assert snapshot["language"] == "es" and snapshot["engine_id"] == entry["asr_engine_id"]
 assert len(snapshot["tuning"]) == 14
 assert type(snapshot["tuning"]["whisper.threads"]) is int

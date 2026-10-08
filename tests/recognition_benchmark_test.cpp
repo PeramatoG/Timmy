@@ -64,12 +64,37 @@ namespace {
     {
         core::RecognitionBenchmarkSnapshot value;
         value.engineId = "fake\"\\engine";
-        value.configuration.modelResourcePath = std::filesystem::path(u8"models/niño.bin");
+        value.configuration.modelResourcePath = std::filesystem::path(u8"models/ni\u00f1o.bin");
+        // Exercise native Windows separators as well as UTF-8 filenames.
+        value.configuration.modelResourcePath.make_preferred();
         value.configuration.preferredLanguage = "es";
         value.vadModelPath = "models/vad.bin";
+        value.vadModelPath.make_preferred();
         value.settings = asr::defaultSettings(core::asrSettingDescriptors(core::AsrEngineId::whisperCpp));
         value.configuration.recognitionHints = core::commandRecognitionHints();
         return value;
+    }
+    void unicodePathsAndJson()
+    {
+        Fixture fixture;
+        auto value = snapshot();
+        // Universal escapes fix the intended Unicode code points independently
+        // of MSVC's source code page; narrow escapes check the actual UTF-8 bytes.
+        REQUIRE(value.configuration.modelResourcePath.filename().u8string() == u8"ni\u00f1o.bin");
+        value.vadModelPath = std::filesystem::path(u8"vad/canci\u00f3n-\U0001f4a1.bin");
+        value.vadModelPath.make_preferred();
+        REQUIRE(value.vadModelPath.filename().u8string() == u8"canci\u00f3n-\U0001f4a1.bin");
+        const auto json = core::benchmarkJson(value, "unicode-paths", core::liveBenchmarkCases()[0],
+            1, fixture.recognize("Channel 13 At 50"));
+        REQUIRE(json.find("\"model_filename\":\"ni\xc3\xb1o.bin\"") != std::string::npos);
+        REQUIRE(json.find("\"vad_model_filename\":\"canci\xc3\xb3n-\xf0\x9f\x92\xa1.bin\"") != std::string::npos);
+#ifdef _WIN32
+        REQUIRE(json.find("\"model_path\":\"models\\ni\xc3\xb1o.bin\"") != std::string::npos);
+        REQUIRE(json.find("\"vad_model_path\":\"vad\\canci\xc3\xb3n-\xf0\x9f\x92\xa1.bin\"") != std::string::npos);
+#else
+        REQUIRE(json.find("\"model_path\":\"models/ni\xc3\xb1o.bin\"") != std::string::npos);
+        REQUIRE(json.find("\"vad_model_path\":\"vad/canci\xc3\xb3n-\xf0\x9f\x92\xa1.bin\"") != std::string::npos);
+#endif
     }
     void corpusAndEvaluation()
     {
@@ -202,7 +227,7 @@ namespace {
     {
         Fixture fixture;
         auto result = fixture.recognize("Channel 13 At 50");
-        result.rawTranscript = "\"quoted\"\\path\n\t\r\b\f" + std::string(1, '\x01') + " — español";
+        result.rawTranscript = "\"quoted\"\\path\n\t\r\b\f" + std::string(1, '\x01') + " \xe2\x80\x94 espa\xc3\xb1ol";
         result.detectedLanguage = "es";
         result.metrics = {2.5, 0.75};
         return core::benchmarkJson(snapshot(), "session-id", core::liveBenchmarkCases()[0], 2, result);
@@ -214,7 +239,7 @@ int main(int argc, char** argv)
     {
         if (argc == 2 && std::string(argv[1]) == "--json-fixture")
         { std::cout << jsonFixture() << '\n'; return 0; }
-        corpusAndEvaluation(); metrics(); sessionAndJson();
+        unicodePathsAndJson(); corpusAndEvaluation(); metrics(); sessionAndJson();
     }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
