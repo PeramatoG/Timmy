@@ -6,6 +6,7 @@ add_library(timmy_core STATIC
     src/command_recognition_profile.cpp
     src/recognition_command_executor.cpp
     src/recognition_pipeline.cpp
+    src/recognition_benchmark.cpp
     src/resource_path_resolver.cpp
 )
 

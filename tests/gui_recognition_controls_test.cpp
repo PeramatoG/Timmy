@@ -25,6 +25,8 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <iostream>
+#include <fstream>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -76,6 +78,7 @@ namespace {
     {
         for (auto* child : parent.GetChildren())
         {
+            if (child->GetName().StartsWith("benchmark.") && !dynamic_cast<wxStaticText*>(child)) continue;
             if (child->GetName().StartsWith("whisper.") || child->GetName().StartsWith("vad.")) continue;
             if (auto* button = dynamic_cast<wxButton*>(child);
                 button && button->GetLabel() == "Reset to defaults") continue;
@@ -107,8 +110,9 @@ namespace {
     public:
         asr::AsrCapabilities capabilities() const override { return {}; }
         asr::AsrState state() const override { return state_.load(); }
-        asr::AsrOperationResult start(const asr::AsrConfiguration&) override
+        asr::AsrOperationResult start(const asr::AsrConfiguration& configuration) override
         {
+            configurations.push_back(configuration);
             ++starts;
             state_ = asr::AsrState::running;
             return {true, std::nullopt};
@@ -143,6 +147,7 @@ namespace {
             changed_.notify_all();
         }
 
+        std::vector<asr::AsrConfiguration> configurations;
         std::atomic<int> starts{0};
         std::atomic<bool> stopEntered{false};
 
@@ -536,6 +541,147 @@ namespace {
         fixture.listeningControls();
     }
 
+    template<class Control>
+    Control& benchmarkControl(FrameFixture& fixture, const char* name)
+    {
+        auto* control = dynamic_cast<Control*>(wxWindow::FindWindowByName(name, fixture.frame));
+        REQUIRE(control != nullptr);
+        return *control;
+    }
+    std::vector<std::string> resultLines(const std::filesystem::path& path)
+    {
+        std::ifstream input(path);
+        std::vector<std::string> lines;
+        std::string line;
+        while (std::getline(input, line)) lines.push_back(line);
+        return lines;
+    }
+    void guidedBenchmarkControlsAndIsolation()
+    {
+        FrameFixture fixture;
+        const auto path = std::filesystem::temp_directory_path() / "timmy-gui-benchmark.jsonl";
+        std::filesystem::remove(path);
+        auto& start = benchmarkControl<wxButton>(fixture, "benchmark.start");
+        auto& stop = benchmarkControl<wxButton>(fixture, "benchmark.stop");
+        auto& next = benchmarkControl<wxButton>(fixture, "benchmark.next");
+        auto& retry = benchmarkControl<wxButton>(fixture, "benchmark.retry");
+        auto& file = benchmarkControl<wxTextCtrl>(fixture, "benchmark.path");
+        REQUIRE(start.IsEnabled() && !stop.IsEnabled() && !next.IsEnabled() && !retry.IsEnabled());
+        click(start); // Missing result path must not start recognition.
+        REQUIRE(fixture.backend->starts == 0);
+        file.ChangeValue(wxString::FromUTF8(path.string()));
+        fixture.host().ChangeValue("192.0.2.5");
+        toggle(fixture.output(), true); // Benchmark start must override pre-arming.
+        click(start);
+        REQUIRE(fixture.backend->starts == 1);
+        pumpEvents();
+        REQUIRE(!fixture.recognition().IsEnabled() && stop.IsEnabled());
+        REQUIRE(!start.IsEnabled() && !file.IsEnabled());
+        REQUIRE(!fixture.output().IsEnabled() && !fixture.output().GetValue());
+        REQUIRE(fixture.factories == 0 && fixture.emitter->calls == 0);
+        REQUIRE(!next.IsEnabled() && !retry.IsEnabled());
+        for (auto* control : fixture.tuning) REQUIRE(!control->IsEnabled());
+        for (auto* text : fixture.texts) REQUIRE(!text->IsEnabled());
+        toggle(fixture.output(), true); // Synthetic events cannot bypass the guard.
+        click(fixture.recognition());
+        REQUIRE(!fixture.output().GetValue() && fixture.factories == 0 && fixture.backend->starts == 1);
+        const auto frozen = fixture.backend->configurations.front();
+        fixture.texts[0]->ChangeValue("synthetic-changed-model.bin");
+        fixture.choices[3]->SetSelection(2);
+        auto* threads = dynamic_cast<wxSpinCtrl*>(wxWindow::FindWindowByName("whisper.threads", fixture.frame));
+        REQUIRE(threads != nullptr);
+        threads->SetValue(7);
+        click(fixture.reset());
+        fixture.backend->emit("Channel 13 At 50");
+        REQUIRE(resultLines(path).size() == 1); // Logging precedes the wx event.
+        fixture.backend->emit("Channel 30 At 50"); // Review does not consume a case.
+        pumpEvents();
+        REQUIRE(resultLines(path).size() == 1 && next.IsEnabled() && retry.IsEnabled());
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("num-13 attempt 1 PASS"));
+        fixture.backend->blockStop();
+        click(retry);
+        waitFor([&] { return fixture.backend->stopEntered.load(); });
+        fixture.responsive();
+        REQUIRE(!retry.IsEnabled() && !next.IsEnabled() && !fixture.output().IsEnabled());
+        fixture.backend->emit("Channel 30 At 50"); // Previous generation remains gated.
+        fixture.backend->releaseStop();
+        waitFor([&] { return fixture.backend->starts == 2; });
+        REQUIRE(fixture.backend->configurations.back().modelResourcePath == frozen.modelResourcePath);
+        REQUIRE(fixture.backend->configurations.back().preferredLanguage == frozen.preferredLanguage);
+        REQUIRE(!next.IsEnabled() && !retry.IsEnabled());
+        fixture.backend->emit("Channel 30 At 50");
+        pumpEvents();
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("num-13 attempt 2 FAIL"));
+        auto lines = resultLines(path);
+        REQUIRE(lines.size() == 2);
+        REQUIRE(lines.back().find("\"attempt_number\":2") != std::string::npos);
+        REQUIRE(lines.back().find("\"whisper.threads\":0") != std::string::npos);
+        REQUIRE(lines.back().find("synthetic-changed-model") == std::string::npos);
+        REQUIRE(lines.back().find("\"selected_language\":\"es\"") != std::string::npos);
+        const auto sessionField = lines.front().substr(lines.front().find("\"session_id\":"));
+        const auto sessionId = sessionField.substr(0, sessionField.find(","));
+        for (std::size_t index = 1; index < core::liveBenchmarkCases().size(); ++index)
+        {
+            click(next);
+            waitFor([&] { return fixture.backend->starts == static_cast<int>(index + 2); });
+            fixture.backend->emit(core::liveBenchmarkCases()[index].phrase);
+            pumpEvents();
+            REQUIRE(fixture.label("Last result:").GetLabel().Contains("PASS"));
+            lines = resultLines(path);
+            REQUIRE(lines.back().find(sessionId) != std::string::npos);
+            REQUIRE(lines.back().find("\"attempt_number\":1") != std::string::npos);
+            REQUIRE(fixture.emitter->calls == 0 && fixture.factories == 0);
+        }
+        REQUIRE(!next.IsEnabled() && retry.IsEnabled());
+        REQUIRE(resultLines(path).size() == 33);
+        click(stop);
+        waitFor([&] { return start.IsEnabled(); });
+        REQUIRE(fixture.recognition().IsEnabled() && file.IsEnabled() && fixture.output().IsEnabled());
+        REQUIRE(resultLines(path).size() == 33);
+        // Ordinary recognition and output can be started after benchmark cleanup.
+        click(fixture.recognition());
+        toggle(fixture.output(), true);
+        fixture.backend->emit("Channel 13 At 50");
+        waitFor([&] { return fixture.emitter->completed == 1; });
+        REQUIRE(fixture.factories == 1 && resultLines(path).size() == 33);
+        std::filesystem::remove(path);
+    }
+
+    void benchmarkStopPreservesUnprocessedResultAndRecoversFailure()
+    {
+        FrameFixture fixture;
+        auto& start = benchmarkControl<wxButton>(fixture, "benchmark.start");
+        auto& stop = benchmarkControl<wxButton>(fixture, "benchmark.stop");
+        auto& file = benchmarkControl<wxTextCtrl>(fixture, "benchmark.path");
+        const auto path = std::filesystem::temp_directory_path() / "timmy-gui-stop-benchmark.jsonl";
+        std::filesystem::remove(path);
+        file.ChangeValue(wxString::FromUTF8((path / "missing.jsonl").string()));
+        click(start);
+        waitFor([&] { return start.IsEnabled(); });
+        REQUIRE(fixture.backend->starts == 0 && fixture.factories == 0);
+        file.ChangeValue(wxString::FromUTF8(path.string()));
+        click(start);
+        fixture.backend->emit("Channel 13 At 50");
+        // Stop before pumping the transcript event: worker logging still survives.
+        click(stop);
+        waitFor([&] { return start.IsEnabled(); });
+        REQUIRE(resultLines(path).size() == 1);
+        click(start);
+        fixture.backend->emit("Channel 13 At 50");
+        pumpEvents();
+        REQUIRE(resultLines(path).size() == 2); // A new session appends safely.
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 1 PASS"));
+        fixture.backend->blockStop();
+        fixture.frame->Close();
+        waitFor([&] { return fixture.backend->stopEntered.load(); });
+        fixture.responsive();
+        REQUIRE(!fixture.destroyed);
+        fixture.backend->releaseStop();
+        waitFor([&] { return fixture.destroyed; });
+        REQUIRE(resultLines(path).size() == 2 && fixture.emitter->calls == 0);
+        std::filesystem::remove(path);
+    }
+
     class TestApp final : public wxApp
     {
     public:
@@ -554,6 +700,8 @@ int main(int argc, char** argv)
 {
     REQUIRE(wxEntryStart(argc, argv));
     REQUIRE(wxTheApp->CallOnInit());
+    guidedBenchmarkControlsAndIsolation();
+    benchmarkStopPreservesUnprocessedResultAndRecoversFailure();
     recognitionTuningAndColumns();
     runtimeArmingAndAsyncShutdown();
     invalidArmKeepsRecognitionListening();

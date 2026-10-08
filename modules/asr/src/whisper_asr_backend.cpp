@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdio>
@@ -224,14 +225,19 @@ namespace timmy::asr {
                 parameters.grammar_penalty = guidance.grammarPenalty;
             }
 
+            std::optional<double> inferenceSeconds;
             const auto outcome = inferenceCancellation.run([&] {
                 if (samples.size() > static_cast<std::size_t>(
                         std::numeric_limits<int>::max()))
                 {
                     return -1;
                 }
-                return whisper_full(context, parameters, samples.data(),
+                const auto started = std::chrono::steady_clock::now();
+                const int result = whisper_full(context, parameters, samples.data(),
                     static_cast<int>(samples.size()));
+                inferenceSeconds = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - started).count();
+                return result;
             });
             if (outcome == detail::WhisperInferenceOutcome::cancelled)
             {
@@ -278,7 +284,8 @@ namespace timmy::asr {
             owner.publishResult({
                 std::move(transcript),
                 AsrResultKind::final,
-                std::move(detectedLanguage)
+                std::move(detectedLanguage),
+                {static_cast<double>(samples.size()) / 16000.0, inferenceSeconds}
             });
         }
 

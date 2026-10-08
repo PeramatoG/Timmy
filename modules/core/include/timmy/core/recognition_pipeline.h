@@ -60,6 +60,8 @@ namespace timmy::core {
         std::optional<command::SemanticCommand> semanticCommand;
         command::IntentValidationResult validation;
         command::IntentRenderingResult rendering;
+        std::optional<std::string> detectedLanguage{};
+        asr::RecognitionMetrics metrics{};
     };
 
     class IRecognitionPipelineObserver
@@ -74,9 +76,12 @@ namespace timmy::core {
     class RecognitionPipeline final
     {
     public:
+        // Standalone attempts can opt out of inter-utterance assembly/context;
+        // ordinary recognition retains both by default.
         RecognitionPipeline(
             std::shared_ptr<audio::AudioChannelSelector> channelSelector,
-            std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile = {});
+            std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile = {},
+            bool isolateUtterances = false);
         ~RecognitionPipeline();
 
         RecognitionPipeline(const RecognitionPipeline&) = delete;
@@ -111,6 +116,7 @@ namespace timmy::core {
         std::shared_ptr<IRecognitionPipelineObserver> observer_;
         RecognitionPipelineState state_ = RecognitionPipelineState::stopped;
         bool attached_ = false;
+        const bool isolateUtterances_;
     };
 
 } // namespace timmy::core
