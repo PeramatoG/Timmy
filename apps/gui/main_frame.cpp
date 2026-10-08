@@ -427,6 +427,9 @@ namespace timmy::gui {
         actions = new wxBoxSizer(wxHORIZONTAL);
         benchmarkNextButton_ = button("Next", "benchmark.next");
         benchmarkRetryButton_ = button("Retry", "benchmark.retry");
+        benchmarkNoResultButton_ = button("No result", "benchmark.noResult");
+        benchmarkNoResultButton_->SetToolTip("Record an attempt when you spoke the phrase but no final ASR result arrived.");
+        benchmarkNoResultButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { recordBenchmarkNoResult(); });
         benchmarkNextButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { navigateBenchmark(false); });
         benchmarkRetryButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { navigateBenchmark(true); });
         benchmark->Add(actions, 0, wxALL, 4);
@@ -937,6 +940,36 @@ namespace timmy::gui {
         benchmarkStartRequested_ = false;
     }
 
+    void MainFrame::showBenchmarkAttempt(const core::RecognitionBenchmarkAttempt& attempt)
+    {
+        benchmarkResultText_->SetLabel(wxString::FromUTF8("Last result: " + attempt.caseId
+            + " attempt " + std::to_string(attempt.attempt) + (attempt.passed ? " PASS" : " FAIL")
+            + (attempt.outcome == core::BenchmarkRecognitionOutcome::noResult ? " (No ASR result)" : "")));
+        updateBenchmarkControls();
+    }
+
+    void MainFrame::recordBenchmarkNoResult()
+    {
+        if (!benchmarkSession_ || !recognitionLifecycle_.listening() || closing_
+            || !benchmarkSession_->awaitingResult()) return;
+        try
+        {
+            const auto attempt = benchmarkSession_->recordNoResult();
+            if (!attempt) return; // A final result may have won the worker race.
+            rawTranscriptText_->SetLabel("Raw transcript: No ASR result");
+            normalizedTranscriptText_->SetLabel("Normalized transcript: -");
+            assemblyText_->SetLabel("Assembly: not attempted");
+            semanticCommandText_->SetLabel("Semantic command: not attempted");
+            showBenchmarkAttempt(*attempt);
+        }
+        catch (const std::exception& error)
+        {
+            stopDiagnostic_ = "Benchmark logging failed: " + wxString::FromUTF8(error.what());
+            benchmarkNavigation_ = BenchmarkNavigation::none;
+            stopRecognition();
+        }
+    }
+
     void MainFrame::navigateBenchmark(bool retry)
     {
         if (!benchmarkSession_ || !recognitionLifecycle_.listening() || closing_
@@ -956,6 +989,7 @@ namespace timmy::gui {
         benchmarkStopButton_->Enable(active && listening);
         benchmarkNextButton_->Enable(reviewed && benchmarkSession_->index() + 1 < core::liveBenchmarkCases().size());
         benchmarkRetryButton_->Enable(reviewed);
+        benchmarkNoResultButton_->Enable(active && listening && benchmarkSession_->awaitingResult());
         benchmarkBrowseButton_->Enable(idle);
         benchmarkPathText_->Enable(idle);
         if (active)
@@ -1029,7 +1063,10 @@ namespace timmy::gui {
                 benchmarkSession_ = std::make_shared<core::RecognitionBenchmarkSession>(
                     wxStringToPath(benchmarkPathText_->GetValue()),
                     core::RecognitionBenchmarkSnapshot{backendOverride_ ? "injected" : "whisper.cpp", configuration,
-                        resources.voiceActivityModelPath, settings, languageProfile});
+                        resources.voiceActivityModelPath, settings, languageProfile,
+                        {deviceChoice_->GetStringSelection().ToStdString(wxConvUTF8), channelSelector_->channelIndex(),
+                            channelChoice_->GetSelection() == wxNOT_FOUND ? std::nullopt
+                                : std::optional<std::string>{channelChoice_->GetStringSelection().ToStdString(wxConvUTF8)}}});
                 benchmarkStartRequested_ = false;
                 benchmarkResultText_->SetLabel("Last result: -");
             }
@@ -1142,10 +1179,7 @@ namespace timmy::gui {
         semanticCommandText_->GetParent()->Layout();
         if (benchmarkSession_ && payload.benchmarkAttempt)
         {
-            const auto& attempt = *payload.benchmarkAttempt;
-            benchmarkResultText_->SetLabel(wxString::FromUTF8("Last result: " + attempt.caseId
-                + " attempt " + std::to_string(attempt.attempt) + (attempt.passed ? " PASS" : " FAIL")));
-            updateBenchmarkControls();
+            showBenchmarkAttempt(*payload.benchmarkAttempt);
         }
 
         // Submission only enqueues the produced semantic command. The existing

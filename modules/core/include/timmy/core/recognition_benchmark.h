@@ -31,8 +31,18 @@ namespace timmy::core {
     };
 
     [[nodiscard]] const std::vector<RecognitionBenchmarkCase>& liveBenchmarkCases();
+    enum class BenchmarkRecognitionOutcome { finalResult, noResult };
+
     [[nodiscard]] bool benchmarkPasses(const RecognitionBenchmarkCase& test,
-        const RecognitionTranscript& actual);
+        const RecognitionTranscript& actual,
+        BenchmarkRecognitionOutcome outcome = BenchmarkRecognitionOutcome::finalResult);
+
+    struct BenchmarkAudioSource
+    {
+        std::string deviceDisplayName;
+        std::size_t channelIndex{0}; // Zero-based index in the captured device.
+        std::optional<std::string> channelDisplayName{};
+    };
 
     struct RecognitionBenchmarkSnapshot
     {
@@ -41,6 +51,7 @@ namespace timmy::core {
         std::filesystem::path vadModelPath;
         asr::SettingValues settings;
         command::CommandProfile commandProfile;
+        BenchmarkAudioSource audioSource{};
     };
 
     struct RecognitionBenchmarkAttempt
@@ -48,6 +59,7 @@ namespace timmy::core {
         std::string caseId;
         unsigned attempt;
         bool passed;
+        BenchmarkRecognitionOutcome outcome{BenchmarkRecognitionOutcome::finalResult};
     };
 
     // Has no emitter or output path. record() runs on a recognition worker, never
@@ -63,6 +75,9 @@ namespace timmy::core {
 
         [[nodiscard]] std::optional<RecognitionBenchmarkAttempt> record(
             const RecognitionTranscript& transcript);
+        // Explicit operator outcome, not a fabricated ASR transcript. The same
+        // result gate arbitrates this action against a concurrent final result.
+        [[nodiscard]] std::optional<RecognitionBenchmarkAttempt> recordNoResult();
         // Navigate only after recognition resources have stopped, so queued audio
         // and in-flight inference from the previous attempt cannot consume a case.
         [[nodiscard]] bool next();
@@ -75,6 +90,8 @@ namespace timmy::core {
         [[nodiscard]] const std::string& id() const { return sessionId_; }
 
     private:
+        std::optional<RecognitionBenchmarkAttempt> recordAttempt(
+            const RecognitionTranscript& transcript, BenchmarkRecognitionOutcome outcome);
         const std::filesystem::path path_;
         const RecognitionBenchmarkSnapshot snapshot_;
         const std::string sessionId_;
@@ -89,5 +106,6 @@ namespace timmy::core {
     // One JSON object without its terminating newline; useful to other frontends.
     [[nodiscard]] std::string benchmarkJson(const RecognitionBenchmarkSnapshot& snapshot,
         const std::string& sessionId, const RecognitionBenchmarkCase& test,
-        unsigned attempt, const RecognitionTranscript& transcript);
+        unsigned attempt, const RecognitionTranscript& transcript,
+        BenchmarkRecognitionOutcome outcome = BenchmarkRecognitionOutcome::finalResult);
 } // namespace timmy::core

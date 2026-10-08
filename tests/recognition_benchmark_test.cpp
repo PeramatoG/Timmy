@@ -72,6 +72,7 @@ namespace {
         value.vadModelPath.make_preferred();
         value.settings = asr::defaultSettings(core::asrSettingDescriptors(core::AsrEngineId::whisperCpp));
         value.configuration.recognitionHints = core::commandRecognitionHints();
+        value.audioSource = {"Device \"one\"\\input\n", 2, "Input \"three\"\t"};
         return value;
     }
     void unicodePathsAndJson()
@@ -85,7 +86,7 @@ namespace {
         value.vadModelPath.make_preferred();
         REQUIRE(value.vadModelPath.filename().u8string() == u8"canci\u00f3n-\U0001f4a1.bin");
         const auto json = core::benchmarkJson(value, "unicode-paths", core::liveBenchmarkCases()[0],
-            1, fixture.recognize("Channel 13 At 50"));
+            1, fixture.recognize("Channel 1 At 50"));
         REQUIRE(json.find("\"model_filename\":\"ni\xc3\xb1o.bin\"") != std::string::npos);
         REQUIRE(json.find("\"vad_model_filename\":\"canci\xc3\xb3n-\xf0\x9f\x92\xa1.bin\"") != std::string::npos);
         const std::string jsonSeparator(
@@ -98,13 +99,34 @@ namespace {
     {
         Fixture fixture;
         const auto& corpus = core::liveBenchmarkCases();
-        REQUIRE(corpus.size() == 32);
+        REQUIRE(corpus.size() == 36);
         const std::vector<std::string> ids{
-            "num-13","num-30","num-15","num-50","num-17","num-70","num-105","num-150","num-515","num-550",
+            "es-num-1","es-num-5","es-num-15","es-num-25","es-num-35","es-num-105","es-num-115","es-num-150","es-num-515","es-num-550",
             "level-zero","level-full","fixture-full","group-half","range-level","range-on","list-select",
             "exclude-select","exclude-level","select-single","test-single","home-fixture","editor-clear",
-            "release-single","en-level","en-select","en-home","en-editor","reject-greeting","reject-weather",
+            "release-single","en-num-13","en-num-30","en-num-15","en-num-50","en-num-17","en-num-70",
+            "en-select","en-home","reject-greeting","reject-weather",
             "reject-thanks","reject-english"};
+        const std::vector<unsigned> spanishNumbers{1,5,15,25,35,105,115,150,515,550};
+        for (std::size_t i = 0; i < spanishNumbers.size(); ++i)
+        {
+            const auto& test = corpus[i];
+            REQUIRE(test.category == "numeric-robustness");
+            const auto& intent = std::get<command::SetIntensity>(*test.expected);
+            REQUIRE(intent.target.included.front().first == spanishNumbers[i]);
+            REQUIRE(intent.level.percent() == 50);
+            REQUIRE(intent.target.type == (i < 8 ? command::TargetType::channel : command::TargetType::fixture));
+        }
+        const std::vector<unsigned> englishNumbers{13,30,15,50,17,70};
+        for (std::size_t i = 0; i < englishNumbers.size(); ++i)
+        {
+            const auto& test = corpus[24 + i];
+            REQUIRE(test.category == "english-numeric-confusion");
+            REQUIRE(test.phrase == "Channel " + std::to_string(englishNumbers[i]) + " at 50");
+            const auto& intent = std::get<command::SetIntensity>(*test.expected);
+            REQUIRE(intent.target.included.front().first == englishNumbers[i]);
+            REQUIRE(intent.target.type == command::TargetType::channel && intent.level.percent() == 50);
+        }
         std::set<std::string> unique;
         for (std::size_t i = 0; i < corpus.size(); ++i)
         {
@@ -131,11 +153,11 @@ namespace {
             }
             else REQUIRE(!result.semanticCommand || !result.validation.accepted || !result.rendering.text);
         }
-        REQUIRE(core::benchmarkPasses(corpus[0], fixture.recognize("Channel 13 At 50")));
-        REQUIRE(!core::benchmarkPasses(corpus[0], fixture.recognize("Channel 30 At 50")));
-        REQUIRE(!core::benchmarkPasses(corpus[0], fixture.recognize("Channel 13 At Full")));
-        REQUIRE(!core::benchmarkPasses(corpus[0], fixture.recognize("Fixture 13 At 50")));
-        REQUIRE(!core::benchmarkPasses(corpus.back(), fixture.recognize("Channel 13 At 50")));
+        REQUIRE(core::benchmarkPasses(corpus[0], fixture.recognize("Channel 1 At 50")));
+        REQUIRE(!core::benchmarkPasses(corpus[0], fixture.recognize("Channel 5 At 50")));
+        REQUIRE(!core::benchmarkPasses(corpus[0], fixture.recognize("Channel 1 At Full")));
+        REQUIRE(!core::benchmarkPasses(corpus[0], fixture.recognize("Fixture 1 At 50")));
+        REQUIRE(!core::benchmarkPasses(corpus.back(), fixture.recognize("Channel 1 At 50")));
         // Equivalent semantic selections with a different raw wording/structure.
         core::RecognitionBenchmarkCase equivalent{"eq", "list", "", command::SelectSelection{
             command::TargetSelection{command::TargetType::channel, {{1,3}}, {{2,2}}}}};
@@ -157,14 +179,14 @@ namespace {
     void metrics()
     {
         Fixture fixture;
-        fixture.backend->emit({"Channel 13 At 50", asr::AsrResultKind::final, "es", {2.5, 0.75}});
+        fixture.backend->emit({"Channel 1 At 50", asr::AsrResultKind::final, "es", {2.5, 0.75}});
         REQUIRE(fixture.observer->last.detectedLanguage == "es");
         REQUIRE(fixture.observer->last.metrics.audioDurationSeconds == 2.5);
         REQUIRE(fixture.observer->last.metrics.inferenceDurationSeconds == 0.75);
         const auto count = fixture.observer->calls;
         fixture.backend->emit({"Channel 1 At 50", asr::AsrResultKind::partial, "en", {}});
         REQUIRE(fixture.observer->calls == count);
-        fixture.recognize("Channel 13 At 50");
+        fixture.recognize("Channel 1 At 50");
         REQUIRE(!fixture.observer->last.metrics.audioDurationSeconds);
         REQUIRE(!fixture.observer->last.metrics.inferenceDurationSeconds);
         REQUIRE(!fixture.observer->last.detectedLanguage);
@@ -177,18 +199,22 @@ namespace {
         auto original = snapshot();
         core::RecognitionBenchmarkSession session(path, original);
         original.settings["whisper.threads"] = 7;
+        original.audioSource = {"changed", 9, std::nullopt};
+        REQUIRE(session.snapshot().audioSource.channelIndex == 2);
+        REQUIRE(session.snapshot().audioSource.channelDisplayName.has_value());
+        REQUIRE(session.snapshot().audioSource.deviceDisplayName != "changed");
         REQUIRE(session.snapshot().settings.at("whisper.threads") != original.settings.at("whisper.threads"));
         REQUIRE(!session.next());
         session.retry(); // Cannot manufacture attempts before a recognition result.
-        REQUIRE(session.record(fixture.recognize("Channel 13 At 50"))->attempt == 1);
+        REQUIRE(session.record(fixture.recognize("Channel 1 At 50"))->attempt == 1);
         REQUIRE(!session.awaitingResult() && session.index() == 0);
-        REQUIRE(!session.record(fixture.recognize("Channel 30 At 50")));
+        REQUIRE(!session.record(fixture.recognize("Channel 5 At 50")));
         session.retry();
-        const auto retry = session.record(fixture.recognize("Channel 30 At 50"));
-        REQUIRE(retry && retry->attempt == 2 && !retry->passed && retry->caseId == "num-13");
+        const auto retry = session.record(fixture.recognize("Channel 5 At 50"));
+        REQUIRE(retry && retry->attempt == 2 && !retry->passed && retry->caseId == "es-num-1");
         REQUIRE(session.next());
-        const auto next = session.record(fixture.recognize("Channel 30 At 50"));
-        REQUIRE(next && next->attempt == 1 && next->passed && next->caseId == "num-30");
+        const auto next = session.record(fixture.recognize("Channel 5 At 50"));
+        REQUIRE(next && next->attempt == 1 && next->passed && next->caseId == "es-num-5");
         // All writes are visible even before close, without requiring GUI events.
         std::ifstream in(path);
         std::string line;
@@ -197,6 +223,8 @@ namespace {
         {
             REQUIRE(line.front() == '{' && line.back() == '}');
             REQUIRE(line.find("\"recognition_settings\":{") != std::string::npos);
+            REQUIRE(line.find("\"recognition_outcome\":\"final_result\"") != std::string::npos);
+            REQUIRE(line.find("\"channel_index\":2") != std::string::npos);
             REQUIRE(line.find("\"schema_version\":1") != std::string::npos);
             REQUIRE(line.find("\"audio_duration_seconds\":null") != std::string::npos);
             ++lines;
@@ -221,10 +249,62 @@ namespace {
         catch (const std::exception&) { failed = true; }
         REQUIRE(failed);
     }
+    void noResultEvaluationAndSession()
+    {
+        using Outcome = core::BenchmarkRecognitionOutcome;
+        Fixture fixture;
+        const auto& corpus = core::liveBenchmarkCases();
+        const auto stale = fixture.recognize("Channel 1 At 50");
+        REQUIRE(!core::benchmarkPasses(corpus.front(), {}, Outcome::noResult));
+        REQUIRE(core::benchmarkPasses(corpus.back(), {}, Outcome::noResult));
+        REQUIRE(core::benchmarkPasses(corpus.back(), stale, Outcome::noResult));
+        const auto path = std::filesystem::temp_directory_path() / "timmy-benchmark-no-result.jsonl";
+        std::filesystem::remove(path);
+        core::RecognitionBenchmarkSession session(path, snapshot());
+        const auto first = session.recordNoResult();
+        REQUIRE(first && !first->passed && first->outcome == Outcome::noResult && first->attempt == 1);
+        REQUIRE(!session.awaitingResult());
+        REQUIRE(!session.recordNoResult() && !session.record(stale));
+        session.retry();
+        const auto retried = session.record(stale);
+        REQUIRE(retried && retried->passed && retried->attempt == 2 && retried->outcome == Outcome::finalResult);
+        // Navigate through positive and negative cases without any backend results.
+        for (std::size_t i = 1; i < corpus.size(); ++i)
+        {
+            REQUIRE(session.next());
+            const auto attempt = session.recordNoResult();
+            REQUIRE(attempt && attempt->passed == !corpus[i].expected);
+            REQUIRE(attempt->attempt == 1 && attempt->outcome == Outcome::noResult);
+        }
+        REQUIRE(!session.next());
+        session.retry();
+        REQUIRE(session.recordNoResult()->attempt == 2);
+        session.close();
+        REQUIRE(!session.recordNoResult());
+        std::ifstream input(path);
+        std::string line;
+        unsigned count = 0;
+        while (std::getline(input, line))
+        {
+            if (count != 1)
+            {
+                REQUIRE(line.find("\"recognition_outcome\":\"no_result\"") != std::string::npos);
+                REQUIRE(line.find("\"raw_transcript\":null") != std::string::npos);
+                REQUIRE(line.find("\"assembly_state\":\"not_attempted\"") != std::string::npos);
+                REQUIRE(line.find("\"actual_semantic_description\":null") != std::string::npos);
+                REQUIRE(line.find("\"audio_duration_seconds\":null") != std::string::npos);
+            }
+            REQUIRE(line.find("\"channel_index\":2") != std::string::npos);
+            ++count;
+        }
+        REQUIRE(count == corpus.size() + 2);
+        input.close();
+        std::filesystem::remove(path);
+    }
     std::string jsonFixture()
     {
         Fixture fixture;
-        auto result = fixture.recognize("Channel 13 At 50");
+        auto result = fixture.recognize("Channel 1 At 50");
         result.rawTranscript = "\"quoted\"\\path\n\t\r\b\f" + std::string(1, '\x01') + " \xe2\x80\x94 espa\xc3\xb1ol";
         result.detectedLanguage = "es";
         result.metrics = {2.5, 0.75};
@@ -237,7 +317,23 @@ int main(int argc, char** argv)
     {
         if (argc == 2 && std::string(argv[1]) == "--json-fixture")
         { std::cout << jsonFixture() << '\n'; return 0; }
-        unicodePathsAndJson(); corpusAndEvaluation(); metrics(); sessionAndJson();
+        if (argc == 2 && std::string(argv[1]) == "--no-result-fixture")
+        {
+            // Deliberately supply stale data to verify no_result never claims it
+            // came from inference. The explicit outcome takes precedence.
+            Fixture fixture;
+            auto stale = fixture.recognize("Channel 1 At 50");
+            stale.detectedLanguage = "es";
+            stale.metrics = {2.5, 0.75};
+            auto source = snapshot();
+            std::cout << core::benchmarkJson(source, "no-result-session", core::liveBenchmarkCases().front(),
+                1, stale, core::BenchmarkRecognitionOutcome::noResult) << '\n';
+            source.audioSource.channelDisplayName.reset();
+            std::cout << core::benchmarkJson(source, "no-result-session", core::liveBenchmarkCases().back(),
+                2, stale, core::BenchmarkRecognitionOutcome::noResult) << '\n';
+            return 0;
+        }
+        unicodePathsAndJson(); corpusAndEvaluation(); metrics(); sessionAndJson(); noResultEvaluationAndSession();
     }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

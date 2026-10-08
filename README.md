@@ -281,10 +281,11 @@ compatibility boundary and the future validated semantic fallback extension poin
 
 ### Guided live recognition benchmark (ASR-BENCH-010)
 
-Use **Recognition benchmark** in the Recognition column to run the 32-case
+Use **Recognition benchmark** in the Recognition column to run the 36-case
 `timmy-live-v1` corpus with the current frozen ASR configuration. Select a JSONL
 result file, Start benchmark, speak the displayed phrase, then choose Next or
-Retry after reviewing PASS/FAIL. OSC stays disarmed throughout the session.
-Results compare semantic commands and include tuning, language and optional
-inference/audio timings. See [the benchmark guide](docs/ASR_LIVE_BENCHMARK.md)
+Retry after reviewing PASS/FAIL. Use **No result** when no final ASR result arrives.
+OSC stays disarmed throughout the session. Results compare semantic commands and
+include the explicit recognition outcome, frozen audio source, tuning, language
+and optional inference/audio timings. See [the benchmark guide](docs/ASR_LIVE_BENCHMARK.md)
 for lifecycle details and JSONL schema version 1.

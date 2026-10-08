@@ -592,26 +592,26 @@ namespace {
         REQUIRE(threads != nullptr);
         threads->SetValue(7);
         click(fixture.reset());
-        fixture.backend->emit("Channel 13 At 50");
+        fixture.backend->emit("Channel 1 At 50");
         REQUIRE(resultLines(path).size() == 1); // Logging precedes the wx event.
-        fixture.backend->emit("Channel 30 At 50"); // Review does not consume a case.
+        fixture.backend->emit("Channel 5 At 50"); // Review does not consume a case.
         pumpEvents();
         REQUIRE(resultLines(path).size() == 1 && next.IsEnabled() && retry.IsEnabled());
-        REQUIRE(fixture.label("Last result:").GetLabel().Contains("num-13 attempt 1 PASS"));
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("es-num-1 attempt 1 PASS"));
         fixture.backend->blockStop();
         click(retry);
         waitFor([&] { return fixture.backend->stopEntered.load(); });
         fixture.responsive();
         REQUIRE(!retry.IsEnabled() && !next.IsEnabled() && !fixture.output().IsEnabled());
-        fixture.backend->emit("Channel 30 At 50"); // Previous generation remains gated.
+        fixture.backend->emit("Channel 5 At 50"); // Previous generation remains gated.
         fixture.backend->releaseStop();
         waitFor([&] { return fixture.backend->starts == 2; });
         REQUIRE(fixture.backend->configurations.back().modelResourcePath == frozen.modelResourcePath);
         REQUIRE(fixture.backend->configurations.back().preferredLanguage == frozen.preferredLanguage);
         REQUIRE(!next.IsEnabled() && !retry.IsEnabled());
-        fixture.backend->emit("Channel 30 At 50");
+        fixture.backend->emit("Channel 5 At 50");
         pumpEvents();
-        REQUIRE(fixture.label("Last result:").GetLabel().Contains("num-13 attempt 2 FAIL"));
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("es-num-1 attempt 2 FAIL"));
         auto lines = resultLines(path);
         REQUIRE(lines.size() == 2);
         REQUIRE(lines.back().find("\"attempt_number\":2") != std::string::npos);
@@ -633,17 +633,17 @@ namespace {
             REQUIRE(fixture.emitter->calls == 0 && fixture.factories == 0);
         }
         REQUIRE(!next.IsEnabled() && retry.IsEnabled());
-        REQUIRE(resultLines(path).size() == 33);
+        REQUIRE(resultLines(path).size() == core::liveBenchmarkCases().size() + 1);
         click(stop);
         waitFor([&] { return start.IsEnabled(); });
         REQUIRE(fixture.recognition().IsEnabled() && file.IsEnabled() && fixture.output().IsEnabled());
-        REQUIRE(resultLines(path).size() == 33);
+        REQUIRE(resultLines(path).size() == core::liveBenchmarkCases().size() + 1);
         // Ordinary recognition and output can be started after benchmark cleanup.
         click(fixture.recognition());
         toggle(fixture.output(), true);
-        fixture.backend->emit("Channel 13 At 50");
+        fixture.backend->emit("Channel 1 At 50");
         waitFor([&] { return fixture.emitter->completed == 1; });
-        REQUIRE(fixture.factories == 1 && resultLines(path).size() == 33);
+        REQUIRE(fixture.factories == 1 && resultLines(path).size() == core::liveBenchmarkCases().size() + 1);
         std::filesystem::remove(path);
     }
 
@@ -661,13 +661,13 @@ namespace {
         REQUIRE(fixture.backend->starts == 0 && fixture.factories == 0);
         file.ChangeValue(wxString::FromUTF8(path.string()));
         click(start);
-        fixture.backend->emit("Channel 13 At 50");
+        fixture.backend->emit("Channel 1 At 50");
         // Stop before pumping the transcript event: worker logging still survives.
         click(stop);
         waitFor([&] { return start.IsEnabled(); });
         REQUIRE(resultLines(path).size() == 1);
         click(start);
-        fixture.backend->emit("Channel 13 At 50");
+        fixture.backend->emit("Channel 1 At 50");
         pumpEvents();
         REQUIRE(resultLines(path).size() == 2); // A new session appends safely.
         REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 1 PASS"));
@@ -679,6 +679,96 @@ namespace {
         fixture.backend->releaseStop();
         waitFor([&] { return fixture.destroyed; });
         REQUIRE(resultLines(path).size() == 2 && fixture.emitter->calls == 0);
+        std::filesystem::remove(path);
+    }
+
+    void benchmarkNoResultAndFrozenAudioSource()
+    {
+        FrameFixture fixture;
+        const auto path = std::filesystem::temp_directory_path() / "timmy-gui-no-result.jsonl";
+        std::filesystem::remove(path);
+        auto& start = benchmarkControl<wxButton>(fixture, "benchmark.start");
+        auto& stop = benchmarkControl<wxButton>(fixture, "benchmark.stop");
+        auto& next = benchmarkControl<wxButton>(fixture, "benchmark.next");
+        auto& retry = benchmarkControl<wxButton>(fixture, "benchmark.retry");
+        auto& noResult = benchmarkControl<wxButton>(fixture, "benchmark.noResult");
+        auto& file = benchmarkControl<wxTextCtrl>(fixture, "benchmark.path");
+        file.ChangeValue(wxString::FromUTF8(path.string()));
+        REQUIRE(!noResult.IsEnabled());
+        click(noResult); // Synthetic idle actions cannot create attempts.
+        REQUIRE(!std::filesystem::exists(path));
+        fixture.choices[0]->SetString(0, "Input \"USB\"");
+        fixture.choices[1]->Append("Channel 2");
+        fixture.choices[1]->SetSelection(1);
+        wxCommandEvent channelChanged(wxEVT_CHOICE, fixture.choices[1]->GetId());
+        channelChanged.SetEventObject(fixture.choices[1]);
+        fixture.choices[1]->GetEventHandler()->ProcessEvent(channelChanged);
+        click(start);
+        REQUIRE(noResult.IsEnabled() && !next.IsEnabled() && !retry.IsEnabled());
+        REQUIRE(!fixture.choices[0]->IsEnabled() && !fixture.choices[1]->IsEnabled());
+        fixture.choices[0]->SetString(0, "synthetic-changed-device");
+        fixture.choices[1]->SetString(1, "synthetic-changed-channel");
+        // No final recognition arrives; an explicit operator outcome releases navigation.
+        click(noResult);
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 1 FAIL (No ASR result)"));
+        REQUIRE(fixture.label("Raw transcript:").GetLabel().Contains("No ASR result"));
+        REQUIRE(!noResult.IsEnabled() && next.IsEnabled() && retry.IsEnabled());
+        REQUIRE(resultLines(path).size() == 1);
+        click(noResult);
+        fixture.backend->emit("Channel 1 At 50"); // Late results cannot overwrite the manual outcome.
+        pumpEvents();
+        REQUIRE(resultLines(path).size() == 1);
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("FAIL (No ASR result)"));
+        fixture.backend->blockStop();
+        click(retry);
+        waitFor([&] { return fixture.backend->stopEntered.load(); });
+        REQUIRE(!noResult.IsEnabled() && !next.IsEnabled() && !retry.IsEnabled());
+        click(noResult); // Synthetic actions during shutdown cannot log an attempt.
+        REQUIRE(resultLines(path).size() == 1);
+        fixture.backend->releaseStop();
+        waitFor([&] { return fixture.backend->starts == 2; });
+        REQUIRE(noResult.IsEnabled() && !next.IsEnabled());
+        fixture.backend->emit("Channel 1 At 50");
+        click(noResult); // Final result recorded on the worker wins before its wx event is processed.
+        pumpEvents();
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 2 PASS"));
+        REQUIRE(!fixture.label("Last result:").GetLabel().Contains("No ASR result"));
+        REQUIRE(resultLines(path).size() == 2);
+        for (std::size_t index = 1; index < core::liveBenchmarkCases().size(); ++index)
+        {
+            click(next);
+            waitFor([&] { return fixture.backend->starts == static_cast<int>(index + 2); });
+            REQUIRE(noResult.IsEnabled());
+            click(noResult);
+            const bool positive = core::liveBenchmarkCases()[index].expected.has_value();
+            REQUIRE(fixture.label("Last result:").GetLabel().Contains(positive ? "FAIL (No ASR result)" : "PASS (No ASR result)"));
+            REQUIRE(!noResult.IsEnabled() && retry.IsEnabled());
+            const auto line = resultLines(path).back();
+            REQUIRE(line.find("\"recognition_outcome\":\"no_result\"") != std::string::npos);
+            REQUIRE(line.find("\"raw_transcript\":null") != std::string::npos);
+            REQUIRE(line.find("\"channel_index\":1") != std::string::npos);
+            REQUIRE(line.find("\"channel_display_name\":\"Channel 2\"") != std::string::npos);
+            REQUIRE(line.find("synthetic-changed") == std::string::npos);
+            REQUIRE(line.find("USB") != std::string::npos);
+            REQUIRE(fixture.factories == 0 && fixture.emitter->calls == 0);
+        }
+        REQUIRE(!next.IsEnabled());
+        click(retry);
+        waitFor([&] { return fixture.backend->starts == static_cast<int>(core::liveBenchmarkCases().size() + 2); });
+        click(noResult);
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 2 PASS (No ASR result)"));
+        REQUIRE(resultLines(path).size() == core::liveBenchmarkCases().size() + 2);
+        click(stop);
+        waitFor([&] { return start.IsEnabled(); });
+        REQUIRE(!noResult.IsEnabled());
+        // The benchmark-only action remains inert during ordinary armed listening.
+        fixture.host().ChangeValue("192.0.2.5");
+        click(fixture.recognition());
+        toggle(fixture.output(), true);
+        click(noResult);
+        fixture.backend->emit("Channel 1 At 50");
+        waitFor([&] { return fixture.emitter->completed == 1; });
+        REQUIRE(fixture.factories == 1 && resultLines(path).size() == core::liveBenchmarkCases().size() + 2);
         std::filesystem::remove(path);
     }
 
@@ -700,6 +790,7 @@ int main(int argc, char** argv)
 {
     REQUIRE(wxEntryStart(argc, argv));
     REQUIRE(wxTheApp->CallOnInit());
+    benchmarkNoResultAndFrozenAudioSource();
     guidedBenchmarkControlsAndIsolation();
     benchmarkStopPreservesUnprocessedResultAndRecoversFailure();
     recognitionTuningAndColumns();

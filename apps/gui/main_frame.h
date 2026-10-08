@@ -70,6 +70,8 @@ namespace timmy::gui {
         void startRecognition();
         void startBenchmark();
         void navigateBenchmark(bool retry);
+        void recordBenchmarkNoResult();
+        void showBenchmarkAttempt(const core::RecognitionBenchmarkAttempt& attempt);
         void updateBenchmarkControls();
         void pollShutdown();
         void updateRecognitionControls();
@@ -115,6 +117,7 @@ namespace timmy::gui {
         wxButton* benchmarkStopButton_ = nullptr;
         wxButton* benchmarkNextButton_ = nullptr;
         wxButton* benchmarkRetryButton_ = nullptr;
+        wxButton* benchmarkNoResultButton_ = nullptr;
         wxButton* benchmarkBrowseButton_ = nullptr;
         wxTextCtrl* benchmarkPathText_ = nullptr;
         wxStaticText* benchmarkCaseText_ = nullptr;

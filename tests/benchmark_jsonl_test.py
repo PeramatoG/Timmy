@@ -13,7 +13,7 @@ required = {
     "normalized_transcript", "assembly_state", "assembly_text", "actual_semantic_description",
     "validation_state", "rendered_command", "result", "detected_language", "asr_engine_id",
     "model_filename", "vad_model_filename", "selected_language", "recognition_settings",
-    "attempt_number", "retry_number", "metrics",
+    "attempt_number", "retry_number", "metrics", "recognition_outcome", "audio_source",
 }
 assert required <= entry.keys()
 assert entry["raw_transcript"] == '"quoted"\\path\n\t\r\b\f\x01 — español'
@@ -33,3 +33,28 @@ assert any(type(value) is bool for value in snapshot["tuning"].values())
 assert any(type(value) is float for value in snapshot["tuning"].values())
 assert snapshot["recognition_hints"]["constraint_intent"] == "command_phrase"
 assert snapshot["recognition_hints"]["vocabulary"] and snapshot["recognition_hints"]["expected_phrases"]
+
+assert entry["recognition_outcome"] == "final_result"
+assert entry["audio_source"] == {
+    "device_display_name": 'Device "one"\\input\n',
+    "channel_index": 2,
+    "channel_display_name": 'Input "three"\t',
+}
+no_result_lines = subprocess.check_output([sys.argv[1], "--no-result-fixture"], encoding="utf-8").splitlines()
+assert len(no_result_lines) == 2
+for index, line in enumerate(no_result_lines):
+    absent = json.loads(line)
+    assert required <= absent.keys()
+    assert absent["recognition_outcome"] == "no_result"
+    assert absent["result"] == ("FAIL" if index == 0 else "PASS")
+    assert absent["expected_no_command"] == (index == 1)
+    for field in ("raw_transcript", "normalized_transcript", "assembly_text", "actual_semantic_description",
+                  "rendered_command", "detected_language"):
+        assert absent[field] is None, (field, absent[field])
+    assert absent["assembly_state"] == "not_attempted"
+    assert absent["validation_state"] == "not_attempted"
+    assert absent["validation_diagnostic"] == "" and absent["rendering_diagnostic"] == ""
+    assert absent["metrics"] == {"audio_duration_seconds": None, "inference_duration_seconds": None}
+    assert absent["audio_source"]["device_display_name"] == entry["audio_source"]["device_display_name"]
+    assert absent["audio_source"]["channel_index"] == 2
+    assert absent["audio_source"]["channel_display_name"] == (entry["audio_source"]["channel_display_name"] if index == 0 else None)
