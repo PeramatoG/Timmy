@@ -88,13 +88,11 @@ namespace {
             1, fixture.recognize("Channel 13 At 50"));
         REQUIRE(json.find("\"model_filename\":\"ni\xc3\xb1o.bin\"") != std::string::npos);
         REQUIRE(json.find("\"vad_model_filename\":\"canci\xc3\xb3n-\xf0\x9f\x92\xa1.bin\"") != std::string::npos);
-#ifdef _WIN32
-        REQUIRE(json.find("\"model_path\":\"models\\ni\xc3\xb1o.bin\"") != std::string::npos);
-        REQUIRE(json.find("\"vad_model_path\":\"vad\\canci\xc3\xb3n-\xf0\x9f\x92\xa1.bin\"") != std::string::npos);
-#else
-        REQUIRE(json.find("\"model_path\":\"models/ni\xc3\xb1o.bin\"") != std::string::npos);
-        REQUIRE(json.find("\"vad_model_path\":\"vad/canci\xc3\xb3n-\xf0\x9f\x92\xa1.bin\"") != std::string::npos);
-#endif
+        const std::string jsonSeparator(
+            std::filesystem::path::preferred_separator == '/' ? 1 : 2,
+            static_cast<char>(std::filesystem::path::preferred_separator));
+        REQUIRE(json.find("\"model_path\":\"models" + jsonSeparator + "ni\xc3\xb1o.bin\"") != std::string::npos);
+        REQUIRE(json.find("\"vad_model_path\":\"vad" + jsonSeparator + "canci\xc3\xb3n-\xf0\x9f\x92\xa1.bin\"") != std::string::npos);
     }
     void corpusAndEvaluation()
     {
