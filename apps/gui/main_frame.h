@@ -47,6 +47,8 @@ class wxTimerEvent;
 
 namespace timmy::gui {
 
+    class BenchmarkDialog;
+
     class MainFrame final : public wxFrame
     {
     public:
@@ -58,6 +60,7 @@ namespace timmy::gui {
 
     private:
         class GuiRecognitionObserver;
+        class BenchmarkResults;
 
         void createAudioColumn(wxWindow* parent, wxBoxSizer* columns);
         void createRecognitionColumn(wxWindow* parent, wxBoxSizer* columns);
@@ -69,10 +72,13 @@ namespace timmy::gui {
         void stopRecognition();
         void startRecognition();
         void startBenchmark();
+        void openBenchmark();
+        void closeBenchmark();
         void navigateBenchmark(bool retry);
         void recordBenchmarkNoResult();
         void showBenchmarkAttempt(const core::RecognitionBenchmarkAttempt& attempt);
         void updateBenchmarkControls();
+        void drainBenchmarkResults();
         void pollShutdown();
         void updateRecognitionControls();
         void updateOutputControls();
@@ -113,17 +119,12 @@ namespace timmy::gui {
         wxButton* vadBrowseButton_ = nullptr;
         wxChoice* languageChoice_ = nullptr;
         wxButton* recognitionButton_ = nullptr;
-        wxButton* benchmarkStartButton_ = nullptr;
-        wxButton* benchmarkStopButton_ = nullptr;
-        wxButton* benchmarkNextButton_ = nullptr;
-        wxButton* benchmarkRetryButton_ = nullptr;
-        wxButton* benchmarkNoResultButton_ = nullptr;
-        wxButton* benchmarkBrowseButton_ = nullptr;
-        wxTextCtrl* benchmarkPathText_ = nullptr;
-        wxStaticText* benchmarkCaseText_ = nullptr;
-        wxStaticText* benchmarkPhraseText_ = nullptr;
-        wxStaticText* benchmarkResultText_ = nullptr;
+        BenchmarkDialog* benchmarkDialog_ = nullptr;
+        wxButton* benchmarkOpenButton_ = nullptr;
+        wxStaticText* benchmarkPathSummary_ = nullptr;
+        bool benchmarkCloseRequested_ = false;
         std::shared_ptr<core::RecognitionBenchmarkSession> benchmarkSession_;
+        std::shared_ptr<BenchmarkResults> benchmarkResults_;
         enum class BenchmarkNavigation { none, next, retry };
         BenchmarkNavigation benchmarkNavigation_{BenchmarkNavigation::none};
         bool benchmarkStartRequested_{false};
