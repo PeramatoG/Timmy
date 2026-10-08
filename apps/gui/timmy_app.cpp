@@ -11,6 +11,7 @@
 #include "main_frame.h"
 
 #include <wx/app.h>
+#include <wx/sysopt.h>
 
 class TimmyApp final
     : public wxApp
@@ -18,6 +19,10 @@ class TimmyApp final
 public:
     bool OnInit() override
     {
+#if wxCHECK_VERSION(3, 3, 0)
+        SetAppearance(wxApp::Appearance::Dark);
+#endif
+        wxSystemOptions::SetOption("msw.useDarkMode", 1);
         auto* frame =
             new timmy::gui::MainFrame();
 

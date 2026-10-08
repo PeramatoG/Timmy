@@ -11,6 +11,7 @@
 #include "timmy/asr/whisper_asr_backend.h"
 
 #include "whisper_command_decoding.h"
+#include "whisper_configuration.h"
 #include "whisper_endpoint_detector.h"
 #include "whisper_inference_cancellation.h"
 #include "whisper_recognition_guidance.h"
@@ -98,6 +99,13 @@ namespace timmy::asr {
     class WhisperAsrBackend::Impl
     {
     public:
+        explicit Impl(WhisperAsrBackendOptions configuration)
+            : options(std::move(configuration)),
+              tuning(detail::makeWhisperConfiguration(options.settings,
+                  std::thread::hardware_concurrency())), endpoint(tuning.endpoint)
+        {
+        }
+
         // Releases all worker and model resources in dependency order.
         ~Impl()
         {
@@ -193,23 +201,7 @@ namespace timmy::asr {
             WhisperAsrBackend& owner,
             const std::vector<float>& samples)
         {
-            const auto profile = detail::makeWhisperCommandDecodingProfile(
-                std::thread::hardware_concurrency());
-            auto parameters = whisper_full_default_params(
-                WHISPER_SAMPLING_BEAM_SEARCH);
-            parameters.print_progress = false;
-            parameters.print_realtime = false;
-            parameters.print_timestamps = false;
-            parameters.no_context = profile.noContext;
-            parameters.no_timestamps = profile.noTimestamps;
-            parameters.single_segment = profile.singleSegment;
-            parameters.max_tokens = profile.maxTokens;
-            parameters.n_threads = profile.threadCount;
-            parameters.audio_ctx = profile.audioContext;
-            parameters.temperature = profile.temperature;
-            parameters.temperature_inc = profile.temperatureIncrement;
-            parameters.greedy.best_of = profile.greedyBestOf;
-            parameters.beam_search.beam_size = profile.beamSize;
+            auto parameters = detail::makeWhisperCommandParameters(tuning);
             parameters.language = preferredLanguage.empty()
                 ? "auto"
                 : preferredLanguage.c_str();
@@ -331,6 +323,7 @@ namespace timmy::asr {
         }
 
         WhisperAsrBackendOptions options;
+        const detail::WhisperConfiguration tuning;
         std::atomic<AsrState> lifecycle{ AsrState::stopped };
         detail::WhisperInferenceCancellation inferenceCancellation;
         whisper_context* context = nullptr;
@@ -354,10 +347,9 @@ namespace timmy::asr {
 
     // Creates a backend with no model or worker resources allocated.
     WhisperAsrBackend::WhisperAsrBackend(WhisperAsrBackendOptions options)
-        : impl_(std::make_unique<Impl>())
+        : impl_(std::make_unique<Impl>(std::move(options)))
     {
         configureWhisperLogging();
-        impl_->options = std::move(options);
     }
 
     // Stops recognition before releasing private backend resources.
@@ -394,8 +386,8 @@ namespace timmy::asr {
         impl_->destroyContexts();
         impl_->lifecycle = AsrState::starting;
 
-        impl_->guidance = detail::makeWhisperRecognitionGuidance(
-            configuration.recognitionHints);
+        impl_->guidance = detail::configuredWhisperGuidance(
+            configuration.recognitionHints, impl_->tuning);
         if (!detail::isValidWhisperRecognitionGuidance(impl_->guidance))
         {
             impl_->lifecycle = AsrState::failed;

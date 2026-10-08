@@ -18,6 +18,7 @@
 #include "timmy/audio/audio_engine.h"
 #include "timmy/audio/audio_meter.h"
 #include "timmy/core/recognition_pipeline.h"
+#include "timmy/core/asr_engine_factory.h"
 
 #include <wx/frame.h>
 #include <wx/timer.h>
@@ -26,6 +27,8 @@
 #include <atomic>
 #include <filesystem>
 #include <memory>
+#include <map>
+#include <string>
 #include <vector>
 
 class wxButton;
@@ -34,7 +37,8 @@ class wxChoice;
 class wxCloseEvent;
 class wxCommandEvent;
 class wxGauge;
-class wxNotebook;
+class wxWindow;
+class wxBoxSizer;
 class wxStaticText;
 class wxTextCtrl;
 class wxThreadEvent;
@@ -54,9 +58,9 @@ namespace timmy::gui {
     private:
         class GuiRecognitionObserver;
 
-        void createAudioPage(wxNotebook* notebook);
-        void createRecognitionPage(wxNotebook* notebook);
-        void createOutputPage(wxNotebook* notebook);
+        void createAudioColumn(wxWindow* parent, wxBoxSizer* columns);
+        void createRecognitionColumn(wxWindow* parent, wxBoxSizer* columns);
+        void createOutputColumn(wxWindow* parent, wxBoxSizer* columns);
         void populateAudioDevices();
         void populateRecognitionEngines();
         void resolveDefaultResources();
@@ -82,6 +86,13 @@ namespace timmy::gui {
         void onExecutionResult(wxThreadEvent& event);
         void onClose(wxCloseEvent& event);
         void onMeterTimer(wxTimerEvent& event);
+
+        void resetRecognitionSettings();
+        void refreshRecognitionSettings();
+        void captureRecognitionSettings();
+        asr::SettingValues recognitionSettings_;
+        std::map<std::string, wxWindow*> tuningControls_;
+        wxButton* resetRecognitionButton_ = nullptr;
 
         wxChoice* deviceChoice_ = nullptr;
         wxChoice* channelChoice_ = nullptr;

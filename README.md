@@ -195,12 +195,14 @@ the current emitter plan finishes before the worker is joined.
 
 ### GUI recognition lifecycle and command output (GUI-030)
 
-The GUI retains its Audio and Recognition pages and adds an Output page.
+The GUI shows Audio, Recognition and Output simultaneously in three native,
+resizable columns. Each column scrolls when its contents exceed the available space.
+Native dark appearance is requested at startup where wxWidgets supports it.
 Command output is disabled by default, so listening still shows raw transcript,
 normalized transcript, assembly state/text and semantic command without sending.
 
 For Hydra II, select the audio device/channel and local recognition resources,
-then open Output, select **LT Hydra II**, enter the console
+then use the Output column, select **LT Hydra II**, enter the console
 IP or hostname and use port **8000**. Hold and gap inherit the transport profile
 defaults (currently 30 ms each); pre-clear is off. **Generic OSC** uses the existing
 generic mapping and disables the Hydra controls. Hydra hold and gap each accept
@@ -208,7 +210,17 @@ generic mapping and disables the Hydra controls. Hydra hold and gap each accept
 No output settings are persisted. Configuration can be edited while stopped,
 including while **Enable OSC command output** is unchecked.
 
-Press **Start listening** on Recognition and speak an already supported command,
+Recognition tuning is separated into **Whisper / Advanced** and **VAD / Endpoint**.
+Thread count **0** keeps automatic selection clamped to 1–4; all tuning starts with
+the existing command-mode defaults. Endpoint durations are edited in milliseconds
+and converted to 16 kHz samples inside the backend. **Reset to defaults** restores
+only recognition tuning, leaving model paths, language and output settings alone.
+Tuning and reset are available only while stopped. Core exposes typed descriptors
+and validates values; the selected backend translates a copied snapshot to its
+private configuration. CLI and GUI construct recognition through the same Core
+factory, including the same defaults. No tuning is persisted.
+
+Press **Start listening** in Recognition and speak an already supported command,
 for example `Channel 5 At 50`. While listening, audio device/channel, recognition
 resources and output configuration are frozen. **Enable OSC command output**
 remains available: arm it to validate the frozen settings and emit subsequent

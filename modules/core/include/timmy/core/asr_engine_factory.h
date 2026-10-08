@@ -11,6 +11,7 @@
 #pragma once
 
 #include "timmy/asr/asr_backend.h"
+#include "timmy/asr/configurable_settings.h"
 
 #include <filesystem>
 #include <memory>
@@ -36,8 +37,11 @@ namespace timmy::core {
     };
 
     [[nodiscard]] const std::vector<AsrEngineDescriptor>& availableAsrEngines();
+    [[nodiscard]] const std::vector<asr::SettingDescriptor>& asrSettingDescriptors(
+        AsrEngineId engine);
     [[nodiscard]] std::shared_ptr<asr::IAsrBackend> createAsrBackend(
         AsrEngineId engine,
-        const AsrEngineResources& resources);
+        const AsrEngineResources& resources,
+        const asr::SettingValues& settings = {});
 
 } // namespace timmy::core

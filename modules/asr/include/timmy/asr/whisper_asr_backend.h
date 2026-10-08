@@ -11,15 +11,19 @@
 #pragma once
 
 #include "timmy/asr/asr_backend.h"
+#include "timmy/asr/configurable_settings.h"
 
 #include <filesystem>
 #include <memory>
 
 namespace timmy::asr {
 
+    [[nodiscard]] const std::vector<SettingDescriptor>& whisperSettingDescriptors();
+
     struct WhisperAsrBackendOptions
     {
         std::filesystem::path vadModelPath;
+        SettingValues settings;
     };
 
     class WhisperAsrBackend final
