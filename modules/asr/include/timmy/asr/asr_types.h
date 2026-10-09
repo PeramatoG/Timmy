@@ -68,6 +68,9 @@ namespace timmy::asr {
     {
         std::optional<double> audioDurationSeconds{};
         std::optional<double> inferenceDurationSeconds{};
+        // Measured for the same utterance as this result, including queue wait.
+        std::optional<double> endOfUtteranceToResultSeconds{};
+        std::optional<std::chrono::steady_clock::time_point> utteranceFinalizedAt{};
     };
 
     // Zero denotes ordinary continuous recognition; benchmark generations are nonzero.
@@ -87,10 +90,43 @@ namespace timmy::asr {
         std::optional<double> speechStartSeconds{};
         std::optional<double> utteranceDurationSeconds{};
         std::optional<double> inferenceDurationSeconds{};
-        // Absent means the backend cannot report this counter.
+        // Legacy backend-reported block loss, not device-frame capture loss.
+        // Absent means the backend cannot report this counter; Whisper leaves it absent.
         std::optional<std::uint64_t> droppedAudioBlocks{};
         std::optional<std::uint64_t> droppedVadFrames{};
         std::optional<std::uint64_t> droppedInferenceJobs{};
+        std::optional<std::uint64_t> capturedFrames{};
+        std::optional<std::uint64_t> droppedCaptureFrames{};
+        std::optional<std::uint64_t> captureRingOccupancyFrames{};
+        std::optional<std::uint64_t> captureRingMaxOccupancyFrames{};
+        std::optional<std::uint64_t> captureRingCapacityFrames{};
+        std::optional<std::uint64_t> captureSessionRingHighWaterFrames{};
+        std::optional<std::uint64_t> vadQueueDepth{};
+        std::optional<std::uint64_t> vadQueueMaxDepth{};
+        std::optional<std::uint64_t> inferenceQueueDepth{};
+        std::optional<std::uint64_t> inferenceQueueMaxDepth{};
+        std::optional<double> armedDurationSeconds{};
+        std::optional<double> capturedDurationSeconds{};
+        std::optional<double> utteranceFinalizedSeconds{};
+        std::optional<double> inferenceAudioDurationSeconds{};
+        std::optional<double> realTimeFactor{};
+        std::optional<double> endOfUtteranceToResultSeconds{};
+        std::optional<double> oldestVadQueueAgeSeconds{};
+        std::optional<double> vadQueuedAudioDurationSeconds{};
+        std::optional<double> vadQueueWaitTotalSeconds{};
+        std::optional<double> vadQueueWaitMaxSeconds{};
+        std::optional<double> inferenceQueueWaitTotalSeconds{};
+        std::optional<double> inferenceQueueWaitMaxSeconds{};
+        std::optional<double> commandProcessingDurationSeconds{};
+        std::optional<double> normalizationDurationSeconds{};
+        std::optional<double> assemblyDurationSeconds{};
+        std::optional<double> semanticParseDurationSeconds{};
+        std::optional<double> validationDurationSeconds{};
+        std::optional<double> renderingDurationSeconds{};
+        // Capture counts are deltas since arming, before channel selection/resampling.
+        // Capture ring maximum is sampled during this attempt, not a session maximum.
+        // Queue depths exclude work already dequeued; queue age/wait are wall time.
+        // Speech/endpoint offsets are observed worker stages, not acoustic timestamps.
     };
     struct RecognitionProgress
     {

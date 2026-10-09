@@ -14,6 +14,7 @@
 #include "whisper_configuration.h"
 #include "whisper_endpoint_detector.h"
 #include "whisper_inference_cancellation.h"
+#include "diagnostic_queue.h"
 #include "whisper_recognition_guidance.h"
 
 #include "grammar-parser.h"
@@ -25,7 +26,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdio>
-#include <deque>
 #include <filesystem>
 #include <limits>
 #include <mutex>
@@ -121,6 +121,7 @@ namespace timmy::asr {
             {
                 std::vector<float> samples;
                 AttemptGeneration jobGeneration;
+                std::optional<std::chrono::steady_clock::time_point> finalizedAt;
                 {
                     std::unique_lock lock(mutex);
                     inferenceCondition.wait(lock, [this] {
@@ -131,10 +132,11 @@ namespace timmy::asr {
                         break;
                     }
                     jobGeneration = generation;
-                    samples = std::move(windows.front());
-                    windows.pop_front();
+                    auto job = windows.pop();
+                    samples = std::move(job.value);
+                    if (job.finalized) finalizedAt = job.queuedAt;
                 }
-                infer(owner, samples, jobGeneration);
+                infer(owner, samples, jobGeneration, finalizedAt);
             }
         }
 
@@ -153,8 +155,7 @@ namespace timmy::asr {
                     {
                         break;
                     }
-                    samples = std::move(vadFrames.front());
-                    vadFrames.pop_front();
+                    samples = std::move(vadFrames.pop().value);
                 }
 
                 if (!whisper_vad_detect_speech_no_reset(
@@ -179,14 +180,15 @@ namespace timmy::asr {
                 if (utterance)
                 {
                     whisper_vad_reset_state(vadContext);
-                    progress(owner, RecognitionProgressState::utteranceFinalized, generation);
-                    enqueueInference(std::move(*utterance));
+                    const auto finalizedAt = std::chrono::steady_clock::now();
+                    progress(owner, RecognitionProgressState::utteranceFinalized, generation, finalizedAt);
+                    enqueueInference(std::move(*utterance), finalizedAt);
                 }
             }
         }
 
         // Adds one completed utterance to the bounded inference queue.
-        void enqueueInference(std::vector<float> samples)
+        void enqueueInference(std::vector<float> samples, std::chrono::steady_clock::time_point finalizedAt)
         {
             {
                 std::lock_guard lock(mutex);
@@ -194,12 +196,7 @@ namespace timmy::asr {
                 {
                     return;
                 }
-                if (windows.size() == maximumQueuedWindows)
-                {
-                    windows.pop_front();
-                    ++droppedInferenceJobs;
-                }
-                windows.push_back(std::move(samples));
+                windows.push(std::move(samples), finalizedAt, true);
             }
             inferenceCondition.notify_one();
         }
@@ -207,7 +204,8 @@ namespace timmy::asr {
         // Transcribes one bounded window and publishes a final Timmy result.
         void infer(
             WhisperAsrBackend& owner,
-            const std::vector<float>& samples, AttemptGeneration jobGeneration)
+            const std::vector<float>& samples, AttemptGeneration jobGeneration,
+            std::optional<std::chrono::steady_clock::time_point> finalizedAt)
         {
             progress(owner, RecognitionProgressState::inferenceStarted, jobGeneration);
             auto parameters = detail::makeWhisperCommandParameters(tuning);
@@ -285,6 +283,19 @@ namespace timmy::asr {
                 return;
             }
 
+            const auto completedAt = std::chrono::steady_clock::now();
+            const auto audioSeconds = static_cast<double>(samples.size()) / 16000.0;
+            const auto endToResult = finalizedAt
+                ? std::optional<double>{std::chrono::duration<double>(completedAt - *finalizedAt).count()}
+                : std::nullopt;
+            {
+                std::lock_guard lock(mutex);
+                timings.inferenceDurationSeconds = inferenceSeconds;
+                timings.inferenceAudioDurationSeconds = audioSeconds;
+                timings.realTimeFactor = inferenceSeconds && audioSeconds > 0
+                    ? std::optional<double>{*inferenceSeconds / audioSeconds} : std::nullopt;
+                timings.endOfUtteranceToResultSeconds = endToResult;
+            }
             progress(owner, transcript.empty() ? RecognitionProgressState::inferenceCompletedNoText
                 : RecognitionProgressState::inferenceCompletedWithText, jobGeneration);
             // Empty successful inference is observable, but remains semantically
@@ -294,20 +305,20 @@ namespace timmy::asr {
                 std::move(transcript),
                 AsrResultKind::final,
                 std::move(detectedLanguage),
-                {static_cast<double>(samples.size()) / 16000.0, inferenceSeconds},
+                {audioSeconds, inferenceSeconds, endToResult, finalizedAt},
                 jobGeneration
             });
         }
 
         void progress(WhisperAsrBackend& owner, RecognitionProgressState stage,
-            AttemptGeneration jobGeneration)
+            AttemptGeneration jobGeneration,
+            std::chrono::steady_clock::time_point timestamp = std::chrono::steady_clock::now())
         {
-            RecognitionProgress event{stage, jobGeneration};
+            RecognitionProgress event{stage, jobGeneration, timestamp};
             {
                 std::lock_guard lock(mutex);
-                event.droppedAudioBlocks = 0;
-                event.droppedVadFrames = droppedVadFrames;
-                event.droppedInferenceJobs = droppedInferenceJobs;
+                event.droppedVadFrames = vadFrames.dropped();
+                event.droppedInferenceJobs = windows.dropped();
             }
             owner.publishProgress(event);
         }
@@ -379,10 +390,10 @@ namespace timmy::asr {
         std::condition_variable vadCondition;
         std::vector<float> accumulation;
         std::vector<float> vadAccumulation;
-        std::deque<std::vector<float>> windows;
-        std::deque<std::vector<float>> vadFrames;
+        detail::DiagnosticQueue<std::vector<float>> windows{maximumQueuedWindows};
+        detail::DiagnosticQueue<std::vector<float>> vadFrames{maximumQueuedVadFrames};
+        AttemptDiagnostics timings{};
         AttemptGeneration generation = 0; // Changed only with workers joined/audio gated.
-        std::uint64_t droppedVadFrames = 0, droppedInferenceJobs = 0;
         bool shutdownRequested = false;
         std::thread inferenceWorker;
         std::thread vadWorker;
@@ -522,7 +533,9 @@ namespace timmy::asr {
             {
                 std::lock_guard lock(impl_->mutex);
                 impl_->generation = 0;
-                impl_->droppedVadFrames = impl_->droppedInferenceJobs = 0;
+                impl_->vadFrames.reset();
+                impl_->windows.reset();
+                impl_->timings = {};
             }
             impl_->startWorkers(*this);
         }
@@ -545,10 +558,20 @@ namespace timmy::asr {
     AttemptDiagnostics WhisperAsrBackend::attemptDiagnostics() const
     {
         std::lock_guard lock(impl_->mutex);
-        AttemptDiagnostics diagnostics;
-        diagnostics.droppedAudioBlocks = 0;
-        diagnostics.droppedVadFrames = impl_->droppedVadFrames;
-        diagnostics.droppedInferenceJobs = impl_->droppedInferenceJobs;
+        AttemptDiagnostics diagnostics = impl_->timings;
+        // Capture accounting belongs to AudioEngine; this backend cannot count lost blocks.
+        diagnostics.droppedVadFrames = impl_->vadFrames.dropped();
+        diagnostics.droppedInferenceJobs = impl_->windows.dropped();
+        diagnostics.vadQueueDepth = impl_->vadFrames.size();
+        diagnostics.vadQueueMaxDepth = impl_->vadFrames.maximum();
+        diagnostics.inferenceQueueDepth = impl_->windows.size();
+        diagnostics.inferenceQueueMaxDepth = impl_->windows.maximum();
+        diagnostics.oldestVadQueueAgeSeconds = impl_->vadFrames.oldestAge();
+        diagnostics.vadQueuedAudioDurationSeconds = static_cast<double>(impl_->vadFrames.size() * vadFrameSampleCount) / 16000.0;
+        diagnostics.vadQueueWaitTotalSeconds = impl_->vadFrames.waitTotal();
+        diagnostics.vadQueueWaitMaxSeconds = impl_->vadFrames.waitMax();
+        diagnostics.inferenceQueueWaitTotalSeconds = impl_->windows.waitTotal();
+        diagnostics.inferenceQueueWaitMaxSeconds = impl_->windows.waitMax();
         return diagnostics;
     }
 
@@ -564,7 +587,9 @@ namespace timmy::asr {
         {
             std::lock_guard lock(impl_->mutex);
             impl_->generation = generation;
-            impl_->droppedVadFrames = impl_->droppedInferenceJobs = 0;
+            impl_->vadFrames.reset();
+            impl_->windows.reset();
+            impl_->timings = {};
         }
         try { impl_->startWorkers(*this); }
         catch (const std::system_error& error)
@@ -635,24 +660,14 @@ namespace timmy::asr {
 
             if (impl_->vadContext != nullptr)
             {
-                if (impl_->vadFrames.size() == maximumQueuedVadFrames)
-                {
-                    impl_->vadFrames.pop_front();
-                    ++impl_->droppedVadFrames;
-                }
-                impl_->vadFrames.push_back(std::move(accumulation));
+                impl_->vadFrames.push(std::move(accumulation));
                 accumulation.clear();
                 accumulation.reserve(vadFrameSampleCount);
                 impl_->vadCondition.notify_one();
             }
             else
             {
-                if (impl_->windows.size() == maximumQueuedWindows)
-                {
-                    impl_->windows.pop_front();
-                    ++impl_->droppedInferenceJobs;
-                }
-                impl_->windows.push_back(std::move(accumulation));
+                impl_->windows.push(std::move(accumulation));
                 accumulation.clear();
                 accumulation.reserve(windowSampleCount);
                 impl_->inferenceCondition.notify_one();

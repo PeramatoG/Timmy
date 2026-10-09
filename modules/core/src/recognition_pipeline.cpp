@@ -54,8 +54,23 @@ namespace timmy::core {
     class RecognitionPipeline::AudioInput final : public audio::IAudioConsumer
     {
     public:
-        AudioInput(std::shared_ptr<audio::AudioFormatAdapter> adapter, bool measure)
-            : adapter_(std::move(adapter)), measure_(measure) {}
+        AudioInput(std::shared_ptr<audio::AudioFormatAdapter> adapter, bool measure,
+            std::shared_ptr<const audio::IAudioCaptureStatsSource> captureStats)
+            : adapter_(std::move(adapter)), captureStats_(std::move(captureStats)), measure_(measure) {}
+        void arm()
+        {
+            std::lock_guard lock(statsMutex);
+            armedAt = std::chrono::steady_clock::now();
+            active = true;
+            baseline = captureStats_ ? captureStats_->captureStats() : std::nullopt;
+            ringMaximum = 0;
+        }
+        void finish()
+        {
+            std::lock_guard lock(statsMutex);
+            updateCapture();
+            active = false;
+        }
         void onAudioBlock(const audio::AudioBlockView& block) override
         {
             std::lock_guard lock(gateMutex);
@@ -63,6 +78,7 @@ namespace timmy::core {
             if (measure_)
             {
                 std::lock_guard statsLock(statsMutex);
+                updateCapture();
                 if (block.format.channelCount == 1 && block.format.sampleRate != 0)
                 {
                     const auto count = std::min(block.frameCount, block.interleavedSamples.size());
@@ -80,7 +96,7 @@ namespace timmy::core {
             adapter_->onAudioBlock(block);
         }
         asr::AttemptDiagnostics snapshot() const
-        { std::lock_guard lock(statsMutex); return diagnostics; }
+        { std::lock_guard lock(statsMutex); updateCapture(); return diagnostics; }
         void reset()
         {
             std::lock_guard lock(gateMutex);
@@ -89,6 +105,7 @@ namespace timmy::core {
             std::lock_guard statsLock(statsMutex);
             diagnostics = {};
             squares = 0;
+            baseline.reset(); active = false; ringMaximum = 0;
         }
         // Recursive only to permit synchronous test/alternative-backend callbacks
         // to close acceptance while the audio submission is still on the stack.
@@ -96,8 +113,51 @@ namespace timmy::core {
         bool enabled = false;
     private:
         std::shared_ptr<audio::AudioFormatAdapter> adapter_;
+        // Capture samples are independent of downstream delivery. Sampling this source
+        // also sees loss while no audio reaches ASR. Never called on the device callback.
+        void updateCapture() const
+        {
+            if (!active) return;
+            diagnostics.armedDurationSeconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - armedAt).count();
+            const auto current = captureStats_ ? captureStats_->captureStats() : std::nullopt;
+            // CLI capture starts after the ordinary pipeline; its counters start at
+            // session origin. Benchmark attempts require an explicit arming baseline.
+            if (!measure_ && !baseline && current)
+            {
+                baseline = current;
+                baseline->capturedFrames = baseline->droppedCaptureFrames = 0;
+            }
+            if (!baseline || !current || current->session != baseline->session
+                || current->capturedFrames < baseline->capturedFrames
+                || current->droppedCaptureFrames < baseline->droppedCaptureFrames)
+            {
+                diagnostics.capturedFrames.reset(); diagnostics.droppedCaptureFrames.reset();
+                diagnostics.capturedDurationSeconds.reset();
+                diagnostics.captureRingOccupancyFrames.reset();
+                diagnostics.captureRingMaxOccupancyFrames.reset();
+                diagnostics.captureRingCapacityFrames.reset();
+                diagnostics.captureSessionRingHighWaterFrames.reset();
+                return;
+            }
+            diagnostics.capturedFrames = current->capturedFrames - baseline->capturedFrames;
+            diagnostics.droppedCaptureFrames = current->droppedCaptureFrames - baseline->droppedCaptureFrames;
+            diagnostics.capturedDurationSeconds = current->sampleRate
+                ? std::optional<double>{static_cast<double>(*diagnostics.capturedFrames) / current->sampleRate}
+                : std::nullopt;
+            diagnostics.captureRingOccupancyFrames = current->ringOccupancyFrames;
+            ringMaximum = std::max(ringMaximum, current->ringOccupancyFrames);
+            diagnostics.captureRingMaxOccupancyFrames = ringMaximum;
+            diagnostics.captureRingCapacityFrames = current->ringCapacityFrames;
+            diagnostics.captureSessionRingHighWaterFrames = current->ringHighWaterFrames;
+        }
+        std::shared_ptr<const audio::IAudioCaptureStatsSource> captureStats_;
         mutable std::mutex statsMutex;
-        asr::AttemptDiagnostics diagnostics;
+        mutable asr::AttemptDiagnostics diagnostics;
+        mutable std::optional<audio::AudioCaptureStats> baseline;
+        std::chrono::steady_clock::time_point armedAt{};
+        bool active = false;
+        mutable std::uint64_t ringMaximum = 0;
         double squares = 0;
         const bool measure_;
     };
@@ -133,10 +193,11 @@ namespace timmy::core {
     // Creates a pipeline attached to an existing selected audio channel.
     RecognitionPipeline::RecognitionPipeline(
         std::shared_ptr<audio::AudioChannelSelector> channelSelector,
-        std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile, bool isolateUtterances, bool benchmarkAttempts)
+        std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile, bool isolateUtterances, bool benchmarkAttempts,
+        std::shared_ptr<const audio::IAudioCaptureStatsSource> captureStats)
         : channelSelector_(std::move(channelSelector)),
           formatAdapter_(std::make_shared<audio::AudioFormatAdapter>()),
-          audioInput_(std::make_shared<AudioInput>(formatAdapter_, benchmarkAttempts)),
+          audioInput_(std::make_shared<AudioInput>(formatAdapter_, benchmarkAttempts, std::move(captureStats))),
           backend_(std::move(backend)),
           backendListener_(std::make_shared<BackendListener>(*this)),
           profile_(std::move(profile)),
@@ -195,6 +256,7 @@ namespace timmy::core {
         {
             std::lock_guard lock(audioInput_->gateMutex);
             audioInput_->enabled = !benchmarkAttempts_;
+            if (!benchmarkAttempts_) audioInput_->arm();
         }
         channelSelector_->addConsumer(audioInput_);
         {
@@ -250,7 +312,18 @@ namespace timmy::core {
             return;
         }
 
+        using Clock = std::chrono::steady_clock;
+        asr::AttemptDiagnostics commandTimings;
+        const auto started = benchmarkAttempts_ ? Clock::now() : Clock::time_point{};
+        auto stageAt = started;
+        const auto stage = [&](std::optional<double>& elapsed) {
+            if (!benchmarkAttempts_) return;
+            const auto now = Clock::now();
+            elapsed = std::chrono::duration<double>(now - stageAt).count();
+            stageAt = now;
+        };
         const auto normalized = normalizer_.normalize(result.transcript);
+        stage(commandTimings.normalizationDurationSeconds);
         command::AssemblyResult assembly;
         command::SemanticParseResult semantic;
         command::IntentValidationResult validation;
@@ -270,15 +343,20 @@ namespace timmy::core {
                 assembler_->reset();
                 commandContext_.reset();
             }
+            // Assembly includes acquiring the command lock and context reset.
             assembly = assembler_->accept(normalized.normalizedText, commandContext_);
+            stage(commandTimings.assemblyDurationSeconds);
             if (assembly.state == command::AssemblyState::complete)
             {
                 semantic = semanticParser_.parse(assembly.text, commandContext_);
+                stage(commandTimings.semanticParseDurationSeconds);
                 semanticState = coreSemanticState(semantic.state);
                 if (semantic.command) {
                     validation = command::validateIntent(*semantic.command, profile_.validation);
+                    stage(commandTimings.validationDurationSeconds);
                     if (validation.accepted) {
                         rendering = command::renderIntent(*semantic.command, profile_.rendering);
+                        stage(commandTimings.renderingDurationSeconds);
                         commandContext_.observe(semantic);
                     }
                 }
@@ -287,6 +365,22 @@ namespace timmy::core {
         }
         if (currentObserver)
         {
+            if (benchmarkAttempts_)
+                commandTimings.commandProcessingDurationSeconds = std::chrono::duration<double>(Clock::now() - started).count();
+            auto diagnostics = attemptDiagnostics();
+            diagnostics.inferenceAudioDurationSeconds = result.metrics.audioDurationSeconds;
+            diagnostics.inferenceDurationSeconds = result.metrics.inferenceDurationSeconds;
+            diagnostics.endOfUtteranceToResultSeconds = result.metrics.endOfUtteranceToResultSeconds;
+            diagnostics.realTimeFactor = result.metrics.audioDurationSeconds && *result.metrics.audioDurationSeconds > 0
+                && result.metrics.inferenceDurationSeconds
+                ? std::optional<double>{*result.metrics.inferenceDurationSeconds / *result.metrics.audioDurationSeconds}
+                : std::nullopt;
+            diagnostics.commandProcessingDurationSeconds = commandTimings.commandProcessingDurationSeconds;
+            diagnostics.normalizationDurationSeconds = commandTimings.normalizationDurationSeconds;
+            diagnostics.assemblyDurationSeconds = commandTimings.assemblyDurationSeconds;
+            diagnostics.semanticParseDurationSeconds = commandTimings.semanticParseDurationSeconds;
+            diagnostics.validationDurationSeconds = commandTimings.validationDurationSeconds;
+            diagnostics.renderingDurationSeconds = commandTimings.renderingDurationSeconds;
             currentObserver->onRecognitionTranscript({
                 normalized.originalText,
                 normalized.normalizedText,
@@ -299,7 +393,7 @@ namespace timmy::core {
                 result.detectedLanguage,
                 result.metrics,
                 result.generation,
-                attemptDiagnostics()
+                diagnostics
             });
         }
     }
@@ -322,6 +416,7 @@ namespace timmy::core {
         {
             std::lock_guard gateLock(audioInput_->gateMutex);
             std::lock_guard lock(mutex_);
+            audioInput_->arm();
             attemptArmed_ = true;
             audioInput_->enabled = true;
             generation = attemptGeneration_;
@@ -334,14 +429,23 @@ namespace timmy::core {
         std::lock_guard lock(mutex_);
         attemptArmed_ = false;
         audioInput_->enabled = false;
+        audioInput_->finish();
     }
     asr::AttemptDiagnostics RecognitionPipeline::attemptDiagnostics() const
     {
-        auto diagnostics = audioInput_->snapshot();
-        const auto backend = backend_->attemptDiagnostics();
-        diagnostics.droppedAudioBlocks = backend.droppedAudioBlocks;
-        diagnostics.droppedVadFrames = backend.droppedVadFrames;
-        diagnostics.droppedInferenceJobs = backend.droppedInferenceJobs;
+        auto diagnostics = backend_->attemptDiagnostics();
+        const auto input = audioInput_->snapshot();
+        diagnostics.audioSamples = input.audioSamples;
+        diagnostics.audioDurationSeconds = input.audioDurationSeconds;
+        diagnostics.inputPeak = input.inputPeak; diagnostics.inputRms = input.inputRms;
+        diagnostics.armedDurationSeconds = input.armedDurationSeconds;
+        diagnostics.capturedFrames = input.capturedFrames;
+        diagnostics.droppedCaptureFrames = input.droppedCaptureFrames;
+        diagnostics.capturedDurationSeconds = input.capturedDurationSeconds;
+        diagnostics.captureRingOccupancyFrames = input.captureRingOccupancyFrames;
+        diagnostics.captureRingMaxOccupancyFrames = input.captureRingMaxOccupancyFrames;
+        diagnostics.captureRingCapacityFrames = input.captureRingCapacityFrames;
+        diagnostics.captureSessionRingHighWaterFrames = input.captureSessionRingHighWaterFrames;
         return diagnostics;
     }
     void RecognitionPipeline::handleProgress(const asr::RecognitionProgress& progress)

@@ -159,3 +159,58 @@ Deterministic Core and GUI tests use fake ASR without devices, models, GPUs or
 consoles. An additional strict JSON decoder test runs when Python 3 is available;
 it uses only Python's standard library. WAV capture/replay and parameter sweeps
 are outside this feature.
+
+
+### ASR-PERF-010 diagnostic additions
+
+Schema version 2 is retained: these are additive, nullable fields under
+`diagnostics`. Readers must tolerate missing optional fields in older version 2
+rows and ignore extra diagnostic fields. The existing `metrics` object and
+version 1/2 outcome interpretations are unchanged.
+
+| Fields | Meaning and scope |
+| --- | --- |
+| `armed_duration_seconds` | Wall time since the pipeline armed, frozen on disarm. |
+| `captured_frames`, `dropped_capture_frames`, `captured_duration_seconds` | AudioEngine counter deltas since arming, in **device frames** before channel selection/resampling. Captured duration includes dropped frames; delivered `audio_samples` / `audio_duration_seconds` retain their existing selected-input meaning. |
+| `capture_ring_occupancy_frames`, `capture_ring_max_occupancy_frames`, `capture_ring_capacity_frames` | Sampled current occupancy, maximum sampled **during this attempt**, and capacity, in device frames. Sampling occurs during input delivery and diagnostic reads; transient peaks can occur between samples. |
+| `capture_session_ring_high_water_frames` | AudioEngine's producer-sampled high-water since capture started. Explicitly a **capture-session** metric; it can predate the attempt. Available separately from the attempt maximum so earlier session peaks are not mistaken for attempt backlog. |
+| `vad_queue_depth`, `vad_queue_max_depth`, `inference_queue_depth`, `inference_queue_max_depth` | Current queued items and maximum depth since attempt preparation; excludes dequeued/in-flight work. VAD items are 512 mono samples at 16 kHz; inference items are utterances (or five-second windows without VAD). |
+| `dropped_vad_frames`, `dropped_inference_jobs` | Number of evicted queue items. The bounds remain 256 VAD frames and two inference jobs, dropping oldest. VAD frames here are queue items, not device PCM frames. |
+| `oldest_vad_queue_age_seconds`, `vad_queued_audio_duration_seconds` | Oldest surviving item's wall-clock queue residence (null when empty) and total audio duration currently queued (zero when empty). Residence does not include upstream ring delay or partial-frame accumulation. |
+| `vad_queue_wait_total_seconds`, `vad_queue_wait_max_seconds`, `inference_queue_wait_total_seconds`, `inference_queue_wait_max_seconds` | Sum and maximum residence of **dequeued** items since preparation; excludes evicted items and currently waiting items. |
+| `speech_start_seconds`, `utterance_finalized_seconds`, `utterance_duration_seconds` | Observed worker-stage offsets from arming and speech-start-to-finalization wall duration. These are detection/endpoint processing times, not acoustic timestamps; VAD backlog can delay them. Finalization uses the returned job's timestamp when available. |
+| `inference_duration_seconds`, `inference_audio_duration_seconds`, `real_time_factor` | Whisper computation duration, actual submitted PCM duration, and their ratio. RTF excludes queue wait and command work. Zero/unknown audio duration yields null RTF. |
+| `end_of_utterance_to_result_seconds` | That returned utterance's endpoint-finalization-to-final-ASR-availability wall duration, including inference queue wait and transcript extraction. Null for fixed windows without an endpoint. |
+| `command_processing_duration_seconds` | Normalization through completed command processing, excluding observer/JSONL/OSC work. |
+| `normalization_duration_seconds`, `assembly_duration_seconds`, `semantic_parse_duration_seconds`, `validation_duration_seconds`, `rendering_duration_seconds` | Benchmark-only detailed stage durations. Unexecuted stages are null; assembly includes command-lock acquisition and context reset. |
+
+`dropped_audio_blocks` remains readable for older/alternative backends. Whisper
+cannot observe upstream block loss and now leaves it null. Do not infer device
+capture health from this legacy field; use `dropped_capture_frames`. A missing
+stats source, capture-session change during an attempt, or unavailable baseline
+produces null capture accounting, never an assumed zero.
+
+AudioEngine's backend-neutral `captureStats()` / `captureStatsSource()` API also
+provides total captured/dropped device frames, sample rate, ring capacity/current
+occupancy/high-water and a capture-session identifier. The shared stats handle
+outlives the engine, and stopped capture retains its final totals. Restarting
+capture resets these totals. Snapshot gauges are sampled, not an atomic snapshot
+of the entire pipeline.
+
+### Capture-to-inference audit
+
+| Boundary | Audit finding |
+| --- | --- |
+| AudioEngine callback → PCM ring | Existing loss counter was private, and Whisper falsely published zero block losses. Corrected by exposing device-frame accounting. Added only bounded lock-free atomic operations and ring queries; no callback logging, allocation, locks, GUI, file I/O or recognition work. |
+| Ring → audio dispatch worker | The worker copies and commits ring reads before invoking consumers. Slow consumers can fill the ring; capture loss/current occupancy/high-water now expose that pressure. |
+| AudioChannelSelector → AudioFormatAdapter | Channel selection and resampling allocate/work on the dispatch worker, never the realtime callback. Capture stats are read directly through the audio-owned handle, preserving original device-frame units across selection/resampling. No processing or buffering policy changed. |
+| RecognitionPipeline → backend | Attempt gating excludes disarmed input and resets resampler/command state before backend preparation. Capture baselines are taken at arming; counters freeze at disarming. Detailed input scanning and command clocks remain benchmark-only. |
+| Backend → Silero worker | PCM is accumulated into bounded frames under the existing queue lock; VAD runs after dequeue outside that lock. Depth, drops, age, queued audio and residence now reveal backlog. |
+| Silero → Whisper inference worker | Completed utterances use the same bounded drop-oldest queue. Each job keeps its endpoint timestamp, avoiding incorrect latency attribution when later utterances finalize before an earlier result returns. Inference still runs outside the queue lock. |
+| Stop / Next / Retry | Existing cooperative inference cancellation and worker joins remain intact. Queue histories and inference timings reset only after old workers join; model/VAD contexts retain the existing session lifecycle. |
+
+No additional blocking defect requiring a behavior correction was found in these
+boundaries. Model selection, CPU/GPU policy, decoder settings, prompt/grammar,
+Silero endpoint options, command semantics, rendering and OSC behavior are
+unchanged. Upstream ring occupancy and worker-stage timestamps are observations;
+this change does not flush extra captured audio or tune recognition to hide backlog.

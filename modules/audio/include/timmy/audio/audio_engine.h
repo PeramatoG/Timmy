@@ -11,6 +11,7 @@
 #pragma once
 
 #include "timmy/audio/audio_capture_config.h"
+#include "timmy/audio/audio_capture_stats.h"
 #include "timmy/audio/audio_diagnostic.h"
 #include "timmy/audio/audio_consumer.h"
 #include "timmy/audio/audio_stream_format.h"
@@ -52,6 +53,10 @@ namespace timmy::audio {
         AudioStartResult start(const AudioCaptureConfig& config);
 
         void stop() noexcept;
+
+        // A lifetime-safe stats handle; remains readable after stop/destruction.
+        [[nodiscard]] std::shared_ptr<const IAudioCaptureStatsSource> captureStatsSource() const noexcept;
+        [[nodiscard]] std::optional<AudioCaptureStats> captureStats() const noexcept;
 
         [[nodiscard]]
         bool isRunning() const noexcept;

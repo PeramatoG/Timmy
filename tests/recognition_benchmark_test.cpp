@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <stdexcept>
 
@@ -196,6 +197,10 @@ namespace {
         REQUIRE(fixture.observer->last.detectedLanguage == "es");
         REQUIRE(fixture.observer->last.metrics.audioDurationSeconds == 2.5);
         REQUIRE(fixture.observer->last.metrics.inferenceDurationSeconds == 0.75);
+        REQUIRE(fixture.observer->last.diagnostics.realTimeFactor == 0.3);
+        REQUIRE(!fixture.observer->last.diagnostics.commandProcessingDurationSeconds);
+        fixture.backend->emit({"Channel 1 At 50", asr::AsrResultKind::final, {}, {0, 0.75}});
+        REQUIRE(!fixture.observer->last.diagnostics.realTimeFactor);
         const auto count = fixture.observer->calls;
         fixture.backend->emit({"Channel 1 At 50", asr::AsrResultKind::partial, "en", {}});
         REQUIRE(fixture.observer->calls == count);
@@ -326,6 +331,7 @@ namespace {
         result.rawTranscript = "\"quoted\"\\path\n\t\r\b\f" + std::string(1, '\x01') + " \xe2\x80\x94 espa\xc3\xb1ol";
         result.detectedLanguage = "es";
         result.metrics = {2.5, 0.75};
+        result.diagnostics.realTimeFactor = std::numeric_limits<double>::infinity();
         return core::benchmarkJson(snapshot(), "session-id", core::liveBenchmarkCases()[0], 2, result);
     }
 }
@@ -353,6 +359,32 @@ int main(int argc, char** argv)
             recognized.diagnostics.droppedAudioBlocks = 1;
             recognized.diagnostics.droppedVadFrames = 2;
             recognized.diagnostics.droppedInferenceJobs = 3;
+            recognized.diagnostics.capturedFrames = 144000;
+            recognized.diagnostics.droppedCaptureFrames = 1536;
+            recognized.diagnostics.captureRingOccupancyFrames = 512;
+            recognized.diagnostics.captureRingMaxOccupancyFrames = 1024;
+            recognized.diagnostics.captureRingCapacityFrames = 48000;
+            recognized.diagnostics.captureSessionRingHighWaterFrames = 2048;
+            recognized.diagnostics.vadQueueDepth = 2; recognized.diagnostics.vadQueueMaxDepth = 256;
+            recognized.diagnostics.inferenceQueueDepth = 1; recognized.diagnostics.inferenceQueueMaxDepth = 2;
+            recognized.diagnostics.armedDurationSeconds = 4;
+            recognized.diagnostics.capturedDurationSeconds = 3;
+            recognized.diagnostics.utteranceFinalizedSeconds = 2.2;
+            recognized.diagnostics.inferenceAudioDurationSeconds = 2.5;
+            recognized.diagnostics.realTimeFactor = 0.3;
+            recognized.diagnostics.endOfUtteranceToResultSeconds = 1.1;
+            recognized.diagnostics.oldestVadQueueAgeSeconds = 0.1;
+            recognized.diagnostics.vadQueuedAudioDurationSeconds = 0.064;
+            recognized.diagnostics.vadQueueWaitTotalSeconds = 1;
+            recognized.diagnostics.vadQueueWaitMaxSeconds = 0.2;
+            recognized.diagnostics.inferenceQueueWaitTotalSeconds = 0.3;
+            recognized.diagnostics.inferenceQueueWaitMaxSeconds = 0.3;
+            recognized.diagnostics.commandProcessingDurationSeconds = 0.006;
+            recognized.diagnostics.normalizationDurationSeconds = 0.001;
+            recognized.diagnostics.assemblyDurationSeconds = 0.001;
+            recognized.diagnostics.semanticParseDurationSeconds = 0.002;
+            recognized.diagnostics.validationDurationSeconds = 0.001;
+            recognized.diagnostics.renderingDurationSeconds = 0.001;
             using Outcome = core::BenchmarkRecognitionOutcome;
             for (auto outcome : {Outcome::finalResult, Outcome::noSpeech,
                     Outcome::emptyAsrResult, Outcome::operatorNoResult})
