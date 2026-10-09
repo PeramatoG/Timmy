@@ -36,6 +36,7 @@ namespace timmy::asr::detail {
             std::span<const float> samples,
             float speechProbability);
         void reset();
+        [[nodiscard]] bool speaking() const { return speaking_; }
 
     private:
         [[nodiscard]] std::optional<std::vector<float>> finish(

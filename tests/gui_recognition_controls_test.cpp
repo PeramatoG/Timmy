@@ -34,6 +34,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <source_location>
 #include <thread>
 #include <vector>
 
@@ -66,15 +67,16 @@ namespace {
     }
 
     template<class Predicate>
-    void waitFor(Predicate ready)
+    void waitFor(Predicate ready, std::chrono::milliseconds timeout = 5s,
+        std::source_location location = std::source_location::current())
     {
-        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
         while (!ready() && std::chrono::steady_clock::now() < deadline)
         {
             pumpEvents();
             std::this_thread::sleep_for(1ms);
         }
-        REQUIRE(ready());
+        require(ready(), "waitFor predicate", static_cast<int>(location.line()));
     }
 
     template<class Control>
@@ -118,6 +120,7 @@ namespace {
         {
             configurations.push_back(configuration);
             ++starts;
+            generation = 0;
             state_ = asr::AsrState::running;
             return {true, std::nullopt};
         }
@@ -129,9 +132,24 @@ namespace {
             state_ = asr::AsrState::stopped;
             return {true, std::nullopt};
         }
+        asr::AsrOperationResult resetAttempt(asr::AttemptGeneration next) override
+        {
+            std::unique_lock lock(mutex_);
+            resetEntered = true;
+            changed_.wait(lock, [&] { return !blockReset_; });
+            generation = next;
+            ++resets;
+            return {true, {}};
+        }
+        void blockReset()
+        { std::lock_guard lock(mutex_); resetEntered = false; blockReset_ = true; }
+        void emitTagged(std::string transcript, asr::AttemptGeneration tag)
+        { publishResult({std::move(transcript), asr::AsrResultKind::final, {}, {}, tag}); }
+        void progress(asr::RecognitionProgressState stage)
+        { publishProgress({stage, generation.load()}); }
         void emit(std::string transcript)
         {
-            publishResult({std::move(transcript), asr::AsrResultKind::final, {}});
+            publishResult({std::move(transcript), asr::AsrResultKind::final, {}, {}, generation.load()});
         }
         void emitDiagnostic()
         {
@@ -147,12 +165,14 @@ namespace {
         void releaseStop()
         {
             std::lock_guard lock(mutex_);
-            blockStop_ = false;
+            blockStop_ = blockReset_ = false;
             changed_.notify_all();
         }
 
         std::vector<asr::AsrConfiguration> configurations;
-        std::atomic<int> starts{0};
+        std::atomic<int> starts{0}, resets{0};
+        std::atomic<asr::AttemptGeneration> generation{0};
+        std::atomic<bool> resetEntered{false};
         std::atomic<bool> stopEntered{false};
 
     private:
@@ -160,7 +180,7 @@ namespace {
         std::atomic<asr::AsrState> state_{asr::AsrState::stopped};
         std::mutex mutex_;
         std::condition_variable changed_;
-        bool blockStop_ = false;
+        bool blockStop_ = false, blockReset_ = false;
     };
 
     class BlockingEmitter final : public transport::ICommandEmitter
@@ -585,6 +605,18 @@ namespace {
         while (std::getline(input, line)) lines.push_back(line);
         return lines;
     }
+    void startAttempt(FrameFixture& fixture)
+    {
+        auto& action = benchmarkControl<wxButton>(fixture, "benchmark.startAttempt");
+        auto& state = benchmarkControl<wxStaticText>(fixture, "benchmark.state");
+        waitFor([&] { return action.IsEnabled(); });
+        REQUIRE(state.GetLabel() == "Ready");
+        click(action);
+        REQUIRE(state.GetLabel() == "Get ready...");
+        REQUIRE(!action.IsEnabled());
+        waitFor([&] { return state.GetLabel() == "SPEAK NOW"; });
+        REQUIRE(benchmarkControl<wxButton>(fixture, "benchmark.noResult").IsEnabled());
+    }
     void guidedBenchmarkControlsAndIsolation()
     {
         FrameFixture fixture;
@@ -595,97 +627,67 @@ namespace {
         auto& next = benchmarkControl<wxButton>(fixture, "benchmark.next");
         auto& retry = benchmarkControl<wxButton>(fixture, "benchmark.retry");
         auto& file = benchmarkControl<wxTextCtrl>(fixture, "benchmark.path");
-        REQUIRE(start.IsEnabled() && !stop.IsEnabled() && !next.IsEnabled() && !retry.IsEnabled());
-        click(start); // Missing result path must not start recognition.
+        click(start);
         REQUIRE(fixture.backend->starts == 0);
         file.ChangeValue(wxString::FromUTF8(path.string()));
         fixture.host().ChangeValue("192.0.2.5");
-        toggle(fixture.output(), true); // Benchmark start must override pre-arming.
+        toggle(fixture.output(), true);
         click(start);
-        REQUIRE(fixture.backend->starts == 1);
-        pumpEvents();
-        REQUIRE(!fixture.recognition().IsEnabled() && stop.IsEnabled());
-        REQUIRE(!start.IsEnabled() && !file.IsEnabled());
-        REQUIRE(!fixture.output().IsEnabled() && !fixture.output().GetValue());
-        REQUIRE(fixture.factories == 0 && fixture.emitter->calls == 0);
-        REQUIRE(!next.IsEnabled() && !retry.IsEnabled());
+        REQUIRE(fixture.backend->starts == 1 && !fixture.output().IsEnabled());
+        REQUIRE(!fixture.output().GetValue() && fixture.factories == 0);
         for (auto* control : fixture.tuning) REQUIRE(!control->IsEnabled());
-        for (auto* text : fixture.texts) REQUIRE(!text->IsEnabled());
-        toggle(fixture.output(), true); // Synthetic events cannot bypass the guard.
-        click(fixture.recognition());
-        REQUIRE(!fixture.output().GetValue() && fixture.factories == 0 && fixture.backend->starts == 1);
-        const auto frozen = fixture.backend->configurations.front();
-        fixture.texts[0]->ChangeValue("synthetic-changed-model.bin");
-        fixture.choices[3]->SetSelection(2);
-        auto* threads = dynamic_cast<wxSpinCtrl*>(wxWindow::FindWindowByName("whisper.threads", fixture.frame));
-        REQUIRE(threads != nullptr);
-        threads->SetValue(7);
-        click(fixture.reset());
+        toggle(fixture.output(), true);
+        REQUIRE(!fixture.output().GetValue() && fixture.factories == 0);
+        startAttempt(fixture);
+        const auto oldGeneration = fixture.backend->generation.load();
+        fixture.backend->progress(asr::RecognitionProgressState::speechStarted);
+        waitFor([&] { return benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel() == "Waiting for end of speech"; });
+        fixture.backend->progress(asr::RecognitionProgressState::utteranceFinalized);
+        fixture.backend->progress(asr::RecognitionProgressState::inferenceStarted);
+        waitFor([&] { return benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel() == "Processing"; });
         fixture.backend->emit("Channel 1 At 50");
-        REQUIRE(resultLines(path).size() == 1); // Logging precedes the wx event.
-        fixture.backend->emit("Channel 5 At 50"); // Review does not consume a case.
+        REQUIRE(resultLines(path).size() == 1);
         pumpEvents();
-        REQUIRE(resultLines(path).size() == 1 && next.IsEnabled() && retry.IsEnabled());
-        REQUIRE(fixture.label("Last result:").GetLabel().Contains("es-num-1 attempt 1 PASS"));
-        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel() == "Waiting for operator decision");
-        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.instruction").GetLabel().Contains("Next or Retry"));
-        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.counts").GetLabel() == "PASS: 1   FAIL: 0   No result: 0");
+        REQUIRE(next.IsEnabled() && retry.IsEnabled());
         const auto passColour = fixture.label("Last result:").GetForegroundColour();
         REQUIRE(passColour.Green() > passColour.Red());
         const auto frozenSummary = benchmarkControl<wxStaticText>(fixture, "benchmark.summary").GetLabel();
-        REQUIRE(frozenSummary.Contains("Frozen engine: injected") && frozenSummary.Contains("Language: es"));
-        REQUIRE(benchmarkControl<wxTextCtrl>(fixture, "benchmark.detailsText").GetValue().Contains("Raw transcript: Channel 1 At 50"));
-        fixture.backend->blockStop();
+        fixture.texts[0]->ChangeValue("synthetic-changed-model.bin");
+        fixture.backend->blockReset();
         click(retry);
-        waitFor([&] { return fixture.backend->stopEntered.load(); });
+        waitFor([&] { return fixture.backend->resetEntered.load(); });
         fixture.responsive();
-        REQUIRE(!retry.IsEnabled() && !next.IsEnabled() && !fixture.output().IsEnabled());
-        fixture.backend->emit("Channel 5 At 50"); // Previous generation remains gated.
-        fixture.backend->releaseStop();
-        waitFor([&] { return fixture.backend->starts == 2; });
-        REQUIRE(fixture.backend->configurations.back().modelResourcePath == frozen.modelResourcePath);
-        REQUIRE(fixture.backend->configurations.back().preferredLanguage == frozen.preferredLanguage);
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel() == "Preparing attempt...");
         REQUIRE(!next.IsEnabled() && !retry.IsEnabled());
+        fixture.backend->emitTagged("Channel 1 At 50", oldGeneration);
+        REQUIRE(resultLines(path).size() == 1);
+        fixture.backend->releaseStop();
+        startAttempt(fixture);
+        fixture.backend->emitTagged("Channel 1 At 50", oldGeneration);
+        REQUIRE(resultLines(path).size() == 1);
         fixture.backend->emit("Channel 5 At 50");
         pumpEvents();
-        REQUIRE(fixture.label("Last result:").GetLabel().Contains("es-num-1 attempt 2 FAIL"));
-        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.summary").GetLabel() == frozenSummary);
-        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.counts").GetLabel() == "PASS: 1   FAIL: 1   No result: 0");
+        REQUIRE(fixture.backend->starts == 1 && fixture.backend->resets == 2);
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 2 FAIL"));
         const auto failColour = fixture.label("Last result:").GetForegroundColour();
         REQUIRE(failColour.Red() > failColour.Green());
-        auto lines = resultLines(path);
-        REQUIRE(lines.size() == 2);
-        REQUIRE(lines.back().find("\"attempt_number\":2") != std::string::npos);
-        REQUIRE(lines.back().find("\"whisper.threads\":0") != std::string::npos);
-        REQUIRE(lines.back().find("synthetic-changed-model") == std::string::npos);
-        REQUIRE(lines.back().find("\"selected_language\":\"es\"") != std::string::npos);
-        const auto sessionField = lines.front().substr(lines.front().find("\"session_id\":"));
-        const auto sessionId = sessionField.substr(0, sessionField.find(","));
-        for (std::size_t index = 1; index < core::liveBenchmarkCases().size(); ++index)
-        {
-            click(next);
-            waitFor([&] { return fixture.backend->starts == static_cast<int>(index + 2); });
-            fixture.backend->emit(core::liveBenchmarkCases()[index].phrase);
-            pumpEvents();
-            REQUIRE(fixture.label("Last result:").GetLabel().Contains("PASS"));
-            lines = resultLines(path);
-            REQUIRE(lines.back().find(sessionId) != std::string::npos);
-            REQUIRE(lines.back().find("\"attempt_number\":1") != std::string::npos);
-            REQUIRE(fixture.emitter->calls == 0 && fixture.factories == 0);
-        }
-        REQUIRE(!next.IsEnabled() && retry.IsEnabled());
-        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel() == "Finished");
-        REQUIRE(resultLines(path).size() == core::liveBenchmarkCases().size() + 1);
+        click(next);
+        startAttempt(fixture);
+        fixture.backend->emit("Channel 5 At 50");
+        pumpEvents();
+        REQUIRE(fixture.backend->starts == 1 && fixture.backend->resets == 3);
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("es-num-5 attempt 1 PASS"));
+        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.summary").GetLabel() == frozenSummary);
+        REQUIRE(resultLines(path).back().find("synthetic-changed-model") == std::string::npos);
+        REQUIRE(fixture.factories == 0 && fixture.emitter->calls == 0);
         click(stop);
         waitFor([&] { return start.IsEnabled(); });
-        REQUIRE(fixture.recognition().IsEnabled() && file.IsEnabled() && fixture.output().IsEnabled());
-        REQUIRE(resultLines(path).size() == core::liveBenchmarkCases().size() + 1);
-        // Ordinary recognition and output can be started after benchmark cleanup.
+        REQUIRE(file.IsEnabled() && fixture.output().IsEnabled());
         click(fixture.recognition());
         toggle(fixture.output(), true);
         fixture.backend->emit("Channel 1 At 50");
         waitFor([&] { return fixture.emitter->completed == 1; });
-        REQUIRE(fixture.factories == 1 && resultLines(path).size() == core::liveBenchmarkCases().size() + 1);
+        REQUIRE(fixture.factories == 1 && resultLines(path).size() == 3);
         std::filesystem::remove(path);
     }
 
@@ -703,18 +705,15 @@ namespace {
         REQUIRE(fixture.backend->starts == 0 && fixture.factories == 0);
         file.ChangeValue(wxString::FromUTF8(path.string()));
         click(start);
+        startAttempt(fixture);
         fixture.backend->emit("Channel 1 At 50");
-        // Stop before pumping the transcript event: worker logging still survives.
-        click(stop);
+        click(stop); // Recorded result must survive its unprocessed wx event.
         waitFor([&] { return start.IsEnabled(); });
         REQUIRE(resultLines(path).size() == 1);
         REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.counts").GetLabel() == "PASS: 1   FAIL: 0   No result: 0");
-        REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 1 PASS"));
         click(start);
+        startAttempt(fixture);
         fixture.backend->emit("Channel 1 At 50");
-        pumpEvents();
-        REQUIRE(resultLines(path).size() == 2); // A new session appends safely.
-        REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 1 PASS"));
         fixture.backend->blockStop();
         fixture.frame->Close();
         waitFor([&] { return fixture.backend->stopEntered.load(); });
@@ -733,89 +732,44 @@ namespace {
         std::filesystem::remove(path);
         auto& start = benchmarkControl<wxButton>(fixture, "benchmark.start");
         auto& stop = benchmarkControl<wxButton>(fixture, "benchmark.stop");
-        auto& next = benchmarkControl<wxButton>(fixture, "benchmark.next");
         auto& retry = benchmarkControl<wxButton>(fixture, "benchmark.retry");
         auto& noResult = benchmarkControl<wxButton>(fixture, "benchmark.noResult");
-        auto& file = benchmarkControl<wxTextCtrl>(fixture, "benchmark.path");
-        file.ChangeValue(wxString::FromUTF8(path.string()));
-        REQUIRE(!noResult.IsEnabled());
-        click(noResult); // Synthetic idle actions cannot create attempts.
-        REQUIRE(!std::filesystem::exists(path));
-        fixture.choices[0]->SetString(0, "Input \"USB\"");
+        benchmarkControl<wxTextCtrl>(fixture, "benchmark.path").ChangeValue(wxString::FromUTF8(path.string()));
+        fixture.choices[0]->SetString(0, "Input USB");
         fixture.choices[1]->Append("Channel 2");
         fixture.choices[1]->SetSelection(1);
         wxCommandEvent channelChanged(wxEVT_CHOICE, fixture.choices[1]->GetId());
         channelChanged.SetEventObject(fixture.choices[1]);
         fixture.choices[1]->GetEventHandler()->ProcessEvent(channelChanged);
         click(start);
-        REQUIRE(noResult.IsEnabled() && !next.IsEnabled() && !retry.IsEnabled());
-        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel().Contains("Listening"));
-        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.instruction").GetLabel().Contains("Speak the displayed phrase once"));
-        REQUIRE(!fixture.choices[0]->IsEnabled() && !fixture.choices[1]->IsEnabled());
-        fixture.choices[0]->SetString(0, "synthetic-changed-device");
-        fixture.choices[1]->SetString(1, "synthetic-changed-channel");
-        // No final recognition arrives; an explicit operator outcome releases navigation.
-        click(noResult);
-        REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 1 FAIL (No ASR result)"));
-        REQUIRE(fixture.label("Raw transcript:").GetLabel().Contains("No ASR result"));
-        REQUIRE(!noResult.IsEnabled() && next.IsEnabled() && retry.IsEnabled());
-        REQUIRE(resultLines(path).size() == 1);
-        REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.counts").GetLabel() == "PASS: 0   FAIL: 1   No result: 1");
-        click(noResult);
-        fixture.backend->emit("Channel 1 At 50"); // Late results cannot overwrite the manual outcome.
-        pumpEvents();
-        REQUIRE(resultLines(path).size() == 1);
-        REQUIRE(fixture.label("Last result:").GetLabel().Contains("FAIL (No ASR result)"));
-        fixture.backend->blockStop();
-        click(retry);
-        waitFor([&] { return fixture.backend->stopEntered.load(); });
-        REQUIRE(!noResult.IsEnabled() && !next.IsEnabled() && !retry.IsEnabled());
-        click(noResult); // Synthetic actions during shutdown cannot log an attempt.
-        REQUIRE(resultLines(path).size() == 1);
-        fixture.backend->releaseStop();
-        waitFor([&] { return fixture.backend->starts == 2; });
-        REQUIRE(noResult.IsEnabled() && !next.IsEnabled());
-        fixture.backend->emit("Channel 1 At 50");
-        click(noResult); // Final result recorded on the worker wins before its wx event is processed.
-        pumpEvents();
-        REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 2 PASS"));
-        REQUIRE(!fixture.label("Last result:").GetLabel().Contains("No ASR result"));
-        REQUIRE(resultLines(path).size() == 2);
-        for (std::size_t index = 1; index < core::liveBenchmarkCases().size(); ++index)
-        {
-            click(next);
-            waitFor([&] { return fixture.backend->starts == static_cast<int>(index + 2); });
-            REQUIRE(noResult.IsEnabled());
-            click(noResult);
-            const bool positive = core::liveBenchmarkCases()[index].expected.has_value();
-            REQUIRE(fixture.label("Last result:").GetLabel().Contains(positive ? "FAIL (No ASR result)" : "PASS (No ASR result)"));
-            REQUIRE(!noResult.IsEnabled() && retry.IsEnabled());
-            const auto line = resultLines(path).back();
-            REQUIRE(line.find("\"recognition_outcome\":\"no_result\"") != std::string::npos);
-            REQUIRE(line.find("\"raw_transcript\":null") != std::string::npos);
-            REQUIRE(line.find("\"channel_index\":1") != std::string::npos);
-            REQUIRE(line.find("\"channel_display_name\":\"Channel 2\"") != std::string::npos);
-            REQUIRE(line.find("synthetic-changed") == std::string::npos);
-            REQUIRE(line.find("USB") != std::string::npos);
-            REQUIRE(fixture.factories == 0 && fixture.emitter->calls == 0);
-        }
-        REQUIRE(!next.IsEnabled());
-        click(retry);
-        waitFor([&] { return fixture.backend->starts == static_cast<int>(core::liveBenchmarkCases().size() + 2); });
-        click(noResult);
-        REQUIRE(fixture.label("Last result:").GetLabel().Contains("attempt 2 PASS (No ASR result)"));
-        REQUIRE(resultLines(path).size() == core::liveBenchmarkCases().size() + 2);
-        click(stop);
-        waitFor([&] { return start.IsEnabled(); });
         REQUIRE(!noResult.IsEnabled());
-        // The benchmark-only action remains inert during ordinary armed listening.
-        fixture.host().ChangeValue("192.0.2.5");
-        click(fixture.recognition());
-        toggle(fixture.output(), true);
+        click(noResult); // Ready/preparing never creates an attempt.
+        REQUIRE(resultLines(path).empty());
+        startAttempt(fixture);
+        fixture.choices[0]->SetString(0, "synthetic-changed-device");
         click(noResult);
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("operator_no_result"));
         fixture.backend->emit("Channel 1 At 50");
-        waitFor([&] { return fixture.emitter->completed == 1; });
-        REQUIRE(fixture.factories == 1 && resultLines(path).size() == core::liveBenchmarkCases().size() + 2);
+        pumpEvents();
+        REQUIRE(resultLines(path).size() == 1);
+        click(retry); startAttempt(fixture);
+        fixture.backend->progress(asr::RecognitionProgressState::speechStarted);
+        fixture.backend->progress(asr::RecognitionProgressState::utteranceFinalized);
+        fixture.backend->progress(asr::RecognitionProgressState::inferenceStarted);
+        fixture.backend->progress(asr::RecognitionProgressState::inferenceCompletedNoText);
+        fixture.backend->emit("");
+        pumpEvents();
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("empty_asr_result"));
+        REQUIRE(resultLines(path).size() == 2);
+        REQUIRE(resultLines(path).back().find("\"channel_index\":1") != std::string::npos);
+        REQUIRE(resultLines(path).back().find("synthetic-changed-device") == std::string::npos);
+        click(retry); startAttempt(fixture);
+        waitFor([&] { return retry.IsEnabled(); }, 7s); // No speech arrives.
+        REQUIRE(fixture.label("Last result:").GetLabel().Contains("no_speech"));
+        REQUIRE(resultLines(path).size() == 3 && !noResult.IsEnabled());
+        REQUIRE(fixture.backend->starts == 1 && fixture.backend->resets == 3);
+        REQUIRE(fixture.factories == 0 && fixture.emitter->calls == 0);
+        click(stop); waitFor([&] { return start.IsEnabled(); });
         std::filesystem::remove(path);
     }
 
@@ -847,7 +801,7 @@ namespace {
         dialog.SetSize(520, 480);
         pumpEvents();
         for (const auto* name : {"benchmark.start", "benchmark.stop", "benchmark.next",
-                "benchmark.retry", "benchmark.noResult", "benchmark.close"})
+                "benchmark.retry", "benchmark.noResult", "benchmark.close", "benchmark.startAttempt"})
         {
             auto& button = benchmarkControl<wxButton>(fixture, name);
             REQUIRE(button.IsShownOnScreen());

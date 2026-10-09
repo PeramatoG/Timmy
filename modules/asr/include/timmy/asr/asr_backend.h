@@ -34,6 +34,15 @@ namespace timmy::asr {
             const AsrConfiguration& configuration) = 0;
         virtual AsrOperationResult stop() = 0;
 
+        // Called with upstream audio gated off. Retain loaded resources and return
+        // only after old streaming state/work can no longer affect this generation.
+        virtual AsrOperationResult resetAttempt(AttemptGeneration)
+        { return {false, AsrDiagnostic{AsrDiagnosticCode::invalidConfiguration,
+            "This backend does not support isolated benchmark attempts."}}; }
+
+        // Optional current attempt counters, including attempts without speech/results.
+        virtual AttemptDiagnostics attemptDiagnostics() const { return {}; }
+
         void setResultListener(
             std::shared_ptr<IAsrResultListener> listener);
 
@@ -46,6 +55,7 @@ namespace timmy::asr {
         virtual void processAudioBlock(
             const audio::AudioBlockView& block) = 0;
 
+        void publishProgress(const RecognitionProgress& progress) const;
         void publishResult(const AsrResult& result) const;
         void publishDiagnostic(const AsrDiagnostic& diagnostic) const;
 

@@ -1,4 +1,4 @@
-# Guided live recognition benchmark (ASR-BENCH-010)
+# Guided live recognition benchmark (ASR-BENCH-011)
 
 In the Recognition column, select the engine, local model and VAD model, language,
 and recognition tuning as usual. Press **Open benchmark...** in the compact
@@ -7,22 +7,27 @@ file (or enter its path), then press **Start benchmark**. The configuration free
 at Start, rather than when the window opens. Files are appended to, so sessions
 can share one file; every line carries a distinct session ID and a UTC timestamp.
 
-The primary view shows the corpus version, result path, frozen engine/model/
-language/profile summary, case/category/progress, phrase, operator instructions
-and last result. PASS is green, FAIL is red, and active states have a neutral blue
-accent. The states guide starting, listening/waiting, operator review, stopping
-and finishing. Listening and waiting for speech end/recognition share one state:
-the current backend-neutral API does not publish speech-boundary progress events.
-There are no automatic timeouts. **Details** expands to show raw/normalized
-transcripts, assembly, semantic command, validation/rendering and available timings.
+The primary view shows the frozen configuration, case/category/progress, phrase,
+operator instructions and last result. PASS stays green and FAIL red. Each attempt
+starts in **Preparing attempt**, then **Ready** only when the backend reset has
+completed. Press **Start attempt**, wait through the one-second **Get ready**
+countdown, and speak only at **SPEAK NOW**. Recognition accepts audio/results only
+while the attempt is armed. The UI follows optional backend-neutral progress:
+**Speech detected**, **Waiting for end of speech**, **Processing**, then operator
+review. Unsupported stages may be skipped by future backends.
 
-PASS and FAIL counters count recorded attempts, including retries. **No result**
-is a subset of those counts, so an expected non-command with no ASR result adds
-to both PASS and No result. Starting a new session resets the displayed counters.
-At the final case the state is **Finished**; Retry remains available and the main
-configuration stays frozen until Stop or Close completes. Closing the benchmark
-window waits asynchronously for its recognition resources before hiding it.
-Reopening reuses the window and retains the selected path and last session summary.
+If no speech-start event arrives within five seconds of SPEAK NOW, the attempt
+finishes as **no_speech**. This is a speech-start deadline, not an inference timeout:
+after speech starts, existing endpoint/maximum-utterance rules apply. **No result**
+remains available during an armed attempt for explicit operator intervention.
+**Details** shows transcripts, semantic processing, armed input duration/levels,
+speech/endpoint/inference timings and available queue-drop counters.
+
+PASS and FAIL count all recorded attempts, including retries; No result counts
+all three absence outcomes as a subset. At the final case Next is disabled and
+Retry remains available. The operator reviews and advances each attempt manually.
+Stop and Close release the session asynchronously. Reopening retains the path and
+last summary; starting a new session resets its counters.
 
 The main GUI separates engine selection, session controls and engine/VAD settings.
 Short tuning properties share rows in wider windows and stack in narrower ones.
@@ -55,24 +60,26 @@ does not silently consume cases. Retry records another attempt for the same case
 Next starts attempt 1 for the next case. At the final case, Next is disabled;
 Retry and Stop remain available.
 
-If you have spoken the phrase but no final ASR result arrives, press **No result**.
-This explicit operator action records `recognition_outcome: "no_result"` without
-fabricating a Whisper transcript. An expected positive command fails; an expected
-non-command passes. The attempt then enables Next/Retry as usual. The action is
-available only while the current benchmark attempt awaits a result. It shares
-the final-result gate, so a late ASR callback cannot record a second attempt.
-There is no automatic timeout, and normal Whisper empty-result behavior is
-unchanged.
+The four recorded outcomes are `final_result`, `no_speech`, `empty_asr_result`
+and `operator_no_result`. Empty successful Whisper inference is now observable;
+ordinary recognition still ignores empty text semantically. A positive command
+fails for every absence outcome. Expected non-command cases pass for absence,
+including no speech: they measure false positives, not whether speech was heard.
+The JSONL diagnostics retain this distinction for subsequent analysis.
 
-Next and Retry asynchronously stop the previous recognition resources, discard
-queued audio/inference, then restart using the same frozen snapshot. The GUI stays
-responsive during shutdown. A model may need to reload between attempts. This
-avoids attributing a previous utterance or linguistic context to a new attempt.
+The ASR backend, Whisper model and Silero context load once per session. Next and
+Retry prepare a fresh attempt while keeping those resources loaded. Reset gates
+upstream audio, clears resampler/command assembly/context, cancels and joins the
+old ASR workers, clears pending PCM/VAD/inference queues and endpoint state,
+resets Silero streaming state, then restarts workers against the same contexts.
+This happens away from the wx thread. Nonzero generation tags isolate every
+attempt: old progress/results cannot consume the following case, even if a
+callback was already in flight. The model is unloaded only at session shutdown.
+
 Model, VAD model, language, tuning, input selection and output configuration stay
-locked until **Stop benchmark** completes. Stop and window close join recognition
-callbacks before closing the file. Every already completed attempt is flushed,
-including results whose GUI event has not yet been processed. Initialization and
-logging failures are reported instead of silently continuing.
+locked until Stop/Close completes. Stop joins callbacks before closing the file;
+completed attempts are flushed even if their wx event has not been handled.
+Initialization, preparation and logging failures are reported explicitly.
 The session also freezes and records the selected audio device display name,
 zero-based channel index and channel display name when available. Every attempt,
 including retries and No result attempts, contains this same audio-source snapshot.
@@ -100,7 +107,7 @@ cases pass only when no accepted/renderable semantic command is produced.
 An explicit No result outcome uses the same positive/negative expectation rules
 without evaluating a transcript or running the command pipeline.
 
-## JSONL schema version 1
+## JSONL schema version 2
 
 Each UTF-8 line contains one self-contained JSON object:
 
@@ -108,7 +115,7 @@ Each UTF-8 line contains one self-contained JSON object:
 - `case_id`, `category`, `displayed_phrase`;
 - `expected_semantic_result` (the shared command description or null),
   `expected_no_command` (explicit boolean);
-- `recognition_outcome` (`final_result` or `no_result`);
+- `recognition_outcome` (`final_result`, `no_speech`, `empty_asr_result`, `operator_no_result`);
 - `raw_transcript`, `normalized_transcript`, `assembly_state`, `assembly_text`;
 - `actual_semantic_description`, `validation_state`, `validation_diagnostic`,
   `rendered_command`, `rendering_diagnostic`;
@@ -120,22 +127,33 @@ Each UTF-8 line contains one self-contained JSON object:
 - `recognition_settings`: full model/VAD paths, language, engine ID, command
   profile ID, rendering target/pre-clear, all typed tuning values, and recognition
   vocabulary/expected phrases/constraint intent used by the session;
-- `metrics.audio_duration_seconds`, `metrics.inference_duration_seconds` (nullable).
+- `metrics.audio_duration_seconds`, `metrics.inference_duration_seconds` (nullable);
+- `attempt_generation` (nonzero session-local generation);
+- `diagnostics.audio_samples`, `audio_duration_seconds`, `input_peak`, `input_rms`,
+  `speech_detected`, `speech_start_seconds`, `utterance_duration_seconds`,
+  `inference_duration_seconds`, `dropped_audio_blocks`, `dropped_vad_frames`,
+  `dropped_inference_jobs`. Unsupported counters/timings are null.
 
-For `no_result`, transcript/assembly text, semantic description, rendered command,
-detected language and both timings are null. Assembly and validation states are
-`not_attempted`, and diagnostics are empty. A real final result retains
-`final_result` even if its transcript is empty. Schema version 1 includes these
-fields as part of the definitive unreleased initial definition.
+For `no_speech` and `operator_no_result`, transcript/assembly text, semantic
+result, rendering, detected language and inference metrics are null; assembly and
+validation are `not_attempted`. For `empty_asr_result`, transcript strings are
+empty and inference metrics/language remain available. Absence outcomes retain
+armed diagnostics. Version 1 used `no_result` for operator intervention; readers
+must select interpretation by `schema_version`. The corpus remains timmy-live-v1.
 
-Backend-neutral `RecognitionMetrics` propagate from the final ASR result through
-Core. Whisper audio duration is the actual inference sample count divided by
-16,000, including whatever endpoint/pre-roll audio was passed to inference.
-Inference duration measures only `whisper_full()` with a steady clock. These are
-not microphone onset latency or model load time. Fake backends leave metrics absent
-unless a test supplies them. Final-result disk I/O occurs on the recognition
-worker; the explicit No result action writes on the GUI thread. Neither writes
-on the realtime audio callback. Each attempt is flushed before it is published.
+Armed input measurements count selected-channel samples delivered to Core while
+armed, before adaptation to 16 kHz. Duration uses the source sample rate; peak is
+the maximum absolute sample and RMS includes all armed samples. Speech and endpoint
+timings use backend progress timestamps relative to SPEAK NOW on a steady clock.
+No speech event means `speech_detected: false`; missing stage timings stay null.
+Queue counters describe drops inside the backend, not microphone-driver losses.
+
+The existing `metrics` describe inference input/work: Whisper audio duration is
+actual inference sample count divided by 16,000, including endpoint padding, and
+inference duration measures `whisper_full()`. These differ from armed input duration.
+Model load time is excluded. Final-result writes run on the recognition worker;
+operator and timeout writes run on the frontend thread. Neither path writes from
+the realtime capture callback. Every attempt is flushed before publication.
 
 Deterministic Core and GUI tests use fake ASR without devices, models, GPUs or
 consoles. An additional strict JSON decoder test runs when Python 3 is available;

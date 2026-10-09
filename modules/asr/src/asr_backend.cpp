@@ -50,6 +50,11 @@ namespace timmy::asr {
         processAudioBlock(validatedBlock);
     }
 
+    void IAsrBackend::publishProgress(const RecognitionProgress& progress) const
+    {
+        if (const auto listener = resultListener()) listener->onAsrProgress(progress);
+    }
+
     // Publishes a recognition result to the current listener snapshot.
     void IAsrBackend::publishResult(const AsrResult& result) const
     {

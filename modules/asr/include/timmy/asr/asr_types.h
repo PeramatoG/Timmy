@@ -11,6 +11,8 @@
 #pragma once
 
 #include <filesystem>
+#include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -64,8 +66,40 @@ namespace timmy::asr {
     // Durations describe actual inference input/work; absent for backends without metrics.
     struct RecognitionMetrics
     {
-        std::optional<double> audioDurationSeconds;
-        std::optional<double> inferenceDurationSeconds;
+        std::optional<double> audioDurationSeconds{};
+        std::optional<double> inferenceDurationSeconds{};
+    };
+
+    // Zero denotes ordinary continuous recognition; benchmark generations are nonzero.
+    using AttemptGeneration = std::uint64_t;
+    enum class RecognitionProgressState
+    {
+        backendReady, waitingForSpeech, speechStarted, utteranceFinalized,
+        inferenceStarted, inferenceCompletedWithText, inferenceCompletedNoText
+    };
+    struct AttemptDiagnostics
+    {
+        std::uint64_t audioSamples = 0;
+        double audioDurationSeconds = 0;
+        double inputPeak = 0;
+        double inputRms = 0;
+        bool speechDetected = false;
+        std::optional<double> speechStartSeconds{};
+        std::optional<double> utteranceDurationSeconds{};
+        std::optional<double> inferenceDurationSeconds{};
+        // Absent means the backend cannot report this counter.
+        std::optional<std::uint64_t> droppedAudioBlocks{};
+        std::optional<std::uint64_t> droppedVadFrames{};
+        std::optional<std::uint64_t> droppedInferenceJobs{};
+    };
+    struct RecognitionProgress
+    {
+        RecognitionProgressState state;
+        AttemptGeneration generation = 0;
+        std::chrono::steady_clock::time_point timestamp = std::chrono::steady_clock::now();
+        std::optional<std::uint64_t> droppedAudioBlocks{};
+        std::optional<std::uint64_t> droppedVadFrames{};
+        std::optional<std::uint64_t> droppedInferenceJobs{};
     };
 
     struct AsrResult
@@ -74,6 +108,7 @@ namespace timmy::asr {
         AsrResultKind kind = AsrResultKind::final;
         std::optional<std::string> detectedLanguage;
         RecognitionMetrics metrics{};
+        AttemptGeneration generation = 0;
     };
 
     enum class AsrDiagnosticCode

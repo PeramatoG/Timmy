@@ -120,6 +120,7 @@ namespace timmy::asr {
             while (true)
             {
                 std::vector<float> samples;
+                AttemptGeneration jobGeneration;
                 {
                     std::unique_lock lock(mutex);
                     inferenceCondition.wait(lock, [this] {
@@ -129,15 +130,16 @@ namespace timmy::asr {
                     {
                         break;
                     }
+                    jobGeneration = generation;
                     samples = std::move(windows.front());
                     windows.pop_front();
                 }
-                infer(owner, samples);
+                infer(owner, samples, jobGeneration);
             }
         }
 
         // Runs streaming Silero VAD and sends completed utterances to Whisper.
-        void runVadWorker()
+        void runVadWorker(WhisperAsrBackend& owner)
         {
             while (true)
             {
@@ -169,11 +171,15 @@ namespace timmy::asr {
                     continue;
                 }
 
+                const bool wasSpeaking = endpoint.speaking();
                 auto utterance = endpoint.process(
                     samples, probabilities[probabilityCount - 1]);
+                if (!wasSpeaking && (endpoint.speaking() || utterance))
+                    progress(owner, RecognitionProgressState::speechStarted, generation);
                 if (utterance)
                 {
                     whisper_vad_reset_state(vadContext);
+                    progress(owner, RecognitionProgressState::utteranceFinalized, generation);
                     enqueueInference(std::move(*utterance));
                 }
             }
@@ -191,6 +197,7 @@ namespace timmy::asr {
                 if (windows.size() == maximumQueuedWindows)
                 {
                     windows.pop_front();
+                    ++droppedInferenceJobs;
                 }
                 windows.push_back(std::move(samples));
             }
@@ -200,8 +207,9 @@ namespace timmy::asr {
         // Transcribes one bounded window and publishes a final Timmy result.
         void infer(
             WhisperAsrBackend& owner,
-            const std::vector<float>& samples)
+            const std::vector<float>& samples, AttemptGeneration jobGeneration)
         {
+            progress(owner, RecognitionProgressState::inferenceStarted, jobGeneration);
             auto parameters = detail::makeWhisperCommandParameters(tuning);
             parameters.language = preferredLanguage.empty()
                 ? "auto"
@@ -264,10 +272,6 @@ namespace timmy::asr {
             }
 
             transcript = trimTranscript(std::move(transcript));
-            if (transcript.empty())
-            {
-                return;
-            }
 
             std::optional<std::string> detectedLanguage;
             const int languageId = whisper_full_lang_id(context);
@@ -281,12 +285,42 @@ namespace timmy::asr {
                 return;
             }
 
+            progress(owner, transcript.empty() ? RecognitionProgressState::inferenceCompletedNoText
+                : RecognitionProgressState::inferenceCompletedWithText, jobGeneration);
+            // Empty successful inference is observable, but remains semantically
+            // ignored in ordinary recognition.
+            if (transcript.empty() && jobGeneration == 0) return;
             owner.publishResult({
                 std::move(transcript),
                 AsrResultKind::final,
                 std::move(detectedLanguage),
-                {static_cast<double>(samples.size()) / 16000.0, inferenceSeconds}
+                {static_cast<double>(samples.size()) / 16000.0, inferenceSeconds},
+                jobGeneration
             });
+        }
+
+        void progress(WhisperAsrBackend& owner, RecognitionProgressState stage,
+            AttemptGeneration jobGeneration)
+        {
+            RecognitionProgress event{stage, jobGeneration};
+            {
+                std::lock_guard lock(mutex);
+                event.droppedAudioBlocks = 0;
+                event.droppedVadFrames = droppedVadFrames;
+                event.droppedInferenceJobs = droppedInferenceJobs;
+            }
+            owner.publishProgress(event);
+        }
+
+        void startWorkers(WhisperAsrBackend& owner)
+        {
+            {
+                std::lock_guard lock(mutex);
+                shutdownRequested = false; // Previous workers have joined; audio is gated.
+            }
+            inferenceCancellation.reset();
+            inferenceWorker = std::thread([this, &owner] { runInferenceWorker(owner); });
+            if (vadContext) vadWorker = std::thread([this, &owner] { runVadWorker(owner); });
         }
 
         // Joins backend-owned workers without holding their shared queue lock.
@@ -347,6 +381,8 @@ namespace timmy::asr {
         std::vector<float> vadAccumulation;
         std::deque<std::vector<float>> windows;
         std::deque<std::vector<float>> vadFrames;
+        AttemptGeneration generation = 0; // Changed only with workers joined/audio gated.
+        std::uint64_t droppedVadFrames = 0, droppedInferenceJobs = 0;
         bool shutdownRequested = false;
         std::thread inferenceWorker;
         std::thread vadWorker;
@@ -483,13 +519,12 @@ namespace timmy::asr {
 
         try
         {
-            impl_->inferenceWorker = std::thread(
-                [this] { impl_->runInferenceWorker(*this); });
-            if (impl_->vadContext != nullptr)
             {
-                impl_->vadWorker = std::thread(
-                    [this] { impl_->runVadWorker(); });
+                std::lock_guard lock(impl_->mutex);
+                impl_->generation = 0;
+                impl_->droppedVadFrames = impl_->droppedInferenceJobs = 0;
             }
+            impl_->startWorkers(*this);
         }
         catch (const std::system_error& error)
         {
@@ -503,7 +538,43 @@ namespace timmy::asr {
         }
 
         impl_->lifecycle = AsrState::running;
+        impl_->progress(*this, RecognitionProgressState::backendReady, 0);
         return { true, std::nullopt };
+    }
+
+    AttemptDiagnostics WhisperAsrBackend::attemptDiagnostics() const
+    {
+        std::lock_guard lock(impl_->mutex);
+        AttemptDiagnostics diagnostics;
+        diagnostics.droppedAudioBlocks = 0;
+        diagnostics.droppedVadFrames = impl_->droppedVadFrames;
+        diagnostics.droppedInferenceJobs = impl_->droppedInferenceJobs;
+        return diagnostics;
+    }
+
+    AsrOperationResult WhisperAsrBackend::resetAttempt(AttemptGeneration generation)
+    {
+        std::lock_guard lifecycleLock(impl_->lifecycleMutex);
+        if (state() != AsrState::running || generation == 0)
+            return failure(AsrDiagnosticCode::invalidConfiguration, "Cannot reset an inactive attempt.");
+        // Cooperative cancellation and joins serialize all access to the private
+        // Whisper/Silero contexts. Neither model is freed or reloaded here.
+        impl_->stopWorkers();
+        if (impl_->vadContext) whisper_vad_reset_state(impl_->vadContext);
+        {
+            std::lock_guard lock(impl_->mutex);
+            impl_->generation = generation;
+            impl_->droppedVadFrames = impl_->droppedInferenceJobs = 0;
+        }
+        try { impl_->startWorkers(*this); }
+        catch (const std::system_error& error)
+        {
+            impl_->stopWorkers();
+            impl_->lifecycle = AsrState::failed;
+            return failure(AsrDiagnosticCode::initializationFailure, error.what());
+        }
+        impl_->progress(*this, RecognitionProgressState::backendReady, generation);
+        return {true, std::nullopt};
     }
 
     // Stops and joins inference before releasing the model context.
@@ -567,6 +638,7 @@ namespace timmy::asr {
                 if (impl_->vadFrames.size() == maximumQueuedVadFrames)
                 {
                     impl_->vadFrames.pop_front();
+                    ++impl_->droppedVadFrames;
                 }
                 impl_->vadFrames.push_back(std::move(accumulation));
                 accumulation.clear();
@@ -578,6 +650,7 @@ namespace timmy::asr {
                 if (impl_->windows.size() == maximumQueuedWindows)
                 {
                     impl_->windows.pop_front();
+                    ++impl_->droppedInferenceJobs;
                 }
                 impl_->windows.push_back(std::move(accumulation));
                 accumulation.clear();

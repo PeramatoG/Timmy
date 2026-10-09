@@ -110,10 +110,11 @@ BenchmarkDialog::BenchmarkDialog(wxWindow* parent, Actions actions)
     };
     start_ = button(session, "Start benchmark", "benchmark.start", actions_.start);
     stop_ = button(session, "Stop benchmark", "benchmark.stop", actions_.stop);
+    startAttempt_ = button(session, "Start attempt", "benchmark.startAttempt", actions_.startAttempt);
     next_ = button(navigation, "Next", "benchmark.next", actions_.next);
     retry_ = button(navigation, "Retry", "benchmark.retry", actions_.retry);
     noResult_ = button(navigation, "No result", "benchmark.noResult", actions_.noResult);
-    noResult_->SetToolTip("Record an explicit attempt when no final ASR result arrives. There is no automatic timeout.");
+    noResult_->SetToolTip("Record an explicit attempt when no final ASR result arrives. Speech has a five-second start timeout; processing has no inference timeout.");
     navigation->AddStretchSpacer();
     button(navigation, "Close", "benchmark.close", actions_.close);
     outer->Add(session, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 12);
@@ -152,6 +153,7 @@ void BenchmarkDialog::wrapLabels()
 
 void BenchmarkDialog::setState(const wxString& state, const wxString& instruction, bool accent)
 {
+    if (stateText_ == state && instructionText_ == instruction) return;
     stateText_ = state;
     state_->SetForegroundColour(accent ? wxColour(100, 165, 230) : GetForegroundColour());
     instructionText_ = instruction;
@@ -185,13 +187,29 @@ void BenchmarkDialog::setCase(std::size_t index)
 void BenchmarkDialog::showAttempt(const core::RecognitionBenchmarkAttempt& attempt)
 {
     if (attempt.passed) ++passes_; else ++failures_;
-    const bool noResult = attempt.outcome == core::BenchmarkRecognitionOutcome::noResult;
-    if (noResult) { ++noResults_; details_->ChangeValue("No final ASR result. No transcript or timings available."); }
+    const bool noResult = attempt.outcome != core::BenchmarkRecognitionOutcome::finalResult;
+    if (noResult) { ++noResults_; details_->ChangeValue("Outcome: " + wxString::FromUTF8(core::benchmarkOutcomeName(attempt.outcome))); }
     resultText_ = wxString::FromUTF8("Last result: " + attempt.caseId + " attempt "
         + std::to_string(attempt.attempt) + (attempt.passed ? " PASS" : " FAIL")
-        + (noResult ? " (No ASR result)" : ""));
+        + " (" + core::benchmarkOutcomeName(attempt.outcome) + ")");
     result_->SetForegroundColour(attempt.passed ? wxColour(70, 180, 100) : wxColour(230, 90, 90));
     counts_->SetLabel(wxString::Format("PASS: %u   FAIL: %u   No result: %u", passes_, failures_, noResults_));
+    const auto optional = [](const std::optional<double>& value) {
+        return value ? wxString::Format("%.3f s", *value) : wxString("Unavailable");
+    };
+    const auto count = [](const std::optional<std::uint64_t>& value) {
+        return value ? wxString::FromUTF8(std::to_string(*value)) : wxString("Unavailable");
+    };
+    const auto& d = attempt.diagnostics;
+    details_->AppendText("\nArmed input samples: " + wxString::FromUTF8(std::to_string(d.audioSamples))
+        + wxString::Format("\nArmed input duration: %.3f s\nInput peak: %.4f\nInput RMS: %.4f", d.audioDurationSeconds, d.inputPeak, d.inputRms)
+        + "\nSpeech detected: " + (d.speechDetected ? wxString("Yes") : wxString("No"))
+        + "\nSPEAK NOW to speech: " + optional(d.speechStartSeconds)
+        + "\nSpeech to endpoint: " + optional(d.utteranceDurationSeconds)
+        + "\nInference: " + optional(d.inferenceDurationSeconds)
+        + "\nDropped audio blocks: " + count(d.droppedAudioBlocks)
+        + "\nDropped VAD frames: " + count(d.droppedVadFrames)
+        + "\nDropped inference jobs: " + count(d.droppedInferenceJobs));
     wrapLabels();
 }
 
@@ -229,13 +247,17 @@ void BenchmarkDialog::stopped(const wxString& diagnostic)
 }
 
 void BenchmarkDialog::updateControls(bool canStart, bool active, bool listening,
-    bool stopping, bool awaiting, bool lastCase)
+    bool stopping, bool awaiting, bool lastCase, core::BenchmarkAttemptState state)
 {
     start_->Enable(canStart && !active);
     stop_->Enable(active && listening && !stopping);
     next_->Enable(active && listening && !stopping && !awaiting && !lastCase);
     retry_->Enable(active && listening && !stopping && !awaiting);
-    noResult_->Enable(active && listening && !stopping && awaiting);
+    const bool armed = state == core::BenchmarkAttemptState::waitingSpeech
+        || state == core::BenchmarkAttemptState::speechDetected
+        || state == core::BenchmarkAttemptState::waitingEnd || state == core::BenchmarkAttemptState::processing;
+    noResult_->Enable(active && listening && !stopping && awaiting && armed);
+    startAttempt_->Enable(active && listening && !stopping && state == core::BenchmarkAttemptState::ready);
     path_->Enable(canStart && !active);
     browse_->Enable(canStart && !active);
     if (active)
@@ -243,9 +265,18 @@ void BenchmarkDialog::updateControls(bool canStart, bool active, bool listening,
         if (stopping) setState("Stopping recognition...", "Wait for recognition resources to stop.", true);
         else if (awaiting) {
             finished_ = false;
-            setState("Listening / waiting for speech end and recognition",
-                "Speak the displayed phrase once. Wait for the recognition result.\n"
-                "If no final ASR result arrives, press No result.", true);
+            using State = core::BenchmarkAttemptState;
+            switch (state)
+            {
+            case State::preparing: setState("Preparing attempt...", "Wait for Ready.", true); break;
+            case State::ready: setState("Ready", "Press Start attempt when you are ready.", true); break;
+            case State::countdown: setState("Get ready...", "Wait for SPEAK NOW.", true); break;
+            case State::waitingSpeech: setState("SPEAK NOW", "Speak the displayed phrase once. Waiting for speech (5 seconds).", true); break;
+            case State::speechDetected: setState("Speech detected", "Continue the phrase, then pause.", true); break;
+            case State::waitingEnd: setState("Waiting for end of speech", "Pause when you finish the phrase.", true); break;
+            case State::processing: setState("Processing", "Wait for the recognition result, or choose No result.", true); break;
+            default: break;
+            }
         }
         else if (lastCase) {
             finished_ = true;

@@ -24,6 +24,9 @@ namespace timmy::asr {
         // not guaranteed to be a frontend or GUI thread.
         virtual void onAsrResult(const AsrResult& result) = 0;
 
+        // Optional progress; implementations may emit only supported stages.
+        virtual void onAsrProgress(const RecognitionProgress&) {}
+
         // Receives runtime diagnostics on a backend-selected thread.
         virtual void onAsrDiagnostic(const AsrDiagnostic& diagnostic) = 0;
     };

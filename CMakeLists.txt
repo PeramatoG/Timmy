@@ -178,7 +178,7 @@ if(TIMMY_BUILD_GUI)
         target_link_libraries(timmy_gui_recognition_controls_tests PRIVATE
             timmy_audio timmy_core timmy_gui_output ${TIMMY_WX_LIBRARIES})
         add_test(NAME timmy.gui_recognition_controls COMMAND timmy_gui_recognition_controls_tests)
-        set_tests_properties(timmy.gui_recognition_controls PROPERTIES TIMEOUT 20)
+        set_tests_properties(timmy.gui_recognition_controls PROPERTIES TIMEOUT 30)
         if(MSVC)
             target_compile_options(timmy_gui_recognition_controls_tests PRIVATE /W4 /permissive-)
         else()

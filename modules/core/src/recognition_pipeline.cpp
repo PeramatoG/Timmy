@@ -13,6 +13,8 @@
 #include "timmy/command/command_assembler.h"
 
 #include <utility>
+#include <cmath>
+#include <algorithm>
 
 namespace timmy::core {
 
@@ -49,6 +51,57 @@ namespace timmy::core {
 
     } // namespace
 
+    class RecognitionPipeline::AudioInput final : public audio::IAudioConsumer
+    {
+    public:
+        AudioInput(std::shared_ptr<audio::AudioFormatAdapter> adapter, bool measure)
+            : adapter_(std::move(adapter)), measure_(measure) {}
+        void onAudioBlock(const audio::AudioBlockView& block) override
+        {
+            std::lock_guard lock(gateMutex);
+            if (!enabled) return;
+            if (measure_)
+            {
+                std::lock_guard statsLock(statsMutex);
+                if (block.format.channelCount == 1 && block.format.sampleRate != 0)
+                {
+                    const auto count = std::min(block.frameCount, block.interleavedSamples.size());
+                    diagnostics.audioSamples += count;
+                    diagnostics.audioDurationSeconds += static_cast<double>(count) / block.format.sampleRate;
+                    for (float sample : block.interleavedSamples.first(count))
+                    {
+                        diagnostics.inputPeak = std::max(diagnostics.inputPeak, std::abs(static_cast<double>(sample)));
+                        squares += static_cast<double>(sample) * sample;
+                    }
+                    diagnostics.inputRms = diagnostics.audioSamples
+                        ? std::sqrt(squares / static_cast<double>(diagnostics.audioSamples)) : 0;
+                }
+            }
+            adapter_->onAudioBlock(block);
+        }
+        asr::AttemptDiagnostics snapshot() const
+        { std::lock_guard lock(statsMutex); return diagnostics; }
+        void reset()
+        {
+            std::lock_guard lock(gateMutex);
+            enabled = false;
+            adapter_->reset();
+            std::lock_guard statsLock(statsMutex);
+            diagnostics = {};
+            squares = 0;
+        }
+        // Recursive only to permit synchronous test/alternative-backend callbacks
+        // to close acceptance while the audio submission is still on the stack.
+        std::recursive_mutex gateMutex;
+        bool enabled = false;
+    private:
+        std::shared_ptr<audio::AudioFormatAdapter> adapter_;
+        mutable std::mutex statsMutex;
+        asr::AttemptDiagnostics diagnostics;
+        double squares = 0;
+        const bool measure_;
+    };
+
     class RecognitionPipeline::BackendListener final
         : public asr::IAsrResultListener
     {
@@ -64,6 +117,9 @@ namespace timmy::core {
             owner_.handleResult(result);
         }
 
+        void onAsrProgress(const asr::RecognitionProgress& progress) override
+        { owner_.handleProgress(progress); }
+
         // Forwards structured backend diagnostics without losing their code.
         void onAsrDiagnostic(const asr::AsrDiagnostic& diagnostic) override
         {
@@ -77,16 +133,17 @@ namespace timmy::core {
     // Creates a pipeline attached to an existing selected audio channel.
     RecognitionPipeline::RecognitionPipeline(
         std::shared_ptr<audio::AudioChannelSelector> channelSelector,
-        std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile, bool isolateUtterances)
+        std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile, bool isolateUtterances, bool benchmarkAttempts)
         : channelSelector_(std::move(channelSelector)),
           formatAdapter_(std::make_shared<audio::AudioFormatAdapter>()),
+          audioInput_(std::make_shared<AudioInput>(formatAdapter_, benchmarkAttempts)),
           backend_(std::move(backend)),
           backendListener_(std::make_shared<BackendListener>(*this)),
           profile_(std::move(profile)),
           normalizer_(profile_.normalization),
           assembler_(std::make_unique<command::CommandAssembler>(profile_.parsing)),
           semanticParser_(profile_.parsing),
-          isolateUtterances_(isolateUtterances)
+          isolateUtterances_(isolateUtterances), benchmarkAttempts_(benchmarkAttempts)
     {
         backend_->setResultListener(backendListener_);
         formatAdapter_->addConsumer(backend_);
@@ -135,7 +192,11 @@ namespace timmy::core {
             return result;
         }
 
-        channelSelector_->addConsumer(formatAdapter_);
+        {
+            std::lock_guard lock(audioInput_->gateMutex);
+            audioInput_->enabled = !benchmarkAttempts_;
+        }
+        channelSelector_->addConsumer(audioInput_);
         {
             std::lock_guard lock(mutex_);
             attached_ = true;
@@ -163,9 +224,10 @@ namespace timmy::core {
         }
         if (wasAttached)
         {
-            channelSelector_->removeConsumer(formatAdapter_);
+            channelSelector_->removeConsumer(audioInput_);
         }
-        formatAdapter_->reset();
+        disarmAttempt();
+        audioInput_->reset();
 
         const auto result = backend_->stop();
         discardPendingAssembly();
@@ -198,7 +260,8 @@ namespace timmy::core {
         std::shared_ptr<IRecognitionPipelineObserver> currentObserver;
         {
             std::lock_guard lock(mutex_);
-            if (state_ != RecognitionPipelineState::listening)
+            if (state_ != RecognitionPipelineState::listening
+                || (benchmarkAttempts_ && (!attemptArmed_ || result.generation != attemptGeneration_)))
             {
                 return;
             }
@@ -234,9 +297,63 @@ namespace timmy::core {
                 std::move(validation),
                 std::move(rendering),
                 result.detectedLanguage,
-                result.metrics
+                result.metrics,
+                result.generation,
+                attemptDiagnostics()
             });
         }
+    }
+
+    asr::AsrOperationResult RecognitionPipeline::prepareAttempt(asr::AttemptGeneration generation)
+    {
+        disarmAttempt();
+        audioInput_->reset();
+        {
+            std::lock_guard lock(mutex_);
+            attemptGeneration_ = generation;
+            assembler_->reset();
+            commandContext_.reset();
+        }
+        return backend_->resetAttempt(generation);
+    }
+    void RecognitionPipeline::armAttempt()
+    {
+        asr::AttemptGeneration generation;
+        {
+            std::lock_guard gateLock(audioInput_->gateMutex);
+            std::lock_guard lock(mutex_);
+            attemptArmed_ = true;
+            audioInput_->enabled = true;
+            generation = attemptGeneration_;
+        }
+        handleProgress({asr::RecognitionProgressState::waitingForSpeech, generation});
+    }
+    void RecognitionPipeline::disarmAttempt()
+    {
+        std::lock_guard gateLock(audioInput_->gateMutex);
+        std::lock_guard lock(mutex_);
+        attemptArmed_ = false;
+        audioInput_->enabled = false;
+    }
+    asr::AttemptDiagnostics RecognitionPipeline::attemptDiagnostics() const
+    {
+        auto diagnostics = audioInput_->snapshot();
+        const auto backend = backend_->attemptDiagnostics();
+        diagnostics.droppedAudioBlocks = backend.droppedAudioBlocks;
+        diagnostics.droppedVadFrames = backend.droppedVadFrames;
+        diagnostics.droppedInferenceJobs = backend.droppedInferenceJobs;
+        return diagnostics;
+    }
+    void RecognitionPipeline::handleProgress(const asr::RecognitionProgress& progress)
+    {
+        std::shared_ptr<IRecognitionPipelineObserver> currentObserver;
+        {
+            std::lock_guard lock(mutex_);
+            if (benchmarkAttempts_ && (progress.generation != attemptGeneration_
+                || (!attemptArmed_ && progress.state != asr::RecognitionProgressState::backendReady))) return;
+            currentObserver = observer_;
+        }
+        if (currentObserver) currentObserver->onRecognitionProgress(progress);
     }
 
     // Starts a fresh linguistic session without retaining an incomplete command.

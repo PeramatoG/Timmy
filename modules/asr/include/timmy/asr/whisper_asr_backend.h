@@ -40,6 +40,8 @@ namespace timmy::asr {
         [[nodiscard]] AsrState state() const override;
         AsrOperationResult start(const AsrConfiguration& configuration) override;
         AsrOperationResult stop() override;
+        AsrOperationResult resetAttempt(AttemptGeneration generation) override;
+        AttemptDiagnostics attemptDiagnostics() const override;
 
     private:
         void processAudioBlock(const audio::AudioBlockView& block) override;

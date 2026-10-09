@@ -190,6 +190,10 @@ namespace timmy::gui {
             wxQueueEvent(&target_, event);
         }
 
+        // Preserve worker timestamps before the GUI event queue introduces delay.
+        void onRecognitionProgress(const asr::RecognitionProgress& progress) override
+        { if (benchmark_) benchmark_->progress(progress); }
+
         // Queues raw and normalized UTF-8 transcript text for the GUI thread.
         void onRecognitionTranscript(const core::RecognitionTranscript& transcript) override
         {
@@ -281,6 +285,7 @@ namespace timmy::gui {
     {
         meterTimer_.Stop();
         recognitionLifecycle_.join();
+        if (benchmarkPreparation_.valid()) benchmarkPreparation_.wait();
         if (recognitionPipeline_)
         {
             recognitionPipeline_->setObserver(nullptr);
@@ -756,10 +761,14 @@ namespace timmy::gui {
         outputSession_.disarm();
         outputEnabledCheck_->SetValue(false);
         const bool closeAudio = closing_;
-        if (closing_) benchmarkNavigation_ = BenchmarkNavigation::none;
-        const auto closingBenchmark = benchmarkNavigation_ == BenchmarkNavigation::none ? benchmarkSession_ : nullptr;
+        const auto closingBenchmark = benchmarkSession_;
         if (!recognitionLifecycle_.beginStop([this, closeAudio, closingBenchmark] {
             std::string diagnostic;
+            if (benchmarkPreparation_.valid())
+            {
+                try { benchmarkPreparation_.get(); }
+                catch (const std::exception& error) { diagnostic = error.what(); }
+            }
             if (recognitionPipeline_)
             {
                 recognitionPipeline_->setObserver(nullptr);
@@ -807,22 +816,11 @@ namespace timmy::gui {
         if (benchmarkSession_)
         {
             drainBenchmarkResults();
-            if (benchmarkNavigation_ != BenchmarkNavigation::none
-                && recognitionLifecycle_.diagnostic().empty())
-            {
-                const bool retry = benchmarkNavigation_ == BenchmarkNavigation::retry;
-                benchmarkNavigation_ = BenchmarkNavigation::none;
-                if (retry) benchmarkSession_->retry();
-                else if (!benchmarkSession_->next()) { updateRecognitionControls(); return; }
-                startRecognition();
-                return;
-            }
             // Shutdown has joined all recognition callbacks before closing/reset.
             try { benchmarkSession_->close(); }
             catch (const std::exception& error) { stopDiagnostic_ = wxString::FromUTF8(error.what()); }
             benchmarkSession_.reset();
             benchmarkResults_.reset();
-            benchmarkNavigation_ = BenchmarkNavigation::none;
         }
         updateRecognitionControls();
         updateOutputStatus();
@@ -1011,6 +1009,42 @@ namespace timmy::gui {
         benchmarkStartRequested_ = false;
     }
 
+    void MainFrame::prepareBenchmarkAttempt()
+    {
+        if (benchmarkPreparation_.valid()) return;
+        const auto session = benchmarkSession_;
+        auto* pipeline = recognitionPipeline_.get();
+        benchmarkPreparation_ = std::async(std::launch::async, [session, pipeline] {
+            return session->prepare(*pipeline);
+        });
+        updateBenchmarkControls();
+    }
+
+    void MainFrame::pollBenchmarkAttempt()
+    {
+        if (!benchmarkSession_ || recognitionLifecycle_.stopping()) return;
+        try
+        {
+            if (benchmarkPreparation_.valid()
+                && benchmarkPreparation_.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            {
+                const auto result = benchmarkPreparation_.get();
+                if (!result.succeeded) throw std::runtime_error(result.diagnostic
+                    ? result.diagnostic->message : "Attempt preparation failed.");
+            }
+            if (const auto timedOut = benchmarkSession_->tick(*recognitionPipeline_))
+                showBenchmarkAttempt(*timedOut);
+            if (benchmarkSession_->attemptState() == core::BenchmarkAttemptState::result)
+                recognitionPipeline_->disarmAttempt();
+            updateBenchmarkControls();
+        }
+        catch (const std::exception& error)
+        {
+            stopDiagnostic_ = wxString::FromUTF8(error.what());
+            stopRecognition();
+        }
+    }
+
     void MainFrame::showBenchmarkAttempt(const core::RecognitionBenchmarkAttempt& attempt)
     {
         benchmarkDialog_->showAttempt(attempt);
@@ -1023,7 +1057,7 @@ namespace timmy::gui {
             || !benchmarkSession_->awaitingResult()) return;
         try
         {
-            const auto attempt = benchmarkSession_->recordNoResult();
+            const auto attempt = benchmarkSession_->recordNoResult(recognitionPipeline_->attemptDiagnostics());
             if (!attempt) return; // A final result may have won the worker race.
             rawTranscriptText_->SetLabel("Raw transcript: No ASR result");
             normalizedTranscriptText_->SetLabel("Normalized transcript: -");
@@ -1034,7 +1068,6 @@ namespace timmy::gui {
         catch (const std::exception& error)
         {
             stopDiagnostic_ = "Benchmark logging failed: " + wxString::FromUTF8(error.what());
-            benchmarkNavigation_ = BenchmarkNavigation::none;
             stopRecognition();
         }
     }
@@ -1044,8 +1077,10 @@ namespace timmy::gui {
         if (!benchmarkSession_ || !recognitionLifecycle_.listening() || closing_
             || benchmarkSession_->awaitingResult()) return;
         if (!retry && benchmarkSession_->index() + 1 == core::liveBenchmarkCases().size()) return;
-        benchmarkNavigation_ = retry ? BenchmarkNavigation::retry : BenchmarkNavigation::next;
-        stopRecognition();
+        if (retry) benchmarkSession_->retry();
+        else if (!benchmarkSession_->next()) return;
+        benchmarkDialog_->setCase(benchmarkSession_->index());
+        prepareBenchmarkAttempt();
     }
 
     void MainFrame::openBenchmark()
@@ -1058,13 +1093,17 @@ namespace timmy::gui {
                 [this] { startBenchmark(); },
                 [this] {
                     if (!benchmarkSession_ || recognitionLifecycle_.stopping() || closing_) return;
-                    benchmarkNavigation_ = BenchmarkNavigation::none;
                     stopRecognition();
                 },
                 [this] { navigateBenchmark(false); },
                 [this] { navigateBenchmark(true); },
                 [this] { recordBenchmarkNoResult(); },
                 [this] { closeBenchmark(); },
+                [this] {
+                    if (benchmarkSession_ && !recognitionLifecycle_.stopping() && !closing_)
+                        benchmarkSession_->startAttempt();
+                    updateBenchmarkControls();
+                },
                 [this](const wxString& path) {
                     benchmarkPathSummary_->SetLabel(path.empty() ? wxString("JSONL file: not selected") : "JSONL: " + wxFileName(path).GetFullName());
                     benchmarkPathSummary_->SetToolTip(path);
@@ -1083,7 +1122,6 @@ namespace timmy::gui {
         if (!benchmarkDialog_ || closing_) return;
         if (!benchmarkSession_) { benchmarkDialog_->Hide(); return; }
         benchmarkCloseRequested_ = true;
-        benchmarkNavigation_ = BenchmarkNavigation::none;
         stopRecognition();
     }
 
@@ -1096,7 +1134,8 @@ namespace timmy::gui {
         benchmarkDialog_->updateControls(recognitionLifecycle_.canConfigure() && !closing_,
             active, recognitionLifecycle_.listening(), recognitionLifecycle_.stopping() || closing_,
             active && benchmarkSession_->awaitingResult(),
-            active && benchmarkSession_->index() + 1 == core::liveBenchmarkCases().size());
+            active && benchmarkSession_->index() + 1 == core::liveBenchmarkCases().size(),
+            active ? benchmarkSession_->attemptState() : core::BenchmarkAttemptState::closed);
     }
 
     void MainFrame::drainBenchmarkResults()
@@ -1178,7 +1217,7 @@ namespace timmy::gui {
             }
             if (benchmarkSession_) benchmarkDialog_->setCase(benchmarkSession_->index());
             recognitionPipeline_ = std::make_unique<core::RecognitionPipeline>(
-                channelSelector_, std::move(backend), languageProfile, benchmarkSession_ != nullptr);
+                channelSelector_, std::move(backend), languageProfile, benchmarkSession_ != nullptr, benchmarkSession_ != nullptr);
             recognitionObserver_ = std::make_shared<GuiRecognitionObserver>(*this, generation,
                 armedOutputGeneration_, benchmarkSession_, benchmarkResults_);
             recognitionPipeline_->setObserver(recognitionObserver_);
@@ -1192,7 +1231,8 @@ namespace timmy::gui {
                 stopRecognition();
                 return;
             }
-            if (!benchmarkSession_ && outputEnabledCheck_->GetValue()) armOutput();
+            if (benchmarkSession_) prepareBenchmarkAttempt();
+            else if (outputEnabledCheck_->GetValue()) armOutput();
             updateOutputStatus();
         }
         catch (const std::exception& error)
@@ -1235,7 +1275,6 @@ namespace timmy::gui {
         if (benchmarkSession_)
         {
             stopDiagnostic_ = wxString::FromUTF8(payload.diagnostic.message);
-            benchmarkNavigation_ = BenchmarkNavigation::none;
             stopRecognition();
         }
     }
@@ -1248,6 +1287,7 @@ namespace timmy::gui {
         {
             return;
         }
+        if (benchmarkSession_ && payload.transcript.generation != benchmarkSession_->generation()) return;
         rawTranscriptText_->SetLabel("Raw transcript: "
             + wxString::FromUTF8(payload.transcript.rawTranscript));
         normalizedTranscriptText_->SetLabel("Normalized transcript: "
@@ -1354,6 +1394,7 @@ namespace timmy::gui {
     {
         pollShutdown();
         if (closing_) return;
+        pollBenchmarkAttempt();
         const auto snapshot = meter_->snapshot();
         if (snapshot.channels.empty())
         {
