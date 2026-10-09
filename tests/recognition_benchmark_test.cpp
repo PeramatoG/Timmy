@@ -30,7 +30,10 @@ namespace {
         { state_ = asr::AsrState::running; return {true, {}}; }
         asr::AsrOperationResult stop() override
         { state_ = asr::AsrState::stopped; return {true, {}}; }
-        void emit(asr::AsrResult result) { publishResult(result); }
+        asr::AsrOperationResult resetAttempt(asr::AttemptGeneration next) override
+        { generation = next; return {true, {}}; }
+        void emit(asr::AsrResult result) { result.generation = generation; publishResult(result); }
+        asr::AttemptGeneration generation = 0;
     private:
         void processAudioBlock(const audio::AudioBlockView&) override {}
         asr::AsrState state_{asr::AsrState::stopped};
@@ -60,6 +63,16 @@ namespace {
         std::shared_ptr<Observer> observer = std::make_shared<Observer>();
         core::RecognitionPipeline pipeline;
     };
+    void arm(core::RecognitionBenchmarkSession& session, Fixture& fixture)
+    {
+        REQUIRE(session.prepare(fixture.pipeline).succeeded);
+        const auto now = core::RecognitionBenchmarkSession::Clock::now();
+        REQUIRE(session.startAttempt(now));
+        REQUIRE(!session.tick(fixture.pipeline, now + std::chrono::seconds(1)));
+    }
+    core::RecognitionTranscript forSession(core::RecognitionBenchmarkSession& session,
+        core::RecognitionTranscript transcript)
+    { transcript.generation = session.generation(); return transcript; }
     core::RecognitionBenchmarkSnapshot snapshot()
     {
         core::RecognitionBenchmarkSnapshot value;
@@ -198,6 +211,7 @@ namespace {
         std::filesystem::remove(path);
         auto original = snapshot();
         core::RecognitionBenchmarkSession session(path, original);
+        arm(session, fixture);
         original.settings["whisper.threads"] = 7;
         original.audioSource = {"changed", 9, std::nullopt};
         REQUIRE(session.snapshot().audioSource.channelIndex == 2);
@@ -210,9 +224,10 @@ namespace {
         REQUIRE(!session.awaitingResult() && session.index() == 0);
         REQUIRE(!session.record(fixture.recognize("Channel 5 At 50")));
         session.retry();
-        const auto retry = session.record(fixture.recognize("Channel 5 At 50"));
+        arm(session, fixture);        const auto retry = session.record(fixture.recognize("Channel 5 At 50"));
         REQUIRE(retry && retry->attempt == 2 && !retry->passed && retry->caseId == "es-num-1");
         REQUIRE(session.next());
+        arm(session, fixture);
         const auto next = session.record(fixture.recognize("Channel 5 At 50"));
         REQUIRE(next && next->attempt == 1 && next->passed && next->caseId == "es-num-5");
         // All writes are visible even before close, without requiring GUI events.
@@ -225,7 +240,7 @@ namespace {
             REQUIRE(line.find("\"recognition_settings\":{") != std::string::npos);
             REQUIRE(line.find("\"recognition_outcome\":\"final_result\"") != std::string::npos);
             REQUIRE(line.find("\"channel_index\":2") != std::string::npos);
-            REQUIRE(line.find("\"schema_version\":1") != std::string::npos);
+            REQUIRE(line.find("\"schema_version\":2") != std::string::npos);
             REQUIRE(line.find("\"audio_duration_seconds\":null") != std::string::npos);
             ++lines;
         }
@@ -233,11 +248,12 @@ namespace {
         for (std::size_t i = 2; i < core::liveBenchmarkCases().size(); ++i)
         {
             REQUIRE(session.next());
+        arm(session, fixture);
             REQUIRE(session.record(fixture.recognize(core::liveBenchmarkCases()[i].phrase)).has_value());
         }
         REQUIRE(!session.next());
         session.retry();
-        REQUIRE(session.record(fixture.recognize(core::liveBenchmarkCases().back().phrase))->attempt == 2);
+        arm(session, fixture);        REQUIRE(session.record(fixture.recognize(core::liveBenchmarkCases().back().phrase))->attempt == 2);
         session.close();
         session.close();
         REQUIRE(!session.record({}));
@@ -255,30 +271,32 @@ namespace {
         Fixture fixture;
         const auto& corpus = core::liveBenchmarkCases();
         const auto stale = fixture.recognize("Channel 1 At 50");
-        REQUIRE(!core::benchmarkPasses(corpus.front(), {}, Outcome::noResult));
-        REQUIRE(core::benchmarkPasses(corpus.back(), {}, Outcome::noResult));
-        REQUIRE(core::benchmarkPasses(corpus.back(), stale, Outcome::noResult));
+        REQUIRE(!core::benchmarkPasses(corpus.front(), {}, Outcome::operatorNoResult));
+        REQUIRE(core::benchmarkPasses(corpus.back(), {}, Outcome::operatorNoResult));
+        REQUIRE(core::benchmarkPasses(corpus.back(), stale, Outcome::operatorNoResult));
         const auto path = std::filesystem::temp_directory_path() / "timmy-benchmark-no-result.jsonl";
         std::filesystem::remove(path);
         core::RecognitionBenchmarkSession session(path, snapshot());
+        arm(session, fixture);
         const auto first = session.recordNoResult();
-        REQUIRE(first && !first->passed && first->outcome == Outcome::noResult && first->attempt == 1);
+        REQUIRE(first && !first->passed && first->outcome == Outcome::operatorNoResult && first->attempt == 1);
         REQUIRE(!session.awaitingResult());
-        REQUIRE(!session.recordNoResult() && !session.record(stale));
+        REQUIRE(!session.recordNoResult() && !session.record(forSession(session, stale)));
         session.retry();
-        const auto retried = session.record(stale);
+        arm(session, fixture);        const auto retried = session.record(forSession(session, stale));
         REQUIRE(retried && retried->passed && retried->attempt == 2 && retried->outcome == Outcome::finalResult);
         // Navigate through positive and negative cases without any backend results.
         for (std::size_t i = 1; i < corpus.size(); ++i)
         {
             REQUIRE(session.next());
+        arm(session, fixture);
             const auto attempt = session.recordNoResult();
             REQUIRE(attempt && attempt->passed == !corpus[i].expected);
-            REQUIRE(attempt->attempt == 1 && attempt->outcome == Outcome::noResult);
+            REQUIRE(attempt->attempt == 1 && attempt->outcome == Outcome::operatorNoResult);
         }
         REQUIRE(!session.next());
         session.retry();
-        REQUIRE(session.recordNoResult()->attempt == 2);
+        arm(session, fixture);        REQUIRE(session.recordNoResult()->attempt == 2);
         session.close();
         REQUIRE(!session.recordNoResult());
         std::ifstream input(path);
@@ -288,7 +306,7 @@ namespace {
         {
             if (count != 1)
             {
-                REQUIRE(line.find("\"recognition_outcome\":\"no_result\"") != std::string::npos);
+                REQUIRE(line.find("\"recognition_outcome\":\"operator_no_result\"") != std::string::npos);
                 REQUIRE(line.find("\"raw_transcript\":null") != std::string::npos);
                 REQUIRE(line.find("\"assembly_state\":\"not_attempted\"") != std::string::npos);
                 REQUIRE(line.find("\"actual_semantic_description\":null") != std::string::npos);
@@ -317,6 +335,35 @@ int main(int argc, char** argv)
     {
         if (argc == 2 && std::string(argv[1]) == "--json-fixture")
         { std::cout << jsonFixture() << '\n'; return 0; }
+        if (argc == 2 && std::string(argv[1]) == "--outcome-fixtures")
+        {
+            Fixture fixture;
+            auto recognized = fixture.recognize("Channel 1 At 50");
+            recognized.metrics = {2.5, 0.75};
+            recognized.detectedLanguage = "es";
+            recognized.generation = 42;
+            recognized.diagnostics.audioSamples = 48000;
+            recognized.diagnostics.audioDurationSeconds = 3;
+            recognized.diagnostics.inputPeak = 0.5;
+            recognized.diagnostics.inputRms = 0.25;
+            recognized.diagnostics.speechDetected = true;
+            recognized.diagnostics.speechStartSeconds = 0.2;
+            recognized.diagnostics.utteranceDurationSeconds = 2;
+            recognized.diagnostics.inferenceDurationSeconds = 0.75;
+            recognized.diagnostics.droppedAudioBlocks = 1;
+            recognized.diagnostics.droppedVadFrames = 2;
+            recognized.diagnostics.droppedInferenceJobs = 3;
+            using Outcome = core::BenchmarkRecognitionOutcome;
+            for (auto outcome : {Outcome::finalResult, Outcome::noSpeech,
+                    Outcome::emptyAsrResult, Outcome::operatorNoResult})
+            {
+                std::cout << core::benchmarkJson(snapshot(), "diagnostics", core::liveBenchmarkCases().front(),
+                    1, recognized, outcome) << '\n';
+                std::cout << core::benchmarkJson(snapshot(), "diagnostics", core::liveBenchmarkCases().back(),
+                    1, recognized, outcome) << '\n';
+            }
+            return 0;
+        }
         if (argc == 2 && std::string(argv[1]) == "--no-result-fixture")
         {
             // Deliberately supply stale data to verify no_result never claims it
@@ -327,10 +374,10 @@ int main(int argc, char** argv)
             stale.metrics = {2.5, 0.75};
             auto source = snapshot();
             std::cout << core::benchmarkJson(source, "no-result-session", core::liveBenchmarkCases().front(),
-                1, stale, core::BenchmarkRecognitionOutcome::noResult) << '\n';
+                1, stale, core::BenchmarkRecognitionOutcome::operatorNoResult) << '\n';
             source.audioSource.channelDisplayName.reset();
             std::cout << core::benchmarkJson(source, "no-result-session", core::liveBenchmarkCases().back(),
-                2, stale, core::BenchmarkRecognitionOutcome::noResult) << '\n';
+                2, stale, core::BenchmarkRecognitionOutcome::operatorNoResult) << '\n';
             return 0;
         }
         unicodePathsAndJson(); corpusAndEvaluation(); metrics(); sessionAndJson(); noResultEvaluationAndSession();

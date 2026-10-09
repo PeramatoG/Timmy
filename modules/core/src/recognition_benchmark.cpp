@@ -199,10 +199,24 @@ namespace timmy::core {
         return cases;
     }
 
+    const char* benchmarkOutcomeName(BenchmarkRecognitionOutcome outcome)
+    {
+        switch (outcome)
+        {
+        case BenchmarkRecognitionOutcome::finalResult: return "final_result";
+        case BenchmarkRecognitionOutcome::noSpeech: return "no_speech";
+        case BenchmarkRecognitionOutcome::emptyAsrResult: return "empty_asr_result";
+        case BenchmarkRecognitionOutcome::operatorNoResult: return "operator_no_result";
+        }
+        return "operator_no_result";
+    }
+
     bool benchmarkPasses(const RecognitionBenchmarkCase& test, const RecognitionTranscript& actual,
         BenchmarkRecognitionOutcome outcome)
     {
-        if (outcome == BenchmarkRecognitionOutcome::noResult) return !test.expected;
+        // Non-command cases pass when no command is produced, for every explicit
+        // absence outcome. They measure false positives, not speech sensitivity.
+        if (outcome != BenchmarkRecognitionOutcome::finalResult) return !test.expected;
         const bool accepted = actual.assemblyState == RecognitionAssemblyState::complete
             && actual.semanticCommand && actual.validation.accepted && actual.rendering.text;
         if (!test.expected) return !accepted;
@@ -213,24 +227,29 @@ namespace timmy::core {
         const std::string& sessionId, const RecognitionBenchmarkCase& test,
         unsigned attempt, const RecognitionTranscript& recognized, BenchmarkRecognitionOutcome outcome)
     {
-        const bool noResult = outcome == BenchmarkRecognitionOutcome::noResult;
+        const bool noResult = outcome == BenchmarkRecognitionOutcome::noSpeech
+            || outcome == BenchmarkRecognitionOutcome::operatorNoResult;
         // A no-result attempt has no inference/transcript data, even if a caller
         // supplies stale data. It is kept distinct from an empty final ASR result.
         const RecognitionTranscript absent{};
-        const auto& transcript = noResult ? absent : recognized;
+        RecognitionTranscript empty;
+        empty.detectedLanguage = recognized.detectedLanguage;
+        empty.metrics = recognized.metrics;
+        const auto& transcript = noResult ? absent
+            : outcome == BenchmarkRecognitionOutcome::emptyAsrResult ? empty : recognized;
         std::ostringstream out;
         out.imbue(std::locale::classic());
         out << std::setprecision(std::numeric_limits<double>::max_digits10) << std::boolalpha;
         const auto assembly = noResult ? "not_attempted" : transcript.assemblyState == RecognitionAssemblyState::complete ? "complete"
             : transcript.assemblyState == RecognitionAssemblyState::pending ? "pending" : "rejected";
         const auto& config = snapshot.configuration;
-        out << "{\"schema_version\":1,\"corpus_version\":" << quoted(liveBenchmarkCorpusVersion)
+        out << "{\"schema_version\":2,\"corpus_version\":" << quoted(liveBenchmarkCorpusVersion)
             << ",\"session_id\":" << quoted(sessionId) << ",\"timestamp\":" << quoted(timestamp())
             << ",\"case_id\":" << quoted(test.id) << ",\"category\":" << quoted(test.category)
             << ",\"displayed_phrase\":" << quoted(test.phrase)
             << ",\"expected_semantic_result\":" << (test.expected ? quoted(command::describe(*test.expected)) : "null")
             << ",\"expected_no_command\":" << !test.expected
-            << ",\"recognition_outcome\":" << quoted(noResult ? "no_result" : "final_result")
+            << ",\"recognition_outcome\":" << quoted(benchmarkOutcomeName(outcome))
             << ",\"raw_transcript\":" << (noResult ? "null" : quoted(transcript.rawTranscript))
             << ",\"normalized_transcript\":" << (noResult ? "null" : quoted(transcript.normalizedTranscript))
             << ",\"assembly_state\":" << quoted(assembly) << ",\"assembly_text\":" << (noResult ? "null" : quoted(transcript.assemblyText))
@@ -279,6 +298,23 @@ namespace timmy::core {
         number(out, transcript.metrics.audioDurationSeconds);
         out << ",\"inference_duration_seconds\":";
         number(out, transcript.metrics.inferenceDurationSeconds);
+        out << "},\"attempt_generation\":" << recognized.generation
+            << ",\"diagnostics\":{\"audio_samples\":" << recognized.diagnostics.audioSamples
+            << ",\"audio_duration_seconds\":";
+        number(out, recognized.diagnostics.audioDurationSeconds);
+        out << ",\"input_peak\":"; number(out, recognized.diagnostics.inputPeak);
+        out << ",\"input_rms\":"; number(out, recognized.diagnostics.inputRms);
+        out << ",\"speech_detected\":" << recognized.diagnostics.speechDetected
+            << ",\"speech_start_seconds\":"; number(out, recognized.diagnostics.speechStartSeconds);
+        out << ",\"utterance_duration_seconds\":"; number(out, recognized.diagnostics.utteranceDurationSeconds);
+        out << ",\"inference_duration_seconds\":"; number(out, recognized.diagnostics.inferenceDurationSeconds);
+        const auto counter = [&](const char* name, const std::optional<std::uint64_t>& value) {
+            out << ",\"" << name << "\":";
+            if (value) out << *value; else out << "null";
+        };
+        counter("dropped_audio_blocks", recognized.diagnostics.droppedAudioBlocks);
+        counter("dropped_vad_frames", recognized.diagnostics.droppedVadFrames);
+        counter("dropped_inference_jobs", recognized.diagnostics.droppedInferenceJobs);
         out << "}}";
         return out.str();
     }
@@ -295,25 +331,143 @@ namespace timmy::core {
     {
         try { close(); } catch (...) { /* Explicit close reports errors to the frontend. */ }
     }
+    asr::AsrOperationResult RecognitionBenchmarkSession::prepare(RecognitionPipeline& pipeline)
+    {
+        asr::AttemptGeneration nextGeneration;
+        {
+            std::lock_guard lock(mutex_);
+            if (closed_ || state_ != BenchmarkAttemptState::preparing)
+                return {false, asr::AsrDiagnostic{asr::AsrDiagnosticCode::invalidConfiguration,
+                    "Attempt is not awaiting preparation."}};
+            nextGeneration = ++generation_;
+            diagnostics_ = {};
+            speechAt_.reset(); inferenceAt_.reset();
+        }
+        const auto prepared = pipeline.prepareAttempt(nextGeneration);
+        {
+            std::lock_guard lock(mutex_);
+            if (prepared.succeeded && !closed_) state_ = BenchmarkAttemptState::ready;
+        }
+        return prepared;
+    }
+    bool RecognitionBenchmarkSession::startAttempt(Clock::time_point now)
+    {
+        std::lock_guard lock(mutex_);
+        if (closed_ || state_ != BenchmarkAttemptState::ready) return false;
+        countdownAt_ = now;
+        state_ = BenchmarkAttemptState::countdown;
+        return true;
+    }
+    std::optional<RecognitionBenchmarkAttempt> RecognitionBenchmarkSession::tick(
+        RecognitionPipeline& pipeline, Clock::time_point now)
+    {
+        bool arm = false;
+        std::optional<RecognitionBenchmarkAttempt> timedOut;
+        {
+            std::lock_guard lock(mutex_);
+            if (closed_) return {};
+            if (state_ == BenchmarkAttemptState::countdown && now - countdownAt_ >= std::chrono::seconds(1))
+            {
+                speakAt_ = now;
+                state_ = BenchmarkAttemptState::waitingSpeech;
+                arm = true;
+            }
+            // Keep the speech-start cue visible briefly without delaying endpointing.
+            if (state_ == BenchmarkAttemptState::speechDetected && speechAt_
+                && now - *speechAt_ >= std::chrono::milliseconds(250))
+                state_ = BenchmarkAttemptState::waitingEnd;
+            // Backends without speech-start support may report a later stage;
+            // the five-second deadline applies only while waiting for speech.
+            if (!arm && state_ == BenchmarkAttemptState::waitingSpeech && now - speakAt_ >= std::chrono::seconds(5))
+            {
+                RecognitionTranscript absent;
+                absent.generation = generation_;
+                absent.diagnostics = pipeline.attemptDiagnostics();
+                timedOut = recordAttempt(absent, BenchmarkRecognitionOutcome::noSpeech);
+            }
+        }
+        if (timedOut) pipeline.disarmAttempt();
+        if (arm) pipeline.armAttempt();
+        return timedOut;
+    }
+    void RecognitionBenchmarkSession::progress(const asr::RecognitionProgress& event)
+    {
+        std::lock_guard lock(mutex_);
+        if (closed_ || event.generation != generation_ || !awaiting_
+            || state_ == BenchmarkAttemptState::preparing || state_ == BenchmarkAttemptState::ready
+            || state_ == BenchmarkAttemptState::countdown) return;
+        if (event.timestamp < speakAt_) return;
+        if (event.droppedAudioBlocks) diagnostics_.droppedAudioBlocks = event.droppedAudioBlocks;
+        if (event.droppedVadFrames) diagnostics_.droppedVadFrames = event.droppedVadFrames;
+        if (event.droppedInferenceJobs) diagnostics_.droppedInferenceJobs = event.droppedInferenceJobs;
+        using Stage = asr::RecognitionProgressState;
+        switch (event.state)
+        {
+        case Stage::speechStarted:
+            if (!speechAt_)
+            {
+                speechAt_ = event.timestamp;
+                diagnostics_.speechDetected = true;
+                diagnostics_.speechStartSeconds = std::chrono::duration<double>(*speechAt_ - speakAt_).count();
+                state_ = BenchmarkAttemptState::speechDetected;
+            }
+            break;
+        case Stage::utteranceFinalized:
+            if (speechAt_) diagnostics_.utteranceDurationSeconds = std::chrono::duration<double>(event.timestamp - *speechAt_).count();
+            state_ = BenchmarkAttemptState::processing;
+            break;
+        case Stage::inferenceStarted:
+            inferenceAt_ = event.timestamp;
+            state_ = BenchmarkAttemptState::processing;
+            break;
+        case Stage::inferenceCompletedWithText:
+        case Stage::inferenceCompletedNoText:
+            if (inferenceAt_) diagnostics_.inferenceDurationSeconds = std::chrono::duration<double>(event.timestamp - *inferenceAt_).count();
+            break; // Final transcript arbitrates and records the outcome.
+        default: break;
+        }
+    }
+    BenchmarkAttemptState RecognitionBenchmarkSession::attemptState() const
+    { std::lock_guard lock(mutex_); return state_; }
+    asr::AttemptGeneration RecognitionBenchmarkSession::generation() const
+    { std::lock_guard lock(mutex_); return generation_; }
     std::optional<RecognitionBenchmarkAttempt> RecognitionBenchmarkSession::record(const RecognitionTranscript& transcript)
     {
-        return recordAttempt(transcript, BenchmarkRecognitionOutcome::finalResult);
+        std::lock_guard lock(mutex_);
+        return recordAttempt(transcript, transcript.normalizedTranscript.empty()
+            ? BenchmarkRecognitionOutcome::emptyAsrResult : BenchmarkRecognitionOutcome::finalResult);
     }
-    std::optional<RecognitionBenchmarkAttempt> RecognitionBenchmarkSession::recordNoResult()
+    std::optional<RecognitionBenchmarkAttempt> RecognitionBenchmarkSession::recordNoResult(asr::AttemptDiagnostics diagnostics)
     {
-        return recordAttempt({}, BenchmarkRecognitionOutcome::noResult);
+        std::lock_guard lock(mutex_);
+        RecognitionTranscript absent;
+        absent.generation = generation_;
+        absent.diagnostics = diagnostics;
+        return recordAttempt(absent, BenchmarkRecognitionOutcome::operatorNoResult);
     }
     std::optional<RecognitionBenchmarkAttempt> RecognitionBenchmarkSession::recordAttempt(
         const RecognitionTranscript& transcript, BenchmarkRecognitionOutcome outcome)
     {
-        std::lock_guard lock(mutex_);
-        if (closed_ || !awaiting_) return std::nullopt;
+        // Caller holds mutex_, including timeout/progress/result arbitration.
+        if (closed_ || !awaiting_ || transcript.generation != generation_
+            || state_ == BenchmarkAttemptState::preparing || state_ == BenchmarkAttemptState::ready
+            || state_ == BenchmarkAttemptState::countdown) return std::nullopt;
+        auto measured = transcript;
+        measured.diagnostics.speechDetected = diagnostics_.speechDetected;
+        measured.diagnostics.speechStartSeconds = diagnostics_.speechStartSeconds;
+        measured.diagnostics.utteranceDurationSeconds = diagnostics_.utteranceDurationSeconds;
+        measured.diagnostics.inferenceDurationSeconds = transcript.metrics.inferenceDurationSeconds
+            ? transcript.metrics.inferenceDurationSeconds : diagnostics_.inferenceDurationSeconds;
+        if (!measured.diagnostics.droppedAudioBlocks) measured.diagnostics.droppedAudioBlocks = diagnostics_.droppedAudioBlocks;
+        if (!measured.diagnostics.droppedVadFrames) measured.diagnostics.droppedVadFrames = diagnostics_.droppedVadFrames;
+        if (!measured.diagnostics.droppedInferenceJobs) measured.diagnostics.droppedInferenceJobs = diagnostics_.droppedInferenceJobs;
         const auto& test = liveBenchmarkCases().at(index_);
         // Flush each complete attempt before publishing a result to the operator.
-        output_ << benchmarkJson(snapshot_, sessionId_, test, attempt_, transcript, outcome) << '\n';
+        output_ << benchmarkJson(snapshot_, sessionId_, test, attempt_, measured, outcome) << '\n';
         output_.flush();
         awaiting_ = false;
-        return RecognitionBenchmarkAttempt{test.id, attempt_, benchmarkPasses(test, transcript, outcome), outcome};
+        state_ = BenchmarkAttemptState::result;
+        return RecognitionBenchmarkAttempt{test.id, attempt_, benchmarkPasses(test, measured, outcome), outcome, generation_, measured.diagnostics};
     }
     bool RecognitionBenchmarkSession::next()
     {
@@ -322,6 +476,7 @@ namespace timmy::core {
         ++index_;
         attempt_ = 1;
         awaiting_ = true;
+        state_ = BenchmarkAttemptState::preparing;
         return true;
     }
     void RecognitionBenchmarkSession::retry()
@@ -330,12 +485,14 @@ namespace timmy::core {
         if (closed_ || awaiting_) return;
         ++attempt_;
         awaiting_ = true;
+        state_ = BenchmarkAttemptState::preparing;
     }
     void RecognitionBenchmarkSession::close()
     {
         std::lock_guard lock(mutex_);
         if (closed_) return;
         closed_ = true;
+        state_ = BenchmarkAttemptState::closed;
         output_.close();
     }
     bool RecognitionBenchmarkSession::awaitingResult() const

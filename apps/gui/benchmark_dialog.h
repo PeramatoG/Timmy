@@ -22,7 +22,7 @@ class BenchmarkDialog final : public wxDialog
 public:
     struct Actions
     {
-        std::function<void()> start, stop, next, retry, noResult, close;
+        std::function<void()> start, stop, next, retry, noResult, close, startAttempt;
         std::function<void(const wxString&)> pathChanged;
     };
 
@@ -35,14 +35,15 @@ public:
     void showError(const wxString& message);
     void stopped(const wxString& diagnostic);
     void updateControls(bool canStart, bool active, bool listening,
-        bool stopping, bool awaiting, bool lastCase);
+        bool stopping, bool awaiting, bool lastCase,
+        core::BenchmarkAttemptState state = core::BenchmarkAttemptState::preparing);
 
 private:
     void setState(const wxString& state, const wxString& instruction, bool accent = false);
     void wrapLabels();
     Actions actions_;
     wxTextCtrl* path_ = nullptr;
-    wxButton *start_, *stop_, *next_, *retry_, *noResult_, *browse_;
+    wxButton *start_, *stop_, *next_, *retry_, *noResult_, *browse_, *startAttempt_;
     wxStaticText *summary_, *case_, *phrase_, *state_, *instruction_, *result_, *counts_;
     wxTextCtrl* details_ = nullptr;
     wxString summaryText_, caseText_, phraseText_, instructionText_;

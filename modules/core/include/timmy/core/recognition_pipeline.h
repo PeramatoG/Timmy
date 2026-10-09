@@ -62,6 +62,8 @@ namespace timmy::core {
         command::IntentRenderingResult rendering;
         std::optional<std::string> detectedLanguage{};
         asr::RecognitionMetrics metrics{};
+        asr::AttemptGeneration generation = 0;
+        asr::AttemptDiagnostics diagnostics{};
     };
 
     class IRecognitionPipelineObserver
@@ -70,6 +72,7 @@ namespace timmy::core {
         virtual ~IRecognitionPipelineObserver() = default;
         virtual void onRecognitionStateChanged(RecognitionPipelineState state) = 0;
         virtual void onRecognitionDiagnostic(const asr::AsrDiagnostic& diagnostic) = 0;
+        virtual void onRecognitionProgress(const asr::RecognitionProgress&) {}
         virtual void onRecognitionTranscript(const RecognitionTranscript& transcript) = 0;
     };
 
@@ -81,7 +84,7 @@ namespace timmy::core {
         RecognitionPipeline(
             std::shared_ptr<audio::AudioChannelSelector> channelSelector,
             std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile = {},
-            bool isolateUtterances = false);
+            bool isolateUtterances = false, bool benchmarkAttempts = false);
         ~RecognitionPipeline();
 
         RecognitionPipeline(const RecognitionPipeline&) = delete;
@@ -91,20 +94,27 @@ namespace timmy::core {
         [[nodiscard]] RecognitionPipelineState state() const;
         asr::AsrOperationResult start(const asr::AsrConfiguration& configuration);
         asr::AsrOperationResult stop();
+        asr::AsrOperationResult prepareAttempt(asr::AttemptGeneration generation);
+        void armAttempt();
+        void disarmAttempt();
+        [[nodiscard]] asr::AttemptDiagnostics attemptDiagnostics() const;
         // Resets both pending assembly and the minimal last-target linguistic context.
         void discardPendingAssembly();
 
     private:
         class BackendListener;
+        class AudioInput;
         friend class BackendListener;
 
         void handleResult(const asr::AsrResult& result);
+        void handleProgress(const asr::RecognitionProgress& progress);
         void handleDiagnostic(const asr::AsrDiagnostic& diagnostic);
         void publishState(RecognitionPipelineState state);
         std::shared_ptr<IRecognitionPipelineObserver> observer() const;
 
         std::shared_ptr<audio::AudioChannelSelector> channelSelector_;
         std::shared_ptr<audio::AudioFormatAdapter> formatAdapter_;
+        std::shared_ptr<AudioInput> audioInput_;
         std::shared_ptr<asr::IAsrBackend> backend_;
         std::shared_ptr<BackendListener> backendListener_;
         command::CommandProfile profile_;
@@ -117,6 +127,9 @@ namespace timmy::core {
         RecognitionPipelineState state_ = RecognitionPipelineState::stopped;
         bool attached_ = false;
         const bool isolateUtterances_;
+        const bool benchmarkAttempts_;
+        asr::AttemptGeneration attemptGeneration_ = 0;
+        bool attemptArmed_ = false;
     };
 
 } // namespace timmy::core

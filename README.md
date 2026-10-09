@@ -280,15 +280,18 @@ OSC mapping reject it with diagnostics. See
 [ADR 0003](docs/decisions/0003-semantic-command-processing-stages.md) for this
 compatibility boundary and the future validated semantic fallback extension point.
 
-### Guided live recognition benchmark (ASR-BENCH-010)
+### Guided live recognition benchmark (ASR-BENCH-011)
 
 Choose **Open benchmark...** under Recognition benchmark to open the dedicated
 operator window for the 36-case `timmy-live-v1` corpus. Select a JSONL result file,
-press **Start benchmark**, speak the prominently displayed phrase, then choose
+press **Start benchmark**, wait for **Ready**, press **Start attempt**, wait for
+**SPEAK NOW**, speak the prominently displayed phrase, then choose
 **Next** or **Retry** after reviewing PASS/FAIL. State instructions, attempt counts
 and a frozen configuration summary guide the session; technical transcripts and
 timings are available under **Details**. Use **No result** when no final ASR result
-arrives, and **Stop benchmark** or **Close** to release the frozen configuration.
+arrives. A five-second speech-start timeout records no speech; empty successful
+inference is recorded separately. Next/Retry keep the model loaded while resetting
+the attempt. Use **Stop benchmark** or **Close** to release the frozen configuration.
 OSC stays disarmed throughout the session. Results compare semantic commands and
 include the explicit recognition outcome, frozen audio source, tuning, language
 and optional inference/audio timings. See [the benchmark guide](docs/ASR_LIVE_BENCHMARK.md)

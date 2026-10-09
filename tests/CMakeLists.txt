@@ -421,3 +421,13 @@ if(Python3_Interpreter_FOUND)
         ${CMAKE_CURRENT_SOURCE_DIR}/benchmark_jsonl_test.py
         $<TARGET_FILE:timmy_recognition_benchmark_tests>)
 endif()
+
+add_executable(timmy_benchmark_attempt_lifecycle_tests benchmark_attempt_lifecycle_test.cpp)
+target_link_libraries(timmy_benchmark_attempt_lifecycle_tests PRIVATE timmy_core)
+add_test(NAME timmy.benchmark_attempt_lifecycle COMMAND timmy_benchmark_attempt_lifecycle_tests)
+set_tests_properties(timmy.benchmark_attempt_lifecycle PROPERTIES TIMEOUT 20)
+if(MSVC)
+    target_compile_options(timmy_benchmark_attempt_lifecycle_tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(timmy_benchmark_attempt_lifecycle_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()

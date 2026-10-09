@@ -31,7 +31,10 @@ namespace timmy::core {
     };
 
     [[nodiscard]] const std::vector<RecognitionBenchmarkCase>& liveBenchmarkCases();
-    enum class BenchmarkRecognitionOutcome { finalResult, noResult };
+    enum class BenchmarkRecognitionOutcome { finalResult, noSpeech, emptyAsrResult, operatorNoResult };
+    [[nodiscard]] const char* benchmarkOutcomeName(BenchmarkRecognitionOutcome outcome);
+    enum class BenchmarkAttemptState
+    { preparing, ready, countdown, waitingSpeech, speechDetected, waitingEnd, processing, result, closed };
 
     [[nodiscard]] bool benchmarkPasses(const RecognitionBenchmarkCase& test,
         const RecognitionTranscript& actual,
@@ -60,6 +63,8 @@ namespace timmy::core {
         unsigned attempt;
         bool passed;
         BenchmarkRecognitionOutcome outcome{BenchmarkRecognitionOutcome::finalResult};
+        asr::AttemptGeneration generation = 0;
+        asr::AttemptDiagnostics diagnostics{};
     };
 
     // Has no emitter or output path. record() runs on a recognition worker, never
@@ -73,13 +78,22 @@ namespace timmy::core {
         RecognitionBenchmarkSession(const RecognitionBenchmarkSession&) = delete;
         RecognitionBenchmarkSession& operator=(const RecognitionBenchmarkSession&) = delete;
 
+        using Clock = std::chrono::steady_clock;
+        // Frontend runs preparation away from its UI thread; no callbacks hold
+        // the session mutex while resetting/joining backend workers.
+        asr::AsrOperationResult prepare(RecognitionPipeline& pipeline);
+        bool startAttempt(Clock::time_point now = Clock::now());
+        [[nodiscard]] std::optional<RecognitionBenchmarkAttempt> tick(
+            RecognitionPipeline& pipeline, Clock::time_point now = Clock::now());
+        void progress(const asr::RecognitionProgress& progress);
+        [[nodiscard]] BenchmarkAttemptState attemptState() const;
+        [[nodiscard]] asr::AttemptGeneration generation() const;
         [[nodiscard]] std::optional<RecognitionBenchmarkAttempt> record(
             const RecognitionTranscript& transcript);
         // Explicit operator outcome, not a fabricated ASR transcript. The same
         // result gate arbitrates this action against a concurrent final result.
-        [[nodiscard]] std::optional<RecognitionBenchmarkAttempt> recordNoResult();
-        // Navigate only after recognition resources have stopped, so queued audio
-        // and in-flight inference from the previous attempt cannot consume a case.
+        [[nodiscard]] std::optional<RecognitionBenchmarkAttempt> recordNoResult(asr::AttemptDiagnostics diagnostics = {});
+        // Navigation closes result acceptance until explicit prepare + Start attempt.
         [[nodiscard]] bool next();
         void retry();
         void close();
@@ -100,6 +114,11 @@ namespace timmy::core {
         std::size_t index_{0};
         unsigned attempt_{1};
         bool awaiting_{true};
+        BenchmarkAttemptState state_{BenchmarkAttemptState::preparing};
+        asr::AttemptGeneration generation_{0};
+        Clock::time_point countdownAt_{}, speakAt_{};
+        std::optional<Clock::time_point> speechAt_, inferenceAt_;
+        asr::AttemptDiagnostics diagnostics_{};
         bool closed_{false};
     };
 

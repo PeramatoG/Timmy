@@ -20,6 +20,7 @@
 #include "timmy/core/recognition_pipeline.h"
 #include "timmy/core/asr_engine_factory.h"
 #include "timmy/core/recognition_benchmark.h"
+#include <future>
 
 #include <wx/frame.h>
 #include <wx/timer.h>
@@ -72,6 +73,8 @@ namespace timmy::gui {
         void stopRecognition();
         void startRecognition();
         void startBenchmark();
+        void prepareBenchmarkAttempt();
+        void pollBenchmarkAttempt();
         void openBenchmark();
         void closeBenchmark();
         void navigateBenchmark(bool retry);
@@ -125,8 +128,7 @@ namespace timmy::gui {
         bool benchmarkCloseRequested_ = false;
         std::shared_ptr<core::RecognitionBenchmarkSession> benchmarkSession_;
         std::shared_ptr<BenchmarkResults> benchmarkResults_;
-        enum class BenchmarkNavigation { none, next, retry };
-        BenchmarkNavigation benchmarkNavigation_{BenchmarkNavigation::none};
+        std::future<asr::AsrOperationResult> benchmarkPreparation_;
         bool benchmarkStartRequested_{false};
         wxStaticText* recognitionStatusText_ = nullptr;
         wxStaticText* rawTranscriptText_ = nullptr;
