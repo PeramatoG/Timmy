@@ -10,6 +10,7 @@
 
 #include "timmy/audio/audio_engine.h"
 #include "miniaudio_device_identity.h"
+#include "audio_capture_counters.h"
 
 #include <miniaudio.h>
 
@@ -313,7 +314,7 @@ namespace timmy::audio {
             }
 
             ringBufferInitialized_ = true;
-            droppedFrameCount_.store(0, std::memory_order_relaxed);
+            counters_->reset(format_.sampleRate, ringBufferCapacityFrames);
 
             running_.store(true, std::memory_order_release);
 
@@ -383,6 +384,7 @@ namespace timmy::audio {
                 workerThread_.join();
             }
 
+            counters_->observeRead(0);
             releaseResources();
         }
 
@@ -391,6 +393,8 @@ namespace timmy::audio {
         {
             return running_.load(std::memory_order_acquire);
         }
+
+        std::shared_ptr<detail::AudioCaptureCounters> counters_ = std::make_shared<detail::AudioCaptureCounters>();
 
     private:
         static void dataCallback(
@@ -425,6 +429,7 @@ namespace timmy::audio {
                 return;
             }
 
+            counters_->captured(frameCount);
             const float* readPosition = samples;
             ma_uint32 remainingFrames = frameCount;
 
@@ -445,9 +450,8 @@ namespace timmy::audio {
                     || framesToWrite == 0
                     || writeBuffer == nullptr)
                 {
-                    droppedFrameCount_.fetch_add(
-                        remainingFrames,
-                        std::memory_order_relaxed);
+                    counters_->observeWrite(ma_pcm_rb_available_read(&ringBuffer_));
+                    counters_->dropped(remainingFrames);
 
                     return;
                 }
@@ -468,13 +472,13 @@ namespace timmy::audio {
 
                 if (commitResult != MA_SUCCESS)
                 {
-                    droppedFrameCount_.fetch_add(
-                        remainingFrames,
-                        std::memory_order_relaxed);
+                    counters_->observeWrite(ma_pcm_rb_available_read(&ringBuffer_));
+                    counters_->dropped(remainingFrames);
 
                     return;
                 }
 
+                counters_->observeWrite(ma_pcm_rb_available_read(&ringBuffer_));
                 readPosition += sampleCount;
                 remainingFrames -= framesToWrite;
             }
@@ -530,6 +534,8 @@ namespace timmy::audio {
                 {
                     continue;
                 }
+
+                counters_->observeRead(ma_pcm_rb_available_read(&ringBuffer_));
 
                 std::vector<std::shared_ptr<IAudioConsumer>>
                     consumersSnapshot;
@@ -592,7 +598,6 @@ namespace timmy::audio {
         AudioStreamFormat format_{};
 
         std::atomic<bool> running_{ false };
-        std::atomic<std::uint64_t> droppedFrameCount_{ 0 };
 
         std::thread workerThread_;
 
@@ -657,6 +662,12 @@ namespace timmy::audio {
             impl_->stop();
         }
     }
+
+    std::shared_ptr<const IAudioCaptureStatsSource> AudioEngine::captureStatsSource() const noexcept
+    { return impl_ ? impl_->counters_ : nullptr; }
+
+    std::optional<AudioCaptureStats> AudioEngine::captureStats() const noexcept
+    { return impl_ ? impl_->counters_->captureStats() : std::nullopt; }
 
     bool AudioEngine::isRunning() const noexcept
     {

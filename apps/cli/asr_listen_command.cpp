@@ -327,7 +327,8 @@ namespace timmy::cli {
         auto selector = std::make_shared<audio::AudioChannelSelector>(0);
         const auto languageProfile = options.profile == "hydra2"
             ? command::hydra2CommandProfile(options.hydra.preClear) : command::CommandProfile{};
-        core::RecognitionPipeline pipeline(selector, std::move(backend), languageProfile);
+        audio::AudioEngine engine;
+        core::RecognitionPipeline pipeline(selector, std::move(backend), languageProfile, false, false, engine.captureStatsSource());
         auto observer = std::make_shared<ConsoleRecognitionObserver>();
         std::unique_ptr<core::RecognitionCommandExecutor> executor;
         if (!options.profile.empty())
@@ -364,7 +365,6 @@ namespace timmy::cli {
             return 1;
         }
 
-        audio::AudioEngine engine;
         engine.addConsumer(selector);
         const auto audioStart = engine.start({});
         if (!audioStart.ok())

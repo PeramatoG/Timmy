@@ -17,6 +17,12 @@ using State = core::BenchmarkAttemptState;
 using Stage = asr::RecognitionProgressState;
 using Outcome = core::BenchmarkRecognitionOutcome;
 using Clock = core::RecognitionBenchmarkSession::Clock;
+class CaptureStats final : public audio::IAudioCaptureStatsSource
+{
+public:
+    std::optional<audio::AudioCaptureStats> value = audio::AudioCaptureStats{7, 48000, 1000, 100, 10, 900, 48000};
+    std::optional<audio::AudioCaptureStats> captureStats() const noexcept override { return value; }
+};
 class Backend final : public asr::IAsrBackend
 {
 public:
@@ -31,13 +37,18 @@ public:
     asr::AttemptDiagnostics attemptDiagnostics() const override
     {
         asr::AttemptDiagnostics d;
-        d.droppedAudioBlocks = 2; d.droppedVadFrames = 3; d.droppedInferenceJobs = 4;
+        if (reportAudioDrops) d.droppedAudioBlocks = 2;
+        d.droppedVadFrames = 3; d.droppedInferenceJobs = 4;
+        d.vadQueueDepth = 2; d.vadQueueMaxDepth = 256;
+        d.inferenceQueueDepth = 1; d.inferenceQueueMaxDepth = 2;
+        d.oldestVadQueueAgeSeconds = 0.25;
         return d;
     }
-    void result(std::string text, asr::AttemptGeneration tag)
-    { publishResult({std::move(text), asr::AsrResultKind::final, {}, {}, tag}); }
+    void result(std::string text, asr::AttemptGeneration tag, asr::RecognitionMetrics metrics = {})
+    { publishResult({std::move(text), asr::AsrResultKind::final, {}, metrics, tag}); }
     void progress(Stage stage, asr::AttemptGeneration tag, Clock::time_point at)
     { publishProgress({stage, tag, at, 2, 3, 4}); }
+    bool reportAudioDrops = true;
     int starts = 0, stops = 0, resets = 0;
     std::uint64_t pendingSamples = 0;
     asr::AttemptGeneration generation = 0;
@@ -67,7 +78,8 @@ struct Fixture
     core::RecognitionBenchmarkSession session{path, {}};
     std::shared_ptr<Backend> backend = std::make_shared<Backend>();
     std::shared_ptr<audio::AudioChannelSelector> selector = std::make_shared<audio::AudioChannelSelector>(0);
-    core::RecognitionPipeline pipeline{selector, backend, {}, true, true};
+    std::shared_ptr<CaptureStats> capture = std::make_shared<CaptureStats>();
+    core::RecognitionPipeline pipeline{selector, backend, {}, true, true, capture};
     std::shared_ptr<Observer> observer = std::make_shared<Observer>(session);
     Fixture() { pipeline.setObserver(observer); CHECK(pipeline.start({}).succeeded); }
     ~Fixture() { pipeline.stop(); session.close(); std::filesystem::remove(path); }
@@ -147,6 +159,10 @@ void lifecycleAndIsolation()
     f.backend->progress(Stage::inferenceCompletedNoText, f.session.generation(), now + 3s);
     f.backend->result("", f.session.generation());
     CHECK(f.observer->last->outcome == Outcome::emptyAsrResult && !f.observer->last->passed);
+    CHECK(f.observer->last->diagnostics.commandProcessingDurationSeconds);
+    CHECK(!f.observer->last->diagnostics.semanticParseDurationSeconds);
+    CHECK(!f.observer->last->diagnostics.validationDurationSeconds);
+    CHECK(!f.observer->last->diagnostics.renderingDurationSeconds);
     CHECK(f.observer->last->diagnostics.speechDetected && f.observer->last->diagnostics.audioSamples == 4);
     // Exercise every remaining case without restarting the model/backend.
     for (std::size_t i = 2; i < core::liveBenchmarkCases().size(); ++i)
@@ -159,15 +175,77 @@ void lifecycleAndIsolation()
     CHECK(!f.session.next() && f.backend->starts == 1 && f.backend->stops == 0);
     CHECK(f.pipeline.stop().succeeded && f.backend->stops == 1);
 }
+void captureDiagnostics()
+{
+    Fixture f;
+    auto now = Clock::now(); f.prepare(); f.arm(now);
+    f.backend->reportAudioDrops = false;
+    f.capture->value->capturedFrames += 48000;
+    f.capture->value->droppedCaptureFrames += 1536;
+    f.capture->value->ringOccupancyFrames = 512;
+    auto d = f.pipeline.attemptDiagnostics(); // No downstream blocks required.
+    CHECK(d.capturedFrames == 48000 && d.droppedCaptureFrames == 1536);
+    CHECK(!d.droppedAudioBlocks);
+    CHECK(d.vadQueueDepth == 2 && d.vadQueueMaxDepth == 256);
+    CHECK(d.inferenceQueueDepth == 1 && d.inferenceQueueMaxDepth == 2);
+    CHECK(d.oldestVadQueueAgeSeconds == 0.25);
+    core::RecognitionTranscript loss; loss.diagnostics = d;
+    const auto json = core::benchmarkJson({}, "capture-loss", core::liveBenchmarkCases()[0], 1, loss);
+    CHECK(json.find("\"dropped_capture_frames\":1536") != std::string::npos);
+    CHECK(json.find("\"dropped_audio_blocks\":null") != std::string::npos);
+    CHECK(d.capturedDurationSeconds == 1 && d.captureRingOccupancyFrames == 512);
+    CHECK(d.captureSessionRingHighWaterFrames == 900);
+    CHECK(d.captureRingMaxOccupancyFrames == 512); // Never inherits the session's 900 peak.
+    f.capture->value->ringOccupancyFrames = 128;
+    CHECK(f.pipeline.attemptDiagnostics().captureRingMaxOccupancyFrames == 512);
+    const auto recorded = f.session.recordNoResult(f.pipeline.attemptDiagnostics());
+    CHECK(recorded && recorded->diagnostics.droppedCaptureFrames == 1536);
+    f.pipeline.disarmAttempt();
+    f.capture->value->droppedCaptureFrames += 100;
+    CHECK(f.pipeline.attemptDiagnostics().droppedCaptureFrames == 1536);
+    f.session.retry(); f.prepare(); f.arm(now + 100s);
+    d = f.pipeline.attemptDiagnostics();
+    CHECK(d.capturedFrames == 0 && d.droppedCaptureFrames == 0);
+    CHECK(d.captureRingMaxOccupancyFrames == 128 && !d.commandProcessingDurationSeconds);
+    f.capture->value->session++;
+    CHECK(!f.pipeline.attemptDiagnostics().droppedCaptureFrames);
+    f.capture->value.reset();
+    CHECK(!f.pipeline.attemptDiagnostics().capturedFrames);
+}
+void commandDiagnostics()
+{
+    Fixture f;
+    const auto now = Clock::now(); f.prepare(); f.arm(now);
+    f.backend->progress(Stage::speechStarted, f.session.generation(), now + 1200ms);
+    f.backend->progress(Stage::utteranceFinalized, f.session.generation(), now + 2s);
+    // A later finalized utterance must not overwrite timing for the returned job.
+    f.backend->progress(Stage::utteranceFinalized, f.session.generation(), now + 3s);
+    f.backend->result("Channel 1 At 50", f.session.generation(), {2.5, 0.75, 1.1, now + 2s});
+    CHECK(f.observer->last);
+    const auto& d = f.observer->last->diagnostics;
+    CHECK(d.utteranceFinalizedSeconds == 1);
+    CHECK(d.inferenceAudioDurationSeconds == 2.5 && d.inferenceDurationSeconds == 0.75);
+    CHECK(d.realTimeFactor == 0.3 && d.endOfUtteranceToResultSeconds == 1.1);
+    CHECK(d.commandProcessingDurationSeconds && *d.commandProcessingDurationSeconds >= 0);
+    CHECK(d.normalizationDurationSeconds && d.assemblyDurationSeconds && d.semanticParseDurationSeconds);
+    CHECK(d.validationDurationSeconds && d.renderingDurationSeconds);
+    CHECK(*d.commandProcessingDurationSeconds >= *d.normalizationDurationSeconds + *d.assemblyDurationSeconds
+        + *d.semanticParseDurationSeconds + *d.validationDurationSeconds + *d.renderingDurationSeconds);
+}
 void normalLifecycle()
 {
     auto selector = std::make_shared<audio::AudioChannelSelector>(0);
     auto backend = std::make_shared<Backend>();
-    core::RecognitionPipeline pipeline(selector, backend);
+    auto capture = std::make_shared<CaptureStats>(); capture->value.reset();
+    core::RecognitionPipeline pipeline(selector, backend, {}, false, false, capture);
     const float sample[]{0.5F};
     CHECK(pipeline.start({}).succeeded);
     selector->onAudioBlock({sample, 1, {16000, 1}});
     CHECK(backend->pendingSamples == 1 && backend->resets == 0);
+    capture->value = audio::AudioCaptureStats{8, 16000, 32000, 512, 0, 512, 16000};
+    const auto d = pipeline.attemptDiagnostics();
+    CHECK(d.capturedFrames == 32000 && d.droppedCaptureFrames == 512);
+    CHECK(!d.commandProcessingDurationSeconds);
     CHECK(pipeline.stop().succeeded);
     CHECK(pipeline.start({}).succeeded);
     CHECK(backend->starts == 2 && backend->stops == 1 && backend->resets == 0);
@@ -175,6 +253,6 @@ void normalLifecycle()
 }
 int main()
 {
-    try { lifecycleAndIsolation(); normalLifecycle(); }
+    try { lifecycleAndIsolation(); captureDiagnostics(); commandDiagnostics(); normalLifecycle(); }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

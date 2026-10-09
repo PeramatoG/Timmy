@@ -12,6 +12,7 @@
 #include "timmy/audio/audio_device_enumerator.h"
 #include "timmy/audio/audio_engine.h"
 #include "miniaudio_device_identity.h"
+#include "audio_capture_counters.h"
 
 #include <algorithm>
 #include <array>
@@ -44,6 +45,21 @@ namespace {
 int main()
 {
     using namespace timmy::audio;
+
+    detail::AudioCaptureCounters capture;
+    if (capture.captureStats()) return fail("uninitialized capture stats must be unknown");
+    capture.reset(48000, 48000);
+    capture.captured(1024); capture.dropped(512); capture.observeWrite(512);
+    capture.observeRead(128);
+    const auto captured = *capture.captureStats();
+    if (captured.capturedFrames != 1024 || captured.droppedCaptureFrames != 512
+        || captured.ringOccupancyFrames != 128 || captured.ringHighWaterFrames != 512)
+        return fail("capture loss, current occupancy and high-water must survive dispatch");
+    capture.reset(16000, 16000);
+    const auto reset = *capture.captureStats();
+    if (reset.session == captured.session || reset.capturedFrames || reset.droppedCaptureFrames
+        || reset.ringOccupancyFrames || reset.ringHighWaterFrames || reset.sampleRate != 16000)
+        return fail("new capture sessions must reset accounting");
 
     const AudioDeviceId firstId{ "test-backend", "opaque-device-a" };
     const AudioDeviceId matchingId{ "test-backend", "opaque-device-a" };
