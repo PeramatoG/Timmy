@@ -11,6 +11,7 @@
 #include "timmy/asr/whisper_asr_backend.h"
 
 #include "whisper_command_decoding.h"
+#include "diagnostic_queue.h"
 #include "whisper_inference_cancellation.h"
 #include "whisper_recognition_guidance.h"
 
@@ -46,6 +47,44 @@ namespace {
             std::cerr << "FAILED: " << message << '\n';
             std::exit(EXIT_FAILURE);
         }
+    }
+
+    void testQueueDiagnostics()
+    {
+        using Queue = timmy::asr::detail::DiagnosticQueue<int>;
+        using namespace std::chrono_literals;
+        const auto start = Queue::Clock::time_point{};
+        Queue vad(256), inference(2);
+        for (int i = 0; i < 257; ++i) vad.push(i, start + i * 1ms);
+        require(vad.size() == 256 && vad.maximum() == 256 && vad.dropped() == 1,
+            "VAD queue must stay bounded and account for its evicted frame");
+        require(vad.oldestAge(start + 1s) == 0.999,
+            "oldest VAD residence must refer to the oldest surviving frame");
+        require(vad.pop(start + 1s).value == 1 && vad.waitTotal() == 0.999,
+            "VAD eviction must preserve drop-oldest policy and measure dequeue latency");
+        inference.push(1, start, true); inference.push(2, start + 1s, true);
+        inference.push(3, start + 2s, true);
+        require(inference.size() == 2 && inference.maximum() == 2 && inference.dropped() == 1,
+            "inference queue must retain its existing two-job bound");
+        const auto job = inference.pop(start + 3s);
+        require(job.value == 2 && job.finalized && job.queuedAt == start + 1s,
+            "inference metadata must stay associated with the retained utterance");
+        require(inference.waitMax() == 2 && inference.waitTotal() == 2,
+            "queue wait must include backlog before inference");
+        inference.pop(start + 4s);
+        require(inference.empty() && inference.maximum() == 2 && !inference.oldestAge()
+                && inference.waitTotal() == 4,
+            "draining must preserve historical accounting and clear oldest age");
+        for (auto* queue : {&vad, &inference})
+        {
+            queue->reset();
+            require(queue->empty() && queue->maximum() == 0 && queue->dropped() == 0
+                    && queue->waitTotal() == 0 && queue->waitMax() == 0 && !queue->oldestAge(),
+                "attempt reset must clear all queue statistics");
+        }
+        WhisperAsrBackend backend;
+        require(!backend.attemptDiagnostics().droppedAudioBlocks,
+            "Whisper cannot invent an upstream capture-loss zero");
     }
 
     // Verifies the generic capability declaration for the first backend.
@@ -113,6 +152,14 @@ namespace {
         invalidGuidance.startRule = "missing";
         require(!isValidWhisperRecognitionGuidance(invalidGuidance),
             "an absent start rule should invalidate guidance");
+        invalidGuidance = guidance;
+        invalidGuidance.grammar.clear();
+        require(!isValidWhisperRecognitionGuidance(invalidGuidance),
+            "a stale start rule without grammar must remain invalid");
+        invalidGuidance = guidance;
+        invalidGuidance.grammar = "root ::= (";
+        require(!isValidWhisperRecognitionGuidance(invalidGuidance),
+            "malformed grammar must remain invalid");
     }
 
     // Verifies the deterministic command-decoding settings and CPU limits.
@@ -239,6 +286,41 @@ namespace {
             "a restarted failed backend should stop cleanly");
     }
 
+    // Exercise real startup configuration before the model boundary for all switch combinations.
+    void testIndependentGuidanceStartup()
+    {
+        for (const bool grammarEnabled : {true, false})
+        for (const bool promptEnabled : {true, false})
+        {
+            WhisperAsrBackendOptions options;
+            options.settings = {{"whisper.grammar_enabled", grammarEnabled},
+                {"whisper.compact_prompt", promptEnabled}};
+            WhisperAsrBackend backend(options);
+            AsrConfiguration configuration;
+            configuration.modelResourcePath = "definitely-not-a-whisper-model.bin";
+            configuration.preferredLanguage = "es";
+            configuration.recognitionHints = {{"channel", "canal"}, {}, RecognitionConstraintIntent::commandPhrase};
+            for (int restart = 0; restart < 2; ++restart)
+            {
+                const auto result = backend.start(configuration);
+                require(!result.succeeded && result.diagnostic
+                    && result.diagnostic->code == AsrDiagnosticCode::unavailableResource,
+                    "all guidance combinations must pass startup validation and reach the model boundary");
+                const auto diagnostics = backend.attemptDiagnostics().recognitionGuidance;
+                require(std::get<bool>(diagnostics.at("whisper.grammar_enabled")) == grammarEnabled
+                    && std::get<bool>(diagnostics.at("whisper.compact_prompt")) == promptEnabled,
+                    "startup diagnostics must report the backend-owned switches");
+                require(!std::get<bool>(diagnostics.at("whisper.grammar_passed"))
+                    && !std::get<bool>(diagnostics.at("whisper.initial_prompt_passed"))
+                    && !diagnostics.contains("whisper.grammar_penalty"),
+                    "startup without inference must not claim that guidance was passed");
+                require(backend.stop().succeeded && backend.attemptDiagnostics().recognitionGuidance.empty(),
+                    "stop must clear guidance application diagnostics");
+                configuration.recognitionHints = {};
+            }
+        }
+    }
+
     // Verifies invalid local weights report initialization failure safely.
     void testInitializationFailure()
     {
@@ -300,11 +382,13 @@ namespace {
 // Runs model-free Whisper backend lifecycle tests.
 int main()
 {
+    testQueueDiagnostics();
     testCapabilities();
     testCommandDecodingProfile();
     testCooperativeInferenceCancellation();
     testRecognitionGuidance();
     testMissingModelDiagnostic();
+    testIndependentGuidanceStartup();
     testInitializationFailure();
     testMissingVadModelDiagnostic();
     return EXIT_SUCCESS;

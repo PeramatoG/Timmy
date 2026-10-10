@@ -314,4 +314,4 @@ the attempt. Use **Stop benchmark** or **Close** to release the frozen configura
 OSC stays disarmed throughout the session. Results compare semantic commands and
 include the explicit recognition outcome, frozen audio source, tuning, language
 and optional inference/audio timings. See [the benchmark guide](docs/ASR_LIVE_BENCHMARK.md)
-for lifecycle details and JSONL schema version 1.
+for lifecycle details and JSONL schema version 2.

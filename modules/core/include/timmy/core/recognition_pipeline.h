@@ -12,6 +12,7 @@
 
 #include "timmy/asr/asr_backend.h"
 #include "timmy/audio/audio_channel_selector.h"
+#include "timmy/audio/audio_capture_stats.h"
 #include "timmy/audio/audio_format_adapter.h"
 #include "timmy/command/command_processor.h"
 #include "timmy/command/transcript_normalizer.h"
@@ -84,7 +85,8 @@ namespace timmy::core {
         RecognitionPipeline(
             std::shared_ptr<audio::AudioChannelSelector> channelSelector,
             std::shared_ptr<asr::IAsrBackend> backend, command::CommandProfile profile = {},
-            bool isolateUtterances = false, bool benchmarkAttempts = false);
+            bool isolateUtterances = false, bool benchmarkAttempts = false,
+            std::shared_ptr<const audio::IAudioCaptureStatsSource> captureStats = {});
         ~RecognitionPipeline();
 
         RecognitionPipeline(const RecognitionPipeline&) = delete;

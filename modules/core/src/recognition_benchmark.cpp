@@ -95,6 +95,23 @@ namespace timmy::core {
             }
             out << ']';
         }
+        void settings(std::ostream& out, const asr::SettingValues& values)
+        {
+            out << '{';
+            bool first = true;
+            for (const auto& [id, value] : values)
+            {
+                if (!first) out << ',';
+                first = false;
+                out << quoted(id) << ':';
+                std::visit([&](auto v) {
+                    if constexpr (std::is_same_v<decltype(v), double>)
+                        if (!std::isfinite(v)) throw std::invalid_argument("Nonfinite benchmark setting.");
+                    out << v;
+                }, value);
+            }
+            out << '}';
+        }
         // Compare semantic operations, including equivalent lists/ranges. Merge
         // and subtract compact intervals without expanding console identifiers.
         using Span = std::pair<std::uint64_t, std::uint64_t>;
@@ -274,20 +291,12 @@ namespace timmy::core {
             << ",\"command_profile_id\":" << quoted(snapshot.commandProfile.id)
             << ",\"rendering_target\":" << quoted(snapshot.commandProfile.rendering.target == command::RenderingTarget::nativeText ? "native" : "hydra2")
             << ",\"pre_clear\":" << snapshot.commandProfile.rendering.preClear
-            << ",\"tuning\":{";
-        bool first = true;
-        for (const auto& [id, value] : snapshot.settings)
-        {
-            if (!first) out << ',';
-            first = false;
-            out << quoted(id) << ':';
-            std::visit([&](auto v) {
-                if constexpr (std::is_same_v<decltype(v), double>)
-                    if (!std::isfinite(v)) throw std::invalid_argument("Nonfinite benchmark setting.");
-                out << v;
-            }, value);
-        }
-        out << "},\"recognition_hints\":{\"constraint_intent\":"
+            << ",\"tuning\":";
+        settings(out, snapshot.settings);
+        out << ",\"active_guidance\":";
+        if (recognized.diagnostics.recognitionGuidance.empty()) out << "null";
+        else settings(out, recognized.diagnostics.recognitionGuidance);
+        out << ",\"recognition_hints\":{\"constraint_intent\":"
             << quoted(config.recognitionHints.constraintIntent == asr::RecognitionConstraintIntent::commandPhrase ? "command_phrase" : "none")
             << ",\"vocabulary\":";
         strings(out, config.recognitionHints.vocabulary);
@@ -315,6 +324,35 @@ namespace timmy::core {
         counter("dropped_audio_blocks", recognized.diagnostics.droppedAudioBlocks);
         counter("dropped_vad_frames", recognized.diagnostics.droppedVadFrames);
         counter("dropped_inference_jobs", recognized.diagnostics.droppedInferenceJobs);
+        counter("captured_frames", recognized.diagnostics.capturedFrames);
+        counter("dropped_capture_frames", recognized.diagnostics.droppedCaptureFrames);
+        counter("capture_ring_occupancy_frames", recognized.diagnostics.captureRingOccupancyFrames);
+        counter("capture_ring_max_occupancy_frames", recognized.diagnostics.captureRingMaxOccupancyFrames);
+        counter("capture_ring_capacity_frames", recognized.diagnostics.captureRingCapacityFrames);
+        counter("capture_session_ring_high_water_frames", recognized.diagnostics.captureSessionRingHighWaterFrames);
+        counter("vad_queue_depth", recognized.diagnostics.vadQueueDepth);
+        counter("vad_queue_max_depth", recognized.diagnostics.vadQueueMaxDepth);
+        counter("inference_queue_depth", recognized.diagnostics.inferenceQueueDepth);
+        counter("inference_queue_max_depth", recognized.diagnostics.inferenceQueueMaxDepth);
+        out << ",\"armed_duration_seconds\":"; number(out, recognized.diagnostics.armedDurationSeconds);
+        out << ",\"captured_duration_seconds\":"; number(out, recognized.diagnostics.capturedDurationSeconds);
+        out << ",\"utterance_finalized_seconds\":"; number(out, recognized.diagnostics.utteranceFinalizedSeconds);
+        out << ",\"inference_audio_duration_seconds\":"; number(out, recognized.diagnostics.inferenceAudioDurationSeconds);
+        out << ",\"real_time_factor\":"; number(out, recognized.diagnostics.realTimeFactor);
+        out << ",\"end_of_utterance_to_result_seconds\":"; number(out, recognized.diagnostics.endOfUtteranceToResultSeconds);
+        out << ",\"oldest_vad_queue_age_seconds\":"; number(out, recognized.diagnostics.oldestVadQueueAgeSeconds);
+        out << ",\"vad_queued_audio_duration_seconds\":"; number(out, recognized.diagnostics.vadQueuedAudioDurationSeconds);
+        out << ",\"vad_queue_wait_total_seconds\":"; number(out, recognized.diagnostics.vadQueueWaitTotalSeconds);
+        out << ",\"vad_queue_wait_max_seconds\":"; number(out, recognized.diagnostics.vadQueueWaitMaxSeconds);
+        out << ",\"inference_queue_wait_total_seconds\":"; number(out, recognized.diagnostics.inferenceQueueWaitTotalSeconds);
+        out << ",\"inference_queue_wait_max_seconds\":"; number(out, recognized.diagnostics.inferenceQueueWaitMaxSeconds);
+        out << ",\"command_processing_duration_seconds\":"; number(out, recognized.diagnostics.commandProcessingDurationSeconds);
+        out << ",\"normalization_duration_seconds\":"; number(out, recognized.diagnostics.normalizationDurationSeconds);
+        out << ",\"assembly_duration_seconds\":"; number(out, recognized.diagnostics.assemblyDurationSeconds);
+        out << ",\"semantic_parse_duration_seconds\":"; number(out, recognized.diagnostics.semanticParseDurationSeconds);
+        out << ",\"validation_duration_seconds\":"; number(out, recognized.diagnostics.validationDurationSeconds);
+        out << ",\"rendering_duration_seconds\":"; number(out, recognized.diagnostics.renderingDurationSeconds);
+
         out << "}}";
         return out.str();
     }
@@ -413,6 +451,7 @@ namespace timmy::core {
             }
             break;
         case Stage::utteranceFinalized:
+            diagnostics_.utteranceFinalizedSeconds = std::chrono::duration<double>(event.timestamp - speakAt_).count();
             if (speechAt_) diagnostics_.utteranceDurationSeconds = std::chrono::duration<double>(event.timestamp - *speechAt_).count();
             state_ = BenchmarkAttemptState::processing;
             break;
@@ -456,8 +495,18 @@ namespace timmy::core {
         measured.diagnostics.speechDetected = diagnostics_.speechDetected;
         measured.diagnostics.speechStartSeconds = diagnostics_.speechStartSeconds;
         measured.diagnostics.utteranceDurationSeconds = diagnostics_.utteranceDurationSeconds;
+        measured.diagnostics.utteranceFinalizedSeconds = transcript.metrics.utteranceFinalizedAt
+            ? std::optional<double>{std::chrono::duration<double>(*transcript.metrics.utteranceFinalizedAt - speakAt_).count()}
+            : diagnostics_.utteranceFinalizedSeconds;
         measured.diagnostics.inferenceDurationSeconds = transcript.metrics.inferenceDurationSeconds
             ? transcript.metrics.inferenceDurationSeconds : diagnostics_.inferenceDurationSeconds;
+        if (transcript.metrics.audioDurationSeconds)
+            measured.diagnostics.inferenceAudioDurationSeconds = transcript.metrics.audioDurationSeconds;
+        if (transcript.metrics.endOfUtteranceToResultSeconds)
+            measured.diagnostics.endOfUtteranceToResultSeconds = transcript.metrics.endOfUtteranceToResultSeconds;
+        if (measured.diagnostics.inferenceDurationSeconds && measured.diagnostics.inferenceAudioDurationSeconds
+            && *measured.diagnostics.inferenceAudioDurationSeconds > 0)
+            measured.diagnostics.realTimeFactor = *measured.diagnostics.inferenceDurationSeconds / *measured.diagnostics.inferenceAudioDurationSeconds;
         if (!measured.diagnostics.droppedAudioBlocks) measured.diagnostics.droppedAudioBlocks = diagnostics_.droppedAudioBlocks;
         if (!measured.diagnostics.droppedVadFrames) measured.diagnostics.droppedVadFrames = diagnostics_.droppedVadFrames;
         if (!measured.diagnostics.droppedInferenceJobs) measured.diagnostics.droppedInferenceJobs = diagnostics_.droppedInferenceJobs;

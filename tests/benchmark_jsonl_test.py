@@ -24,6 +24,7 @@ assert entry["result"] == "PASS" and entry["expected_no_command"] is False
 assert entry["attempt_number"] == 2 and entry["retry_number"] == 1
 assert entry["metrics"] == {"audio_duration_seconds": 2.5, "inference_duration_seconds": 0.75}
 snapshot = entry["recognition_settings"]
+assert snapshot["active_guidance"] is None  # Unsupported backends must remain explicitly unreported.
 assert snapshot["model_path"] == str(Path("models/niño.bin"))
 assert snapshot["vad_model_path"] == str(Path("models/vad.bin"))
 assert snapshot["language"] == "es" and snapshot["engine_id"] == entry["asr_engine_id"]
@@ -62,6 +63,28 @@ for index, line in enumerate(no_result_lines):
 assert entry["attempt_generation"] == 0
 assert entry["diagnostics"]["speech_start_seconds"] is None
 assert entry["diagnostics"]["dropped_vad_frames"] is None
+assert entry["diagnostics"]["dropped_capture_frames"] is None
+assert entry["diagnostics"]["capture_ring_max_occupancy_frames"] is None
+assert entry["diagnostics"]["real_time_factor"] is None
+
+guidance_rows = [json.loads(line) for line in subprocess.check_output(
+    [sys.argv[1], "--guidance-fixtures"], encoding="utf-8").splitlines()]
+assert len(guidance_rows) == 8
+for index, (grammar, prompt) in enumerate(((True, True), (True, False), (False, True), (False, False))):
+    recognized, silent = guidance_rows[2 * index:2 * index + 2]
+    active = recognized["recognition_settings"]["active_guidance"]
+    expected = {"whisper.grammar_enabled": grammar, "whisper.compact_prompt": prompt,
+                "whisper.grammar_passed": grammar, "whisper.initial_prompt_passed": prompt}
+    if grammar:
+        expected["whisper.grammar_penalty"] = 20.0
+    assert active == expected
+    assert all(type(active[key]) is bool for key in expected if key != "whisper.grammar_penalty")
+    assert recognized["recognition_settings"]["tuning"]["whisper.grammar_enabled"] == grammar
+    assert recognized["recognition_settings"]["tuning"]["whisper.compact_prompt"] == prompt
+    assert silent["recognition_outcome"] == "no_speech"
+    assert silent["recognition_settings"]["active_guidance"] == {
+        "whisper.grammar_enabled": grammar, "whisper.compact_prompt": prompt,
+        "whisper.grammar_passed": False, "whisper.initial_prompt_passed": False}
 
 rows = [json.loads(line) for line in subprocess.check_output(
     [sys.argv[1], "--outcome-fixtures"], encoding="utf-8").splitlines()]
@@ -77,6 +100,22 @@ for index, outcome in enumerate(("final_result", "no_speech", "empty_asr_result"
             "speech_start_seconds": 0.2, "utterance_duration_seconds": 2,
             "inference_duration_seconds": 0.75, "dropped_audio_blocks": 1,
             "dropped_vad_frames": 2, "dropped_inference_jobs": 3,
+            "captured_frames": 144000, "dropped_capture_frames": 1536,
+            "capture_ring_occupancy_frames": 512, "capture_ring_max_occupancy_frames": 1024,
+            "capture_ring_capacity_frames": 48000, "capture_session_ring_high_water_frames": 2048,
+            "vad_queue_depth": 2, "vad_queue_max_depth": 256,
+            "inference_queue_depth": 1, "inference_queue_max_depth": 2,
+            "armed_duration_seconds": 4, "captured_duration_seconds": 3,
+            "utterance_finalized_seconds": 2.2,
+            "inference_audio_duration_seconds": 2.5, "real_time_factor": 0.3,
+            "end_of_utterance_to_result_seconds": 1.1,
+            "oldest_vad_queue_age_seconds": 0.1, "vad_queued_audio_duration_seconds": 0.064,
+            "vad_queue_wait_total_seconds": 1, "vad_queue_wait_max_seconds": 0.2,
+            "inference_queue_wait_total_seconds": 0.3, "inference_queue_wait_max_seconds": 0.3,
+            "command_processing_duration_seconds": 0.006,
+            "normalization_duration_seconds": 0.001, "assembly_duration_seconds": 0.001,
+            "semantic_parse_duration_seconds": 0.002, "validation_duration_seconds": 0.001,
+            "rendering_duration_seconds": 0.001,
         }
         if outcome in ("no_speech", "operator_no_result"):
             assert row["raw_transcript"] is None and row["metrics"]["inference_duration_seconds"] is None

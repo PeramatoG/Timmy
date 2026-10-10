@@ -1217,7 +1217,7 @@ namespace timmy::gui {
             }
             if (benchmarkSession_) benchmarkDialog_->setCase(benchmarkSession_->index());
             recognitionPipeline_ = std::make_unique<core::RecognitionPipeline>(
-                channelSelector_, std::move(backend), languageProfile, benchmarkSession_ != nullptr, benchmarkSession_ != nullptr);
+                channelSelector_, std::move(backend), languageProfile, benchmarkSession_ != nullptr, benchmarkSession_ != nullptr, audioEngine_.captureStatsSource());
             recognitionObserver_ = std::make_shared<GuiRecognitionObserver>(*this, generation,
                 armedOutputGeneration_, benchmarkSession_, benchmarkResults_);
             recognitionPipeline_->setObserver(recognitionObserver_);

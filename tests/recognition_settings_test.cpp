@@ -9,8 +9,10 @@
  */
 
 #include "timmy/core/asr_engine_factory.h"
+#include "timmy/core/command_recognition_profile.h"
 #include "whisper_configuration.h"
 #include "whisper.h"
+#include "grammar-parser.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -165,7 +167,8 @@ namespace {
         const asr::RecognitionHints hints{{"channel", "canal"}, {}, asr::RecognitionConstraintIntent::commandPhrase};
         const auto disabled = asr::detail::configuredWhisperGuidance(hints, configuration);
         REQUIRE(disabled.grammar.empty() && disabled.initialPrompt.empty());
-        REQUIRE(disabled.grammarPenalty == 12.5F);
+        REQUIRE(disabled.startRule.empty() && disabled.grammarPenalty == 0.0F);
+        REQUIRE(asr::detail::isValidWhisperRecognitionGuidance(disabled));
         const auto backend = core::createAsrBackend(core::AsrEngineId::whisperCpp, {}, values);
         REQUIRE(backend->state() == asr::AsrState::stopped);
         values["whisper.threads"] = 1;
@@ -188,6 +191,83 @@ namespace {
         guidance = asr::detail::configuredWhisperGuidance(hints, asr::detail::makeWhisperConfiguration(values, 1));
         REQUIRE(!guidance.grammar.empty() && guidance.initialPrompt.empty());
     }
+
+    void independentGuidanceParameters()
+    {
+        const auto hints = core::commandRecognitionHints();
+        for (const bool grammarEnabled : {true, false})
+        for (const bool promptEnabled : {true, false})
+        {
+            const asr::SettingValues values{
+                {"whisper.grammar_enabled", grammarEnabled}, {"whisper.compact_prompt", promptEnabled},
+                {"whisper.grammar_penalty", 12.5}, {"whisper.threads", 6},
+                {"whisper.beam_size", 3}, {"whisper.max_tokens", 48},
+                {"whisper.temperature", 0.2}, {"whisper.temperature_increment", 0.3}
+            };
+            const auto config = asr::detail::makeWhisperConfiguration(values, 2);
+            const auto guidance = asr::detail::configuredWhisperGuidance(hints, config);
+            REQUIRE(asr::detail::isValidWhisperRecognitionGuidance(guidance));
+            REQUIRE(guidance.grammar.empty() == !grammarEnabled);
+            REQUIRE(guidance.startRule.empty() == !grammarEnabled);
+            REQUIRE(guidance.initialPrompt.empty() == !promptEnabled);
+            REQUIRE(guidance.grammarPenalty == (grammarEnabled ? 12.5F : 0.0F));
+            const auto grammar = guidance.grammar.empty() ? grammar_parser::parse_state{}
+                : grammar_parser::parse(guidance.grammar.c_str());
+            auto rules = grammar.c_rules();
+            auto parameters = asr::detail::makeWhisperCommandParameters(config);
+            // Language and tuning remain independent of guidance.
+            parameters.language = "es";
+            asr::detail::applyWhisperRecognitionGuidance(parameters, guidance, grammar, rules);
+            REQUIRE((parameters.initial_prompt != nullptr) == promptEnabled);
+            REQUIRE((parameters.grammar_rules != nullptr) == grammarEnabled);
+            REQUIRE(parameters.n_grammar_rules == (grammarEnabled ? rules.size() : 0));
+            REQUIRE(parameters.grammar_penalty == (grammarEnabled ? 12.5F : 0.0F));
+            if (grammarEnabled)
+            {
+                REQUIRE(parameters.grammar_rules == rules.data());
+                REQUIRE(parameters.i_start_rule == grammar.symbol_ids.at(guidance.startRule));
+            }
+            else REQUIRE(parameters.i_start_rule == 0);
+            if (promptEnabled) REQUIRE(std::string(parameters.initial_prompt) == guidance.initialPrompt);
+            REQUIRE(parameters.no_context && parameters.strategy == WHISPER_SAMPLING_BEAM_SEARCH);
+            REQUIRE(std::string(parameters.language) == "es");
+            REQUIRE(parameters.n_threads == 6 && parameters.beam_search.beam_size == 3);
+            REQUIRE(parameters.max_tokens == 48 && parameters.greedy.best_of == 5);
+            REQUIRE(parameters.temperature == 0.2F && parameters.temperature_inc == 0.3F);
+            const auto diagnostics = asr::detail::whisperGuidanceDiagnostics(config, parameters);
+            REQUIRE(std::get<bool>(diagnostics.at("whisper.grammar_enabled")) == grammarEnabled);
+            REQUIRE(std::get<bool>(diagnostics.at("whisper.compact_prompt")) == promptEnabled);
+            REQUIRE(std::get<bool>(diagnostics.at("whisper.grammar_passed")) == grammarEnabled);
+            REQUIRE(std::get<bool>(diagnostics.at("whisper.initial_prompt_passed")) == promptEnabled);
+            REQUIRE(diagnostics.contains("whisper.grammar_penalty") == grammarEnabled);
+            if (grammarEnabled) REQUIRE(std::get<double>(diagnostics.at("whisper.grammar_penalty")) == 12.5);
+
+            // Reusing parameters and stale parsed rules must not re-enable absent guidance.
+            const auto neutral = asr::detail::configuredWhisperGuidance(hints,
+                asr::detail::makeWhisperConfiguration({{"whisper.grammar_enabled", false},
+                    {"whisper.compact_prompt", false}}, 2));
+            asr::detail::applyWhisperRecognitionGuidance(parameters, neutral, grammar, rules);
+            REQUIRE(parameters.initial_prompt == nullptr && parameters.grammar_rules == nullptr);
+            REQUIRE(parameters.n_grammar_rules == 0 && parameters.i_start_rule == 0);
+            REQUIRE(parameters.grammar_penalty == 0.0F && parameters.no_context);
+        }
+
+        // Enabled switches are permissions, not a reason to manufacture absent hints.
+        const auto config = asr::detail::makeWhisperConfiguration({}, 1);
+        for (const auto& emptyHints : {asr::RecognitionHints{}, asr::RecognitionHints{
+            {"channel"}, {}, asr::RecognitionConstraintIntent::none}})
+        {
+            const auto guidance = asr::detail::configuredWhisperGuidance(emptyHints, config);
+            REQUIRE(asr::detail::isValidWhisperRecognitionGuidance(guidance));
+            REQUIRE(guidance.grammar.empty() && guidance.startRule.empty() && guidance.grammarPenalty == 0.0F);
+            auto parameters = asr::detail::makeWhisperCommandParameters(config);
+            auto rules = std::vector<const whisper_grammar_element*>{};
+            asr::detail::applyWhisperRecognitionGuidance(parameters, guidance, {}, rules);
+            REQUIRE(parameters.grammar_rules == nullptr && parameters.n_grammar_rules == 0);
+            REQUIRE(parameters.i_start_rule == 0 && parameters.grammar_penalty == 0.0F);
+            REQUIRE((parameters.initial_prompt != nullptr) == !emptyHints.vocabulary.empty());
+        }
+    }
 }
 int main()
 {
@@ -195,4 +275,5 @@ int main()
     validation();
     configuredEndpointBehavior();
     translationAndSnapshot();
+    independentGuidanceParameters();
 }

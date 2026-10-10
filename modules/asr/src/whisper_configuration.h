@@ -15,6 +15,8 @@
 #include "whisper_endpoint_detector.h"
 #include "whisper_recognition_guidance.h"
 struct whisper_full_params;
+struct whisper_grammar_element;
+namespace grammar_parser { struct parse_state; }
 
 namespace timmy::asr::detail {
 
@@ -36,4 +38,14 @@ namespace timmy::asr::detail {
 
     [[nodiscard]] WhisperRecognitionGuidance configuredWhisperGuidance(
         const RecognitionHints& hints, const WhisperConfiguration& configuration);
+
+    // The caller retains guidance, parsed grammar and rule pointers through whisper_full().
+    void applyWhisperRecognitionGuidance(whisper_full_params& parameters,
+        const WhisperRecognitionGuidance& guidance,
+        const grammar_parser::parse_state& grammar,
+        std::vector<const whisper_grammar_element*>& rules);
+
+    // Enabled switches come from backend configuration; passed flags come from actual parameters.
+    [[nodiscard]] SettingValues whisperGuidanceDiagnostics(
+        const WhisperConfiguration& configuration, const whisper_full_params& parameters);
 } // namespace timmy::asr::detail
