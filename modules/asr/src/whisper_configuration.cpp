@@ -12,6 +12,7 @@
 
 #include "timmy/asr/whisper_asr_backend.h"
 #include "whisper.h"
+#include "grammar-parser.h"
 
 namespace timmy::asr {
 
@@ -83,6 +84,8 @@ namespace timmy::asr::detail {
         parameters.temperature_inc = profile.temperatureIncrement;
         parameters.greedy.best_of = profile.greedyBestOf;
         parameters.beam_search.beam_size = profile.beamSize;
+        // Optional guidance starts neutral, including the upstream default penalty.
+        parameters.grammar_penalty = 0.0F;
         return parameters;
     }
 
@@ -90,9 +93,47 @@ namespace timmy::asr::detail {
         const RecognitionHints& hints, const WhisperConfiguration& configuration)
     {
         auto guidance = makeWhisperRecognitionGuidance(hints);
-        if (!configuration.grammarEnabled) guidance.grammar.clear();
+        if (!configuration.grammarEnabled)
+        {
+            guidance.grammar.clear();
+            guidance.startRule.clear();
+        }
         if (!configuration.compactPromptEnabled) guidance.initialPrompt.clear();
-        guidance.grammarPenalty = configuration.grammarPenalty;
+        guidance.grammarPenalty = guidance.grammar.empty() ? 0.0F : configuration.grammarPenalty;
         return guidance;
+    }
+
+    void applyWhisperRecognitionGuidance(whisper_full_params& parameters,
+        const WhisperRecognitionGuidance& guidance,
+        const grammar_parser::parse_state& grammar,
+        std::vector<const whisper_grammar_element*>& rules)
+    {
+        parameters.initial_prompt = guidance.initialPrompt.empty()
+            ? nullptr : guidance.initialPrompt.c_str();
+        parameters.grammar_rules = nullptr;
+        parameters.n_grammar_rules = 0;
+        parameters.i_start_rule = 0;
+        parameters.grammar_penalty = 0.0F;
+        if (!guidance.grammar.empty() && !rules.empty())
+        {
+            parameters.grammar_rules = rules.data();
+            parameters.n_grammar_rules = rules.size();
+            parameters.i_start_rule = grammar.symbol_ids.at(guidance.startRule);
+            parameters.grammar_penalty = guidance.grammarPenalty;
+        }
+    }
+
+    SettingValues whisperGuidanceDiagnostics(
+        const WhisperConfiguration& configuration, const whisper_full_params& parameters)
+    {
+        const bool grammarPassed = parameters.grammar_rules != nullptr && parameters.n_grammar_rules != 0;
+        SettingValues diagnostics{
+            {"whisper.grammar_enabled", configuration.grammarEnabled},
+            {"whisper.compact_prompt", configuration.compactPromptEnabled},
+            {"whisper.grammar_passed", grammarPassed},
+            {"whisper.initial_prompt_passed", parameters.initial_prompt != nullptr}
+        };
+        if (grammarPassed) diagnostics["whisper.grammar_penalty"] = static_cast<double>(parameters.grammar_penalty);
+        return diagnostics;
     }
 } // namespace timmy::asr::detail

@@ -24,6 +24,7 @@ assert entry["result"] == "PASS" and entry["expected_no_command"] is False
 assert entry["attempt_number"] == 2 and entry["retry_number"] == 1
 assert entry["metrics"] == {"audio_duration_seconds": 2.5, "inference_duration_seconds": 0.75}
 snapshot = entry["recognition_settings"]
+assert snapshot["active_guidance"] is None  # Unsupported backends must remain explicitly unreported.
 assert snapshot["model_path"] == str(Path("models/niño.bin"))
 assert snapshot["vad_model_path"] == str(Path("models/vad.bin"))
 assert snapshot["language"] == "es" and snapshot["engine_id"] == entry["asr_engine_id"]
@@ -65,6 +66,25 @@ assert entry["diagnostics"]["dropped_vad_frames"] is None
 assert entry["diagnostics"]["dropped_capture_frames"] is None
 assert entry["diagnostics"]["capture_ring_max_occupancy_frames"] is None
 assert entry["diagnostics"]["real_time_factor"] is None
+
+guidance_rows = [json.loads(line) for line in subprocess.check_output(
+    [sys.argv[1], "--guidance-fixtures"], encoding="utf-8").splitlines()]
+assert len(guidance_rows) == 8
+for index, (grammar, prompt) in enumerate(((True, True), (True, False), (False, True), (False, False))):
+    recognized, silent = guidance_rows[2 * index:2 * index + 2]
+    active = recognized["recognition_settings"]["active_guidance"]
+    expected = {"whisper.grammar_enabled": grammar, "whisper.compact_prompt": prompt,
+                "whisper.grammar_passed": grammar, "whisper.initial_prompt_passed": prompt}
+    if grammar:
+        expected["whisper.grammar_penalty"] = 20.0
+    assert active == expected
+    assert all(type(active[key]) is bool for key in expected if key != "whisper.grammar_penalty")
+    assert recognized["recognition_settings"]["tuning"]["whisper.grammar_enabled"] == grammar
+    assert recognized["recognition_settings"]["tuning"]["whisper.compact_prompt"] == prompt
+    assert silent["recognition_outcome"] == "no_speech"
+    assert silent["recognition_settings"]["active_guidance"] == {
+        "whisper.grammar_enabled": grammar, "whisper.compact_prompt": prompt,
+        "whisper.grammar_passed": False, "whisper.initial_prompt_passed": False}
 
 rows = [json.loads(line) for line in subprocess.check_output(
     [sys.argv[1], "--outcome-fixtures"], encoding="utf-8").splitlines()]

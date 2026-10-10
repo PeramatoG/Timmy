@@ -216,20 +216,8 @@ namespace timmy::asr {
             parameters.abort_callback =
                 detail::WhisperInferenceCancellation::abortCallback;
             parameters.abort_callback_user_data = &inferenceCancellation;
-            if (!guidance.initialPrompt.empty())
-            {
-                parameters.initial_prompt = guidance.initialPrompt.c_str();
-            }
-
             auto grammarRules = grammar.c_rules();
-            if (!grammarRules.empty())
-            {
-                parameters.grammar_rules = grammarRules.data();
-                parameters.n_grammar_rules = grammarRules.size();
-                parameters.i_start_rule = grammar.symbol_ids.at(
-                    guidance.startRule);
-                parameters.grammar_penalty = guidance.grammarPenalty;
-            }
+            detail::applyWhisperRecognitionGuidance(parameters, guidance, grammar, grammarRules);
 
             std::optional<double> inferenceSeconds;
             const auto outcome = inferenceCancellation.run([&] {
@@ -237,6 +225,10 @@ namespace timmy::asr {
                         std::numeric_limits<int>::max()))
                 {
                     return -1;
+                }
+                {
+                    std::lock_guard lock(mutex);
+                    guidanceDiagnostics = detail::whisperGuidanceDiagnostics(tuning, parameters);
                 }
                 const auto started = std::chrono::steady_clock::now();
                 const int result = whisper_full(context, parameters, samples.data(),
@@ -383,6 +375,7 @@ namespace timmy::asr {
         detail::WhisperEndpointDetector endpoint;
         detail::WhisperRecognitionGuidance guidance;
         grammar_parser::parse_state grammar;
+        SettingValues guidanceDiagnostics;
         std::string preferredLanguage;
         std::mutex lifecycleMutex;
         std::mutex mutex;
@@ -439,6 +432,11 @@ namespace timmy::asr {
         impl_->stopWorkers();
         impl_->destroyContexts();
         impl_->lifecycle = AsrState::starting;
+        {
+            std::lock_guard lock(impl_->mutex);
+            impl_->guidanceDiagnostics = detail::whisperGuidanceDiagnostics(
+                impl_->tuning, detail::makeWhisperCommandParameters(impl_->tuning));
+        }
 
         impl_->guidance = detail::configuredWhisperGuidance(
             configuration.recognitionHints, impl_->tuning);
@@ -572,6 +570,7 @@ namespace timmy::asr {
         diagnostics.vadQueueWaitMaxSeconds = impl_->vadFrames.waitMax();
         diagnostics.inferenceQueueWaitTotalSeconds = impl_->windows.waitTotal();
         diagnostics.inferenceQueueWaitMaxSeconds = impl_->windows.waitMax();
+        diagnostics.recognitionGuidance = impl_->guidanceDiagnostics;
         return diagnostics;
     }
 
@@ -590,6 +589,8 @@ namespace timmy::asr {
             impl_->vadFrames.reset();
             impl_->windows.reset();
             impl_->timings = {};
+            impl_->guidanceDiagnostics = detail::whisperGuidanceDiagnostics(
+                impl_->tuning, detail::makeWhisperCommandParameters(impl_->tuning));
         }
         try { impl_->startWorkers(*this); }
         catch (const std::system_error& error)
@@ -617,6 +618,10 @@ namespace timmy::asr {
         impl_->preferredLanguage.clear();
         impl_->guidance = {};
         impl_->grammar = {};
+        {
+            std::lock_guard lock(impl_->mutex);
+            impl_->guidanceDiagnostics.clear();
+        }
         impl_->lifecycle = AsrState::stopped;
         return { true, std::nullopt };
     }

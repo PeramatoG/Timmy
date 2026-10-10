@@ -93,6 +93,42 @@ an OSC emitter or requiring console state.
 
 ## Evaluation and reusable API
 
+### Independent Whisper guidance (ASR-GUIDE-010)
+
+**Vocabulary grammar** (`whisper.grammar_enabled`) and **Compact vocabulary
+prompt** (`whisper.compact_prompt`) are independent. All four combinations are
+supported: grammar/prompt on/on, on/off, off/on and off/off. Off/off supplies a
+neutral recognition baseline with no grammar rules, start-rule lookup, grammar
+penalty or initial prompt, while retaining the selected model, language, decoding
+and endpoint settings. `no_context=true` is preserved. Enabled switches allow
+guidance from the profile's hints; absent hints do not manufacture guidance.
+
+Previously grammar-off cleared only the GBNF text, leaving `startRule="root"`.
+Validation correctly rejected that inconsistent state before loading a model.
+Grammar-off now clears the text, start rule and effective penalty. Validation of
+stale start rules and malformed grammars remains strict.
+
+The existing vocabulary GBNF is unchanged for A/B evaluation. Its comma separator
+supports lexical lists and can also admit sequences such as `canal, 35 al 50`
+and `fixture, 155, 50`. Lexical acceptance does not establish command validity;
+the shared semantic parser and validator remain authoritative. This change does
+not encode command semantics into Whisper or adjust punctuation alternatives.
+
+Each JSONL row adds `recognition_settings.active_guidance`, using backend-reported
+typed settings rather than inferring application from frozen hints. For Whisper:
+
+- `whisper.grammar_enabled` and `whisper.compact_prompt` report configured switches;
+- `whisper.grammar_passed` and `whisper.initial_prompt_passed` report the parameters
+  supplied to an actual `whisper_full()` call in this attempt;
+- `whisper.grammar_penalty` is present only when grammar was actually passed.
+
+Passed flags start false and reset at every attempt. No inference (including a
+no-speech attempt) leaves both false even when switches are enabled. Enabled
+guidance with no corresponding hints also stays unpassed. Unsupported backends
+report `active_guidance: null`. This is an additive field in JSONL schema 2;
+existing typed `tuning` remains the frozen configuration snapshot. Backend-local
+diagnostics are also available through `attemptDiagnostics()` for debugging.
+
 `timmy_core/recognition_benchmark.h` owns the corpus, semantic evaluator, frozen
 snapshot, session attempt numbering and JSONL writer. It has no wxWidgets types
 or emitter. Recognition still uses `RecognitionPipeline` for normalization,
