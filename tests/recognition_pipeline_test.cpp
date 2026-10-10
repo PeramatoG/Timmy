@@ -368,5 +368,30 @@ int main()
     require(observer->transcripts.back().assemblyState == timmy::core::RecognitionAssemblyState::complete);
     const auto& prefixList = std::get<timmy::command::SetIntensity>(*observer->transcripts.back().semanticCommand);
     require(prefixList.target.included.size() == 3 && prefixList.level.percent() == 100);
+
+    // Backend-neutral spoken numbers must be normalized before assembly.
+    pipeline.discardPendingAssembly();
+    backend->emit("Canal ciento cinco");
+    require(observer->transcripts.back().rawTranscript == "Canal ciento cinco");
+    require(observer->transcripts.back().normalizedTranscript == "Canal 105");
+    require(observer->transcripts.back().assemblyState == timmy::core::RecognitionAssemblyState::pending);
+    backend->emit("al cincuenta %.");
+    require(observer->transcripts.back().normalizedTranscript == "al 50%");
+    require(observer->transcripts.back().assemblyText == "Canal 105 al 50%");
+    require(observer->transcripts.back().validation.accepted);
+    require(observer->transcripts.back().rendering.text == "Channel 105 At 50");
+
+    backend->emit("Enciende canales uno,");
+    require(observer->transcripts.back().normalizedTranscript == "Enciende canales 1,");
+    require(observer->transcripts.back().assemblyState == timmy::core::RecognitionAssemblyState::pending);
+    backend->emit("quince y treinta y cinco");
+    require(observer->transcripts.back().normalizedTranscript == "15 y 35");
+    require(observer->transcripts.back().assemblyState == timmy::core::RecognitionAssemblyState::complete);
+    require(observer->transcripts.back().validation.accepted);
+    require(observer->transcripts.back().rendering.text == "Channel 1 + 15 + 35 At 100");
+    backend->emit("Channel one hundred hundred at fifty");
+    require(observer->transcripts.back().assemblyState == timmy::core::RecognitionAssemblyState::rejected);
+    require(!observer->transcripts.back().semanticCommand);
+    require(!observer->transcripts.back().rendering.text);
     require(pipeline.stop().succeeded);
 }

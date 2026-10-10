@@ -9,6 +9,7 @@
  */
 
 #include "timmy/command/transcript_normalizer.h"
+#include "spoken_number_normalizer.h"
 
 #include <cctype>
 #include <string>
@@ -155,6 +156,7 @@ namespace timmy::command {
         result.originalText = transcript;
         result.normalizedText = normalizeWhitespace(transcript);
         result.normalizedText = normalizePunctuationSpacing(result.normalizedText);
+        result.normalizedText = detail::normalizeSpokenNumbers(result.normalizedText);
         result.normalizedText = normalizePercentSpacing(result.normalizedText);
         if (configuration_.stripTerminalPunctuation) removeTerminalPunctuation(result.normalizedText);
         return result;

@@ -40,7 +40,7 @@ resources; they are not vcpkg dependencies.
 ## Command-oriented speech recognition
 
 With local Whisper and Silero VAD weights, the CLI closes each short speech
-segment after the upstream default silence interval and transcribes it without
+segment after 300 ms of endpoint silence by default and transcribes it without
 waiting for the fallback five-second window:
 
 ```sh
@@ -136,7 +136,20 @@ the range excluding 6. `Canales 1 al 10 menos el 6` and `Channels 1 through 10
 except 6` express the same selection. `Dame canales 1 al 10 y añade el 15`
 and `Channels 1 through 10 plus 15` include the additional term. Known add/remove
 aliases and supported accented/unaccented Spanish forms are canonicalized by a
-shared command lexicon; transcript normalization remains formatting only.
+shared command lexicon. Before assembly and semantic parsing, transcript
+normalization also converts exact Spanish and English cardinal number phrases
+to digits, independently of the ASR backend: `canal ciento cinco al cincuenta`
+becomes `canal 105 al 50`, and `channel 15 at fifty` becomes `channel 15 at 50`.
+The current rules compose integers from 0 through 999, including Spanish
+`treinta y cinco` and English `one hundred and five`. Already-numeric tokens
+remain unchanged. Lists, ranges, exclusions and punctuation retain their roles;
+Spanish `y` in tens and English `and` after hundreds belong to the number.
+Malformed numeric runs, mixed languages within a number, mixed word/digit
+numbers and unsupported larger scales remain unconverted for downstream
+rejection. Only whole cardinal words are matched; articles such as `un`/`una`
+and unrelated words are preserved. Terminal punctuation cleanup remains the
+existing configurable formatting rule. Number interpretation belongs to TIMMY
+normalization, not Whisper/GBNF or the semantic parser.
 
 After a successful command explicitly naming a channel, fixture or group,
 follow-ups such as `Súmale el 4`, `Añade el 4`, `Add 4`, `Quita el 10` and
@@ -213,7 +226,13 @@ including while **Enable OSC command output** is unchecked.
 Recognition tuning is separated into **Engine settings** (currently Whisper)
 and **VAD / Endpoint**.
 Thread count **0** keeps automatic selection clamped to 1–4; all tuning starts with
-the existing command-mode defaults. Endpoint durations are edited in milliseconds
+the command-mode defaults. **Minimum silence** defaults to **300 ms**, intentionally
+favoring complete spoken commands over the lowest possible endpoint latency.
+**Vocabulary grammar** defaults to **off**: current live A/B benchmarks show
+substantially higher Whisper inference cost with grammar enabled and no improvement
+in overall command success. Grammar remains available as a configurable option;
+**Compact vocabulary prompt** remains **on** by default. Endpoint durations are
+edited in milliseconds
 and converted to 16 kHz samples inside the backend. **Reset to defaults** restores
 only recognition tuning, leaving model paths, language and output settings alone.
 Tuning and reset are available only while stopped. Core exposes typed descriptors

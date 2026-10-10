@@ -25,12 +25,12 @@ namespace timmy::asr {
             {"whisper.beam_size", "Beam size", "Whisper / Advanced", 5, 1, 8},
             {"whisper.temperature", "Temperature", "Whisper / Advanced", 0.4, 0, 1},
             {"whisper.temperature_increment", "Temperature increment", "Whisper / Advanced", 1.0, 0, 1},
-            {"whisper.grammar_enabled", "Vocabulary grammar", "Whisper / Advanced", true, {}, {}},
+            {"whisper.grammar_enabled", "Vocabulary grammar", "Whisper / Advanced", false, {}, {}},
             {"whisper.grammar_penalty", "Grammar penalty", "Whisper / Advanced", 20.0, 0, 1000},
             {"whisper.compact_prompt", "Compact vocabulary prompt", "Whisper / Advanced", true, {}, {}},
             {"vad.speech_threshold", "Speech threshold", "VAD / Endpoint", 0.5, 0, 1},
             {"vad.minimum_speech_ms", "Minimum speech (ms)", "VAD / Endpoint", 250, 0, 600000},
-            {"vad.minimum_silence_ms", "Minimum silence (ms)", "VAD / Endpoint", 100, 0, 600000},
+            {"vad.minimum_silence_ms", "Minimum silence (ms)", "VAD / Endpoint", 300, 0, 600000},
             {"vad.speech_padding_ms", "Speech padding (ms)", "VAD / Endpoint", 30, 0, 600000},
             {"vad.maximum_utterance_ms", "Maximum utterance (ms)", "VAD / Endpoint", 8000, 1, 600000}
         };

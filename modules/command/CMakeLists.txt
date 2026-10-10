@@ -6,6 +6,7 @@ add_library(timmy_command STATIC
     src/command_lexicon.cpp
     src/semantic_command.cpp
     src/semantic_command_parser.cpp
+    src/spoken_number_normalizer.cpp
     src/transcript_normalizer.cpp
 )
 
