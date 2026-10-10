@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "timmy/asr/configurable_settings.h"
+
 #include <filesystem>
 #include <chrono>
 #include <cstdint>
@@ -127,6 +129,9 @@ namespace timmy::asr {
         // Capture ring maximum is sampled during this attempt, not a session maximum.
         // Queue depths exclude work already dequeued; queue age/wait are wall time.
         // Speech/endpoint offsets are observed worker stages, not acoustic timestamps.
+        // Backend-owned scalar diagnostics, using the settings serialization contract.
+        // Empty means unreported. Passed flags describe actual inference in this attempt.
+        SettingValues recognitionGuidance{};
     };
     struct RecognitionProgress
     {

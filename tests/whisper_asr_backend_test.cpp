@@ -152,6 +152,14 @@ namespace {
         invalidGuidance.startRule = "missing";
         require(!isValidWhisperRecognitionGuidance(invalidGuidance),
             "an absent start rule should invalidate guidance");
+        invalidGuidance = guidance;
+        invalidGuidance.grammar.clear();
+        require(!isValidWhisperRecognitionGuidance(invalidGuidance),
+            "a stale start rule without grammar must remain invalid");
+        invalidGuidance = guidance;
+        invalidGuidance.grammar = "root ::= (";
+        require(!isValidWhisperRecognitionGuidance(invalidGuidance),
+            "malformed grammar must remain invalid");
     }
 
     // Verifies the deterministic command-decoding settings and CPU limits.
@@ -278,6 +286,41 @@ namespace {
             "a restarted failed backend should stop cleanly");
     }
 
+    // Exercise real startup configuration before the model boundary for all switch combinations.
+    void testIndependentGuidanceStartup()
+    {
+        for (const bool grammarEnabled : {true, false})
+        for (const bool promptEnabled : {true, false})
+        {
+            WhisperAsrBackendOptions options;
+            options.settings = {{"whisper.grammar_enabled", grammarEnabled},
+                {"whisper.compact_prompt", promptEnabled}};
+            WhisperAsrBackend backend(options);
+            AsrConfiguration configuration;
+            configuration.modelResourcePath = "definitely-not-a-whisper-model.bin";
+            configuration.preferredLanguage = "es";
+            configuration.recognitionHints = {{"channel", "canal"}, {}, RecognitionConstraintIntent::commandPhrase};
+            for (int restart = 0; restart < 2; ++restart)
+            {
+                const auto result = backend.start(configuration);
+                require(!result.succeeded && result.diagnostic
+                    && result.diagnostic->code == AsrDiagnosticCode::unavailableResource,
+                    "all guidance combinations must pass startup validation and reach the model boundary");
+                const auto diagnostics = backend.attemptDiagnostics().recognitionGuidance;
+                require(std::get<bool>(diagnostics.at("whisper.grammar_enabled")) == grammarEnabled
+                    && std::get<bool>(diagnostics.at("whisper.compact_prompt")) == promptEnabled,
+                    "startup diagnostics must report the backend-owned switches");
+                require(!std::get<bool>(diagnostics.at("whisper.grammar_passed"))
+                    && !std::get<bool>(diagnostics.at("whisper.initial_prompt_passed"))
+                    && !diagnostics.contains("whisper.grammar_penalty"),
+                    "startup without inference must not claim that guidance was passed");
+                require(backend.stop().succeeded && backend.attemptDiagnostics().recognitionGuidance.empty(),
+                    "stop must clear guidance application diagnostics");
+                configuration.recognitionHints = {};
+            }
+        }
+    }
+
     // Verifies invalid local weights report initialization failure safely.
     void testInitializationFailure()
     {
@@ -345,6 +388,7 @@ int main()
     testCooperativeInferenceCancellation();
     testRecognitionGuidance();
     testMissingModelDiagnostic();
+    testIndependentGuidanceStartup();
     testInitializationFailure();
     testMissingVadModelDiagnostic();
     return EXIT_SUCCESS;

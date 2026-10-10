@@ -395,6 +395,7 @@ add_executable(timmy_recognition_settings_tests recognition_settings_test.cpp)
 target_link_libraries(timmy_recognition_settings_tests PRIVATE timmy_core)
 target_include_directories(timmy_recognition_settings_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/modules/asr/src
+    ${timmy_whisper_source_dir}/examples
     ${timmy_whisper_source_dir}/include
     ${timmy_whisper_source_dir}/ggml/include
 )

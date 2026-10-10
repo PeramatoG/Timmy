@@ -33,6 +33,9 @@ namespace {
         { state_ = asr::AsrState::stopped; return {true, {}}; }
         asr::AsrOperationResult resetAttempt(asr::AttemptGeneration next) override
         { generation = next; return {true, {}}; }
+        asr::AttemptDiagnostics attemptDiagnostics() const override
+        { asr::AttemptDiagnostics result; result.recognitionGuidance = guidance; return result; }
+        asr::SettingValues guidance;
         void emit(asr::AsrResult result) { result.generation = generation; publishResult(result); }
         asr::AttemptGeneration generation = 0;
     private:
@@ -88,6 +91,21 @@ namespace {
         value.configuration.recognitionHints = core::commandRecognitionHints();
         value.audioSource = {"Device \"one\"\\input\n", 2, "Input \"three\"\t"};
         return value;
+    }
+    void guidanceObservability()
+    {
+        Fixture fixture;
+        auto transcript = fixture.recognize("Channel 1 At 50");
+        REQUIRE(core::benchmarkJson(snapshot(), "unknown", core::liveBenchmarkCases().front(), 1,
+            transcript).find("\"active_guidance\":null") != std::string::npos);
+        fixture.backend->guidance = {{"whisper.grammar_enabled", false}, {"whisper.compact_prompt", true},
+            {"whisper.grammar_passed", false}, {"whisper.initial_prompt_passed", true}};
+        transcript = fixture.recognize("Channel 1 At 50");
+        REQUIRE(transcript.diagnostics.recognitionGuidance == fixture.backend->guidance);
+        REQUIRE(fixture.pipeline.attemptDiagnostics().recognitionGuidance == fixture.backend->guidance);
+        const auto json = core::benchmarkJson(snapshot(), "reported", core::liveBenchmarkCases().front(), 1, transcript);
+        REQUIRE(json.find("\"active_guidance\":{\"whisper.compact_prompt\":true,\"whisper.grammar_enabled\":false,"
+            "\"whisper.grammar_passed\":false,\"whisper.initial_prompt_passed\":true}") != std::string::npos);
     }
     void unicodePathsAndJson()
     {
@@ -341,6 +359,30 @@ int main(int argc, char** argv)
     {
         if (argc == 2 && std::string(argv[1]) == "--json-fixture")
         { std::cout << jsonFixture() << '\n'; return 0; }
+        if (argc == 2 && std::string(argv[1]) == "--guidance-fixtures")
+        {
+            Fixture fixture;
+            for (const bool grammar : {true, false})
+            for (const bool prompt : {true, false})
+            {
+                auto source = snapshot();
+                source.settings["whisper.grammar_enabled"] = grammar;
+                source.settings["whisper.compact_prompt"] = prompt;
+                fixture.backend->guidance = {{"whisper.grammar_enabled", grammar}, {"whisper.compact_prompt", prompt},
+                    {"whisper.grammar_passed", grammar}, {"whisper.initial_prompt_passed", prompt}};
+                if (grammar) fixture.backend->guidance["whisper.grammar_penalty"] = 20.0;
+                std::cout << core::benchmarkJson(source, "guidance", core::liveBenchmarkCases().front(),
+                    1, fixture.recognize("Channel 1 At 50")) << '\n';
+                fixture.backend->guidance["whisper.grammar_passed"] = false;
+                fixture.backend->guidance["whisper.initial_prompt_passed"] = false;
+                fixture.backend->guidance.erase("whisper.grammar_penalty");
+                core::RecognitionTranscript absent;
+                absent.diagnostics = fixture.pipeline.attemptDiagnostics();
+                std::cout << core::benchmarkJson(source, "guidance", core::liveBenchmarkCases().front(),
+                    2, absent, core::BenchmarkRecognitionOutcome::noSpeech) << '\n';
+            }
+            return 0;
+        }
         if (argc == 2 && std::string(argv[1]) == "--outcome-fixtures")
         {
             Fixture fixture;
@@ -413,6 +455,7 @@ int main(int argc, char** argv)
             return 0;
         }
         unicodePathsAndJson(); corpusAndEvaluation(); metrics(); sessionAndJson(); noResultEvaluationAndSession();
+        guidanceObservability();
     }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

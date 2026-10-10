@@ -95,6 +95,23 @@ namespace timmy::core {
             }
             out << ']';
         }
+        void settings(std::ostream& out, const asr::SettingValues& values)
+        {
+            out << '{';
+            bool first = true;
+            for (const auto& [id, value] : values)
+            {
+                if (!first) out << ',';
+                first = false;
+                out << quoted(id) << ':';
+                std::visit([&](auto v) {
+                    if constexpr (std::is_same_v<decltype(v), double>)
+                        if (!std::isfinite(v)) throw std::invalid_argument("Nonfinite benchmark setting.");
+                    out << v;
+                }, value);
+            }
+            out << '}';
+        }
         // Compare semantic operations, including equivalent lists/ranges. Merge
         // and subtract compact intervals without expanding console identifiers.
         using Span = std::pair<std::uint64_t, std::uint64_t>;
@@ -274,20 +291,12 @@ namespace timmy::core {
             << ",\"command_profile_id\":" << quoted(snapshot.commandProfile.id)
             << ",\"rendering_target\":" << quoted(snapshot.commandProfile.rendering.target == command::RenderingTarget::nativeText ? "native" : "hydra2")
             << ",\"pre_clear\":" << snapshot.commandProfile.rendering.preClear
-            << ",\"tuning\":{";
-        bool first = true;
-        for (const auto& [id, value] : snapshot.settings)
-        {
-            if (!first) out << ',';
-            first = false;
-            out << quoted(id) << ':';
-            std::visit([&](auto v) {
-                if constexpr (std::is_same_v<decltype(v), double>)
-                    if (!std::isfinite(v)) throw std::invalid_argument("Nonfinite benchmark setting.");
-                out << v;
-            }, value);
-        }
-        out << "},\"recognition_hints\":{\"constraint_intent\":"
+            << ",\"tuning\":";
+        settings(out, snapshot.settings);
+        out << ",\"active_guidance\":";
+        if (recognized.diagnostics.recognitionGuidance.empty()) out << "null";
+        else settings(out, recognized.diagnostics.recognitionGuidance);
+        out << ",\"recognition_hints\":{\"constraint_intent\":"
             << quoted(config.recognitionHints.constraintIntent == asr::RecognitionConstraintIntent::commandPhrase ? "command_phrase" : "none")
             << ",\"vocabulary\":";
         strings(out, config.recognitionHints.vocabulary);
