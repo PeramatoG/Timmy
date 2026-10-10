@@ -57,12 +57,9 @@ namespace {
             "a valid speech span should remain active until real silence");
         require(!detector.process(frame(1.0F), 0.41F),
             "more than 250 ms should not require another positive frame");
-        require(!detector.process(frame(0.0F), 0.1F),
-            "short silence should not close valid speech");
-        require(!detector.process(frame(0.0F), 0.1F),
-            "less than 100 ms of silence should keep speech open");
-        require(!detector.process(frame(0.0F), 0.1F),
-            "three Silero frames are still below the silence endpoint");
+        for (int index = 0; index < 9; ++index)
+            require(!detector.process(frame(0.0F), 0.1F),
+                "less than 300 ms of silence should keep speech open");
         auto completed = detector.process(frame(0.0F), 0.1F);
         require(completed && completed->size() == 5056,
             "valid fluctuating speech should complete with pre-roll and padding");
@@ -74,14 +71,12 @@ namespace {
         WhisperEndpointDetector detector;
         require(!detector.process(frame(1.0F), 0.8F),
             "a single threshold crossing should open a candidate");
-        require(!detector.process(frame(0.0F), 0.1F),
-            "initial silence should keep the short candidate pending");
-        require(!detector.process(frame(0.0F), 0.1F),
-            "continued silence should keep the short candidate pending");
-        require(!detector.process(frame(0.0F), 0.1F),
-            "three silence frames should remain below 100 ms");
+        for (int index = 0; index < 9; ++index)
+            require(!detector.process(frame(0.0F), 0.1F) && detector.speaking(),
+                "less than 300 ms should keep the short candidate pending");
         require(!detector.process(frame(0.0F), 0.1F),
             "a completed short candidate should be discarded");
+        require(!detector.speaking(), "discarded short speech must close at the endpoint");
     }
 
     // Verifies hysteresis-band frames alone never end an active utterance.
@@ -106,12 +101,9 @@ namespace {
             require(!detector.process(frame(1.0F), index == 0 ? 0.8F : 0.4F),
                 "valid speech should remain open before endpoint silence");
         }
-        require(!detector.process(frame(0.0F), 0.1F),
-            "less than the configured silence must not close speech");
-        require(!detector.process(frame(0.0F), 0.1F),
-            "two low-probability frames should remain below 100 ms");
-        require(!detector.process(frame(0.0F), 0.1F),
-            "three low-probability frames should remain below 100 ms");
+        for (int index = 0; index < 9; ++index)
+            require(!detector.process(frame(0.0F), 0.1F),
+                "less than 300 ms of low-probability silence must not close speech");
         auto completed = detector.process(frame(0.0F), 0.1F);
         require(completed.has_value(),
             "configured low-probability silence should close valid speech");
@@ -152,7 +144,7 @@ namespace {
             require(!detector.process(frame(1.0F), index == 0 ? 0.8F : 0.4F),
                 "reused endpoint state should accept a fresh utterance");
         }
-        for (int index = 0; index < 3; ++index)
+        for (int index = 0; index < 9; ++index)
         {
             require(!detector.process(frame(0.0F), 0.1F),
                 "fresh speech should remain open before minimum silence");
@@ -160,6 +152,23 @@ namespace {
         auto completed = detector.process(frame(0.0F), 0.1F);
         require(completed && completed->size() == 5056,
             "reused state should emit only the fresh padded utterance");
+    }
+
+    // A brief pause within a spoken identifier must not split the command.
+    void testPauseWithinCommand()
+    {
+        WhisperEndpointDetector detector;
+        for (int index = 0; index < 8; ++index)
+            require(!detector.process(frame(1.0F), 0.8F), "initial speech should remain open");
+        for (int index = 0; index < 4; ++index)
+            require(!detector.process(frame(0.0F), 0.1F), "128 ms pause should not end a command");
+        for (int index = 0; index < 8; ++index)
+            require(!detector.process(frame(2.0F), 0.8F), "resumed speech should share the utterance");
+        for (int index = 0; index < 9; ++index)
+            require(!detector.process(frame(0.0F), 0.1F), "resumed speech needs fresh endpoint silence");
+        const auto completed = detector.process(frame(0.0F), 0.1F);
+        require(completed && completed->size() == 10720,
+            "both speech spans and their pause should be retained with unchanged padding");
     }
 
 } // namespace
@@ -173,5 +182,6 @@ int main()
     testSilenceClosesExactlyOnce();
     testMaximumDuration();
     testResetAndReuse();
+    testPauseWithinCommand();
     return EXIT_SUCCESS;
 }

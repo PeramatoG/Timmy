@@ -17,6 +17,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 using namespace timmy;
 namespace {
@@ -63,6 +64,37 @@ int main()
             && single.level.percent() == 100, "Single intensity semantics");
         require(on.transcript.normalizedText == "enciende canal 1", "Lexical normalization");
         require(*on.rendering.text == "Channel 1 At 100", "Native renderer");
+        const std::pair<const char*, const char*> spokenExamples[] = {
+            {"Enciende canal uno", "enciende canal 1"},
+            {"grupo dos al cincuenta", "grupo 2 al 50"},
+            {"Canal ciento cinco al cincuenta", "canal 105 al 50"},
+            {"Canal quinientos quince al cincuenta", "canal 515 al 50"},
+            {"Channel thirteen at fifty", "channel 13 at 50"},
+            {"Channel seventeen at seventy", "channel 17 at 70"},
+            {"canales del uno al quince excepto cinco a ocho al cincuenta%", "canales del 1 al 15 excepto 5 a 8 al 50%"},
+            {"channels one, five and fifteen at seventy", "channels 1, 5 and 15 at 70"},
+            {"canal treinta y cinco al cien", "canal 35 al 100"},
+            {"channel one hundred and fifteen at 50", "channel 115 at 50"},
+            {"canal 105 al cincuenta", "canal 105 al 50"}
+        };
+        for (const auto& [spoken, numeric] : spokenExamples)
+        {
+            const auto actual = processor.process(spoken);
+            const auto expected = processor.process(numeric);
+            (void)intensity(actual);
+            (void)intensity(expected);
+            require(command::describe(*actual.parsed.command) == command::describe(*expected.parsed.command)
+                && actual.rendering.text == expected.rendering.text,
+                "Spoken numbers changed numeric command semantics or rendering");
+        }
+        for (const auto spoken : {"channel one hundred hundred at fifty", "canal treinta cinco al cincuenta",
+                "canal ciento cero al 50", "channel twenty five six at fifty", "channel one thousand five at fifty",
+                "channel one hundred 5 at fifty", "canal ciento five al cincuenta"})
+        {
+            const auto result = processor.process(spoken);
+            require(!result.parsed.command && !result.rendering.text,
+                "Malformed spoken number produced a command");
+        }
         for (const auto text : {"enciende canal 1", "full channel 1", "canal 1 a tope", "channel 1 at full"}) {
             const auto result = processor.process(text);
             const auto& equivalent = intensity(result);

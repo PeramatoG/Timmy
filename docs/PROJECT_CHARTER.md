@@ -394,8 +394,13 @@ explicit `all` flag. All never means an invented numeric identifier interval.
 
 ### 8.1 Lexical normalization and compositional grammar
 
-`TranscriptNormalizer` performs ordered whitespace, punctuation and percent
-cleanup without generating console commands. The grammar lexer uses ordered
+`TranscriptNormalizer` performs ordered whitespace, punctuation, exact Spanish
+and English spoken-number normalization and percent cleanup without generating
+console commands. Strict cardinal composition currently supports 0 through 999;
+malformed or unsupported numeric phrases remain unconverted for downstream
+rejection. Already-numeric tokens and selection separators are preserved.
+Speech-specific number vocabulary stays in normalization, after ASR and before
+command assembly and semantic parsing. The grammar lexer uses ordered
 exact token/phrase aliases, including Spanish and English vocabulary. Unknown
 words remain unknown so the parser rejects unsupported expressions. No global
 substring replacement, fuzzy matching, or per-sentence replacement inventory is

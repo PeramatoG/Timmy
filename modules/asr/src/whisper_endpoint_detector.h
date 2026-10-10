@@ -21,7 +21,7 @@ namespace timmy::asr::detail {
     {
         float speechThreshold = 0.5F;
         std::size_t minimumSpeechSamples = 16000U / 4U;
-        std::size_t minimumSilenceSamples = 16000U / 10U;
+        std::size_t minimumSilenceSamples = 16000U * 300U / 1000U;
         std::size_t speechPaddingSamples = 16000U * 30U / 1000U;
         std::size_t maximumUtteranceSamples = 16000U * 8U;
     };

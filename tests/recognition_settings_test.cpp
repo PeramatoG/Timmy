@@ -43,6 +43,8 @@ namespace {
         const auto values = asr::defaultSettings(descriptors);
         REQUIRE(values.size() == descriptors.size());
         REQUIRE(values == asr::validatedSettings(descriptors, {}));
+        REQUIRE(std::get<int>(values.at("vad.minimum_silence_ms")) == 300);
+        REQUIRE(!std::get<bool>(values.at("whisper.grammar_enabled")));
         for (const auto cores : {0U, 1U, 2U, 4U, 16U})
         {
             const auto configuration = asr::detail::makeWhisperConfiguration({}, cores);
@@ -55,10 +57,10 @@ namespace {
             const auto& endpoint = configuration.endpoint;
             REQUIRE(endpoint.speechThreshold == 0.5F);
             REQUIRE(endpoint.minimumSpeechSamples == 4000);
-            REQUIRE(endpoint.minimumSilenceSamples == 1600);
+            REQUIRE(endpoint.minimumSilenceSamples == 4800);
             REQUIRE(endpoint.speechPaddingSamples == 480);
             REQUIRE(endpoint.maximumUtteranceSamples == 128000);
-            REQUIRE(configuration.grammarEnabled && configuration.compactPromptEnabled);
+            REQUIRE(!configuration.grammarEnabled && configuration.compactPromptEnabled);
             REQUIRE(configuration.grammarPenalty == 20.0F);
             const auto parameters = asr::detail::makeWhisperCommandParameters(configuration);
             REQUIRE(parameters.strategy == WHISPER_SAMPLING_BEAM_SEARCH);
@@ -175,14 +177,16 @@ namespace {
         const auto reset = asr::detail::makeWhisperConfiguration(values, 16);
         REQUIRE(reset.decoding.threadCount == 4 && reset.decoding.maxTokens == 32);
         REQUIRE(reset.endpoint.minimumSpeechSamples == 4000 && reset.endpoint.maximumUtteranceSamples == 128000);
-        const auto enabled = asr::detail::configuredWhisperGuidance(hints, reset);
-        REQUIRE(!enabled.grammar.empty() && !enabled.initialPrompt.empty());
-        REQUIRE(enabled.grammarPenalty == 20.0F);
+        const auto defaultGuidance = asr::detail::configuredWhisperGuidance(hints, reset);
+        REQUIRE(defaultGuidance.grammar.empty() && !defaultGuidance.initialPrompt.empty());
+        REQUIRE(defaultGuidance.startRule.empty() && defaultGuidance.grammarPenalty == 0.0F);
         // Both switches operate independently.
         values["whisper.grammar_enabled"] = false;
         auto guidance = asr::detail::configuredWhisperGuidance(hints, asr::detail::makeWhisperConfiguration(values, 1));
         REQUIRE(guidance.grammar.empty() && !guidance.initialPrompt.empty());
         values["whisper.grammar_enabled"] = true;
+        guidance = asr::detail::configuredWhisperGuidance(hints, asr::detail::makeWhisperConfiguration(values, 1));
+        REQUIRE(!guidance.grammar.empty() && !guidance.initialPrompt.empty());
         values["whisper.compact_prompt"] = false;
         guidance = asr::detail::configuredWhisperGuidance(hints, asr::detail::makeWhisperConfiguration(values, 1));
         REQUIRE(!guidance.grammar.empty() && guidance.initialPrompt.empty());
