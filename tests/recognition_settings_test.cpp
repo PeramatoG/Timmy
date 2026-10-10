@@ -179,7 +179,7 @@ namespace {
         REQUIRE(reset.endpoint.minimumSpeechSamples == 4000 && reset.endpoint.maximumUtteranceSamples == 128000);
         const auto defaultGuidance = asr::detail::configuredWhisperGuidance(hints, reset);
         REQUIRE(defaultGuidance.grammar.empty() && !defaultGuidance.initialPrompt.empty());
-        REQUIRE(defaultGuidance.grammarPenalty == 20.0F);
+        REQUIRE(defaultGuidance.startRule.empty() && defaultGuidance.grammarPenalty == 0.0F);
         // Both switches operate independently.
         values["whisper.grammar_enabled"] = false;
         auto guidance = asr::detail::configuredWhisperGuidance(hints, asr::detail::makeWhisperConfiguration(values, 1));

@@ -46,9 +46,10 @@ thirteen/thirty, fifteen/fifty and seventeen/seventy.
 
 Speak displayed numeric digits naturally as number words: for example,
 **Canal 105 al 50** is spoken as **Canal ciento cinco al cincuenta**; English
-**Channel 13 at 50** is spoken as **Channel thirteen at fifty**. Whisper must
-still produce numeric tokens for the existing deterministic command parser;
-the benchmark does not add number-word parsing or change recognition guidance.
+**Channel 13 at 50** is spoken as **Channel thirteen at fifty**. Whisper may
+produce number words or digits. Shared deterministic transcript normalization
+converts supported Spanish/English cardinal phrases to digits before command
+assembly and semantic parsing; raw and normalized transcripts remain observable.
 These corrections define the still-unreleased initial corpus. Case IDs, order,
 phrases and expected intents are versioned together; changes after release
 require a new corpus version.
