@@ -113,12 +113,14 @@ namespace timmy::command {
             }
         }, intent), {}};
     }
-    CommandProcessor::CommandProcessor(CommandProfile profile) : profile_(std::move(profile)) {}
+    CommandProcessor::CommandProcessor(CommandProfile profile)
+        : profile_(std::move(profile)), lexicalRepair_(profile_.parsing) {}
     CommandProcessingResult CommandProcessor::process(std::string_view transcript, const CommandContext& context) const
     {
         CommandProcessingResult result;
         result.transcript = TranscriptNormalizer{profile_.normalization}.normalize(transcript);
-        result.parsed = SemanticCommandParser{profile_.parsing}.parse(result.transcript.normalizedText, context);
+        result.repair = lexicalRepair_.repair(result.transcript.normalizedText);
+        result.parsed = SemanticCommandParser{profile_.parsing}.parse(result.repair.repairedText, context);
         if (!result.parsed.command) {
             result.validation.diagnostic = "No deterministic intent produced.";
             return result;

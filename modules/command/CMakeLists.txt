@@ -4,6 +4,7 @@ add_library(timmy_command STATIC
     src/hydra2_command_renderer.cpp
     src/command_assembler.cpp
     src/command_lexicon.cpp
+    src/command_lexical_repair.cpp
     src/semantic_command.cpp
     src/semantic_command_parser.cpp
     src/spoken_number_normalizer.cpp

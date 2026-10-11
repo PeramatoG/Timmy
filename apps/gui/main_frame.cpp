@@ -1291,7 +1291,8 @@ namespace timmy::gui {
         rawTranscriptText_->SetLabel("Raw transcript: "
             + wxString::FromUTF8(payload.transcript.rawTranscript));
         normalizedTranscriptText_->SetLabel("Normalized transcript: "
-            + wxString::FromUTF8(payload.transcript.normalizedTranscript));
+            + wxString::FromUTF8(payload.transcript.normalizedTranscript)
+            + "\nRepaired transcript: " + wxString::FromUTF8(payload.transcript.repairedTranscript));
         wxString assembly = "Assembly: "
             + assemblyStateText(payload.transcript.assemblyState);
         if (!payload.transcript.assemblyText.empty())

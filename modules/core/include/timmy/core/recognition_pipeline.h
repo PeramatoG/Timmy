@@ -65,6 +65,9 @@ namespace timmy::core {
         asr::RecognitionMetrics metrics{};
         asr::AttemptGeneration generation = 0;
         asr::AttemptDiagnostics diagnostics{};
+        std::string repairedTranscript{};
+        bool repairApplied{false};
+        std::vector<command::CommandRepair> repairs{};
     };
 
     class IRecognitionPipelineObserver
@@ -121,6 +124,7 @@ namespace timmy::core {
         std::shared_ptr<BackendListener> backendListener_;
         command::CommandProfile profile_;
         command::TranscriptNormalizer normalizer_;
+        command::CommandLexicalRepair lexicalRepair_;
         std::unique_ptr<command::CommandAssembler> assembler_;
         command::SemanticCommandParser semanticParser_;
         command::CommandContext commandContext_;

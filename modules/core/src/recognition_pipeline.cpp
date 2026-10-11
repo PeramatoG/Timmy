@@ -202,6 +202,7 @@ namespace timmy::core {
           backendListener_(std::make_shared<BackendListener>(*this)),
           profile_(std::move(profile)),
           normalizer_(profile_.normalization),
+          lexicalRepair_(profile_.parsing),
           assembler_(std::make_unique<command::CommandAssembler>(profile_.parsing)),
           semanticParser_(profile_.parsing),
           isolateUtterances_(isolateUtterances), benchmarkAttempts_(benchmarkAttempts)
@@ -323,6 +324,8 @@ namespace timmy::core {
             stageAt = now;
         };
         const auto normalized = normalizer_.normalize(result.transcript);
+        auto repaired = lexicalRepair_.repair(normalized.normalizedText);
+        // Normalization timing includes the lightweight lexical repair stage.
         stage(commandTimings.normalizationDurationSeconds);
         command::AssemblyResult assembly;
         command::SemanticParseResult semantic;
@@ -344,7 +347,7 @@ namespace timmy::core {
                 commandContext_.reset();
             }
             // Assembly includes acquiring the command lock and context reset.
-            assembly = assembler_->accept(normalized.normalizedText, commandContext_);
+            assembly = assembler_->accept(repaired.repairedText, commandContext_);
             stage(commandTimings.assemblyDurationSeconds);
             if (assembly.state == command::AssemblyState::complete)
             {
@@ -393,7 +396,10 @@ namespace timmy::core {
                 result.detectedLanguage,
                 result.metrics,
                 result.generation,
-                diagnostics
+                diagnostics,
+                std::move(repaired.repairedText),
+                repaired.applied(),
+                std::move(repaired.repairs)
             });
         }
     }
