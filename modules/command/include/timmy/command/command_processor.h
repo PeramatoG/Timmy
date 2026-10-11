@@ -11,6 +11,7 @@
 #pragma once
 
 #include "timmy/command/command_profile.h"
+#include "timmy/command/command_lexical_repair.h"
 #include "timmy/command/semantic_command_parser.h"
 #include "timmy/command/transcript_normalizer.h"
 #include <optional>
@@ -42,6 +43,7 @@ namespace timmy::command {
         SemanticParseResult parsed;
         IntentValidationResult validation;
         IntentRenderingResult rendering;
+        RepairedTranscript repair;
     };
     class CommandProcessor
     {
@@ -52,5 +54,6 @@ namespace timmy::command {
         [[nodiscard]] const CommandProfile& profile() const { return profile_; }
     private:
         CommandProfile profile_;
+        CommandLexicalRepair lexicalRepair_;
     };
 }

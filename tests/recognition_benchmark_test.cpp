@@ -357,6 +357,13 @@ int main(int argc, char** argv)
 {
     try
     {
+        if (argc == 2 && std::string(argv[1]) == "--repair-fixture")
+        {
+            Fixture fixture;
+            std::cout << core::benchmarkJson(snapshot(), "repair", core::liveBenchmarkCases().front(),
+                1, fixture.recognize("selecciona, fishtur cinco")) << '\n';
+            return 0;
+        }
         if (argc == 2 && std::string(argv[1]) == "--json-fixture")
         { std::cout << jsonFixture() << '\n'; return 0; }
         if (argc == 2 && std::string(argv[1]) == "--guidance-fixtures")

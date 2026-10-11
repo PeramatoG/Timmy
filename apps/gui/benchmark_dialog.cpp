@@ -241,6 +241,8 @@ void BenchmarkDialog::showDetails(const core::RecognitionTranscript& transcript)
     };
     details_->ChangeValue("Raw transcript: " + wxString::FromUTF8(transcript.rawTranscript)
         + "\nNormalized transcript: " + wxString::FromUTF8(transcript.normalizedTranscript)
+        + "\nRepaired transcript: " + wxString::FromUTF8(transcript.repairedTranscript)
+        + "\nRepair applied: " + (transcript.repairApplied ? "yes" : "no")
         + "\nAssembly: " + wxString::FromUTF8(transcript.assemblyText)
         + "\nSemantic command: " + (transcript.semanticCommand
             ? wxString::FromUTF8(command::describe(*transcript.semanticCommand)) : wxString("None"))

@@ -400,7 +400,10 @@ console commands. Strict cardinal composition currently supports 0 through 999;
 malformed or unsupported numeric phrases remain unconverted for downstream
 rejection. Already-numeric tokens and selection separators are preserved.
 Speech-specific number vocabulary stays in normalization, after ASR and before
-command assembly and semantic parsing. The grammar lexer uses ordered
+command assembly and semantic parsing. `CommandLexicalRepair` then applies bounded,
+role-constrained target-root and internal-comma repair to one normalized fragment.
+It preserves exact aliases, numbers, pending assembly and command context. Raw,
+normalized and repaired stages remain independently observable. The grammar lexer uses ordered
 exact token/phrase aliases, including Spanish and English vocabulary. Unknown
 words remain unknown so the parser rejects unsupported expressions. No global
 substring replacement, fuzzy matching, or per-sentence replacement inventory is

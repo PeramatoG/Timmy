@@ -228,10 +228,12 @@ and **VAD / Endpoint**.
 Thread count **0** keeps automatic selection clamped to 1–4; all tuning starts with
 the command-mode defaults. **Minimum silence** defaults to **300 ms**, intentionally
 favoring complete spoken commands over the lowest possible endpoint latency.
-**Vocabulary grammar** defaults to **off**: current live A/B benchmarks show
-substantially higher Whisper inference cost with grammar enabled and no improvement
-in overall command success. Grammar remains available as a configurable option;
-**Compact vocabulary prompt** remains **on** by default. Endpoint durations are
+**Vocabulary grammar** and **Compact vocabulary prompt** both default to **on**
+for the next live benchmark of contextual transcript repair. The command layer
+repairs target-word roots only in a supported target position and removes neutral
+internal commas before assembly, while preserving numeric lists and all semantic
+validation. Raw, normalized and repaired transcripts remain visible separately.
+Both recognition guidance switches remain configurable. Endpoint durations are
 edited in milliseconds
 and converted to 16 kHz samples inside the backend. **Reset to defaults** restores
 only recognition tuning, leaving model paths, language and output settings alone.

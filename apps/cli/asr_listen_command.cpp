@@ -139,6 +139,7 @@ namespace timmy::cli {
                 std::cout
                     << "RAW: " << transcript.rawTranscript << '\n'
                     << "NORMALIZED: " << transcript.normalizedTranscript << '\n'
+                    << "REPAIRED: " << transcript.repairedTranscript << '\n'
                     << "ASSEMBLY: " << assemblyName(transcript.assemblyState);
                 if (!transcript.assemblyText.empty())
                 {

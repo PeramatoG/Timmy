@@ -26,7 +26,7 @@ namespace timmy::asr {
             {"whisper.beam_size", "Beam size", "Whisper / Advanced", 5, 1, 8},
             {"whisper.temperature", "Temperature", "Whisper / Advanced", 0.4, 0, 1},
             {"whisper.temperature_increment", "Temperature increment", "Whisper / Advanced", 1.0, 0, 1},
-            {"whisper.grammar_enabled", "Vocabulary grammar", "Whisper / Advanced", false, {}, {}},
+            {"whisper.grammar_enabled", "Vocabulary grammar", "Whisper / Advanced", true, {}, {}},
             {"whisper.grammar_penalty", "Grammar penalty", "Whisper / Advanced", 20.0, 0, 1000},
             {"whisper.compact_prompt", "Compact vocabulary prompt", "Whisper / Advanced", true, {}, {}},
             {"vad.speech_threshold", "Speech threshold", "VAD / Endpoint", 0.5, 0, 1},

@@ -269,7 +269,23 @@ namespace timmy::core {
             << ",\"recognition_outcome\":" << quoted(benchmarkOutcomeName(outcome))
             << ",\"raw_transcript\":" << (noResult ? "null" : quoted(transcript.rawTranscript))
             << ",\"normalized_transcript\":" << (noResult ? "null" : quoted(transcript.normalizedTranscript))
-            << ",\"assembly_state\":" << quoted(assembly) << ",\"assembly_text\":" << (noResult ? "null" : quoted(transcript.assemblyText))
+            << ",\"repaired_transcript\":" << (noResult ? "null" : quoted(transcript.repairedTranscript))
+            << ",\"repair_applied\":" << (noResult ? "null" : transcript.repairApplied ? "true" : "false")
+            << ",\"repairs\":";
+        if (noResult) out << "null";
+        else {
+            out << '[';
+            for (std::size_t i = 0; i < transcript.repairs.size(); ++i) {
+                if (i) out << ',';
+                const auto& repair = transcript.repairs[i];
+                out << "{\"original\":" << quoted(repair.original)
+                    << ",\"replacement\":" << quoted(repair.replacement)
+                    << ",\"category\":" << quoted(repair.category)
+                    << ",\"reason\":" << quoted(repair.reason) << '}';
+            }
+            out << ']';
+        }
+        out << ",\"assembly_state\":" << quoted(assembly) << ",\"assembly_text\":" << (noResult ? "null" : quoted(transcript.assemblyText))
             << ",\"actual_semantic_description\":" << (transcript.semanticCommand ? quoted(command::describe(*transcript.semanticCommand)) : "null")
             << ",\"validation_state\":" << quoted(!transcript.semanticCommand ? "not_attempted" : transcript.validation.accepted ? "accepted" : "rejected")
             << ",\"validation_diagnostic\":" << quoted(transcript.validation.diagnostic)

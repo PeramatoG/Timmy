@@ -94,6 +94,26 @@ an OSC emitter or requiring console state.
 
 ## Evaluation and reusable API
 
+### Contextual lexical repair (CMD-LEX-010)
+
+The command layer applies `CommandLexicalRepair` after spoken-number normalization
+and before assembly in Core and direct command processing. Static root families
+recover unknown channel/fixture/group tokens only in a target slot followed by a
+numeric selection, range start, or `all`. Exact profile aliases remain authoritative;
+matching must identify one role. Number tokens and global-operation words are never
+repaired. No spelling library, fuzzy distance, or ASR dependency is involved.
+
+Internal commas admitted by vocabulary GBNF become whitespace unless they connect
+numeric selection-list terms. Terminal punctuation retains existing behavior.
+Repair neither owns nor resets pending assembly or linguistic context, and the
+existing parser, semantic validator and renderer remain authoritative.
+
+Raw, normalized and repaired fragments are available independently in recognition
+results and JSONL. Small repair records explain each change; assembly text can still
+include earlier utterances. Normalization timing includes lexical repair. Grammar
+and Compact Prompt both default to enabled for the next live comparison; other
+Whisper, model, decoding and VAD defaults are unchanged.
+
 ### Independent Whisper guidance (ASR-GUIDE-010)
 
 **Vocabulary grammar** (`whisper.grammar_enabled`) and **Compact vocabulary
@@ -154,6 +174,11 @@ Each UTF-8 line contains one self-contained JSON object:
   `expected_no_command` (explicit boolean);
 - `recognition_outcome` (`final_result`, `no_speech`, `empty_asr_result`, `operator_no_result`);
 - `raw_transcript`, `normalized_transcript`, `assembly_state`, `assembly_text`;
+- additive CMD-LEX-010 fields: `repaired_transcript` (the fragment submitted to
+  assembly), `repair_applied`, and `repairs` (original, replacement, category,
+  reason). These are null for no-result outcomes, and empty text / false / an
+  empty array for empty ASR results. Version-2 readers may ignore new fields;
+  older version-2 rows can omit them. `normalized_transcript` retains its meaning;
 - `actual_semantic_description`, `validation_state`, `validation_diagnostic`,
   `rendered_command`, `rendering_diagnostic`;
 - `result` (`PASS`/`FAIL`), `attempt_number` (1-based), `retry_number` (0-based);

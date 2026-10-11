@@ -156,7 +156,8 @@ namespace timmy::cli {
         const auto processed = command::CommandProcessor{languageProfile}.process(options->commandText);
         const auto& parsed = processed.parsed;
         std::cout << "HEARD: " << processed.transcript.originalText
-            << "\nNORMALIZED: " << processed.transcript.normalizedText << '\n';
+            << "\nNORMALIZED: " << processed.transcript.normalizedText
+            << "\nREPAIRED: " << processed.repair.repairedText << '\n';
         if (parsed.command) std::cout << "PARSED INTENT: " << command::describe(*parsed.command) << '\n';
         std::cout << "VALIDATION: " << (processed.validation.accepted ? "accepted" : "rejected") << '\n';
         if (processed.rendering.text) std::cout << "RENDERED COMMAND: " << *processed.rendering.text << '\n';
