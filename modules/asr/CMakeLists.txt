@@ -36,7 +36,9 @@ endforeach()
 
 FetchContent_Declare(
     whisper_cpp
-    URL https://github.com/ggml-org/whisper.cpp/archive/927cfce34f31707e17f2bff35c349632fb9e2c3a.tar.gz
+    # Use GitHub's archive service directly; the redirecting github.com URL
+    # intermittently returns HTTP 504 in fresh CI builds.
+    URL https://codeload.github.com/ggml-org/whisper.cpp/tar.gz/927cfce34f31707e17f2bff35c349632fb9e2c3a
     URL_HASH SHA256=41b664fee09e79176ac277b5237debec34f8d74af3c7d71f333f1ec67989ecde
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )

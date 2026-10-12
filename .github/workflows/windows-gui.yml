@@ -13,12 +13,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configure native wxWidgets GUI and deterministic tests
-        run: >-
-          cmake -S . -B build -A x64
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-          -DVCPKG_TARGET_TRIPLET=x64-windows
-          -DTIMMY_BUILD_GUI=ON -DBUILD_TESTING=ON
-          -DTIMMY_ENABLE_VULKAN=OFF -DGGML_NATIVE=OFF
+        run: |
+          $assetScript = Join-Path $env:GITHUB_WORKSPACE '.github/scripts/fetch-github-archive.ps1'
+          $env:X_VCPKG_ASSET_SOURCES = "x-script,powershell.exe -NoProfile -File `"$assetScript`" -Url `"{url}`" -Sha512 `"{sha512}`" -Destination `"{dst}`""
+          cmake -S . -B build -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DTIMMY_BUILD_GUI=ON -DBUILD_TESTING=ON `
+            -DTIMMY_ENABLE_VULKAN=OFF -DGGML_NATIVE=OFF
 
       - name: Build GUI, CLI, and tests
         run: cmake --build build --config Debug --parallel 2

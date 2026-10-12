@@ -91,7 +91,7 @@ namespace timmy::gui {
             const wxString& title, const wxString& description)
         {
             auto* heading = new wxStaticText(parent, wxID_ANY, title);
-            heading->SetFont(heading->GetFont().Scaled(1.15).Bold());
+            heading->SetFont(heading->GetFont().Scaled(1.15F).Bold());
             sizer->Add(heading, 0, wxLEFT | wxRIGHT | wxTOP, parent->FromDIP(6));
             auto* hint = new wxStaticText(parent, wxID_ANY, description,
                 wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE);
@@ -514,7 +514,7 @@ namespace timmy::gui {
             wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE);
         computeStatusText_->SetName("recognition.compute_status");
         computeStatusText_->SetMinSize(wxSize(1, -1));
-        computeStatusText_->SetFont(computeStatusText_->GetFont().Scaled(0.95));
+        computeStatusText_->SetFont(computeStatusText_->GetFont().Scaled(0.95F));
         selection->Add(computeStatusText_, 0, wxEXPAND | wxALL, 4);
         computeStatusText_->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
             if (event.GetSize().x != computeStatusWidth_) updateComputeStatus();
@@ -556,13 +556,13 @@ namespace timmy::gui {
         });
         sizer->Add(session, 0, wxEXPAND | wxALL, 4);
         auto* benchmark = new wxStaticBoxSizer(wxVERTICAL, panel, "Recognition benchmark");
-        auto* owner = benchmark->GetStaticBox();
-        benchmarkPathSummary_ = new wxStaticText(owner, wxID_ANY,
+        auto* benchmarkOwner = benchmark->GetStaticBox();
+        benchmarkPathSummary_ = new wxStaticText(benchmarkOwner, wxID_ANY,
             "Guided command recognition diagnostics.");
         benchmarkPathSummary_->SetMinSize(wxSize(1, -1));
         auto* benchmarkRow = new wxBoxSizer(wxHORIZONTAL);
         benchmarkRow->Add(benchmarkPathSummary_, 1, wxALIGN_CENTER_VERTICAL | wxALL, 4);
-        benchmarkOpenButton_ = new wxButton(owner, wxID_ANY, "Open benchmark...");
+        benchmarkOpenButton_ = new wxButton(benchmarkOwner, wxID_ANY, "Open benchmark...");
         benchmarkOpenButton_->SetName("benchmark.open");
         benchmarkOpenButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { openBenchmark(); });
         benchmarkRow->Add(benchmarkOpenButton_, 0, wxALL, 4);

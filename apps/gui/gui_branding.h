@@ -72,11 +72,11 @@ inline wxSizer* createBrandingHeader(wxWindow* parent,
     // Native text remains a useful fallback when optional artwork is absent.
     auto* text = new wxBoxSizer(wxVERTICAL);
     auto* title = new wxStaticText(parent, wxID_ANY, "TIMMY");
-    title->SetFont(title->GetFont().Scaled(1.65).Bold());
+    title->SetFont(title->GetFont().Scaled(1.65F).Bold());
     title->SetName("branding.title");
     text->Add(title);
     auto* tagline = new wxStaticText(parent, wxID_ANY, "The Imaginary Man, Minding You");
-    tagline->SetFont(tagline->GetFont().Scaled(0.9));
+    tagline->SetFont(tagline->GetFont().Scaled(0.9F));
     text->Add(tagline, 0, wxTOP, parent->FromDIP(2));
     row->Add(text, 0, wxALIGN_CENTER_VERTICAL);
     return row;
@@ -109,7 +109,7 @@ inline void showAbout(wxWindow* parent)
         sizer->Add(artwork, 0, wxALIGN_CENTER | wxTOP, dialog.FromDIP(16));
     }
     auto* title = new wxStaticText(&dialog, wxID_ANY, "TIMMY");
-    title->SetFont(title->GetFont().Scaled(1.4).Bold());
+    title->SetFont(title->GetFont().Scaled(1.4F).Bold());
     sizer->Add(title, 0, wxALIGN_CENTER | wxTOP, dialog.FromDIP(10));
     sizer->Add(new wxStaticText(&dialog, wxID_ANY, "The Imaginary Man, Minding You"),
         0, wxALIGN_CENTER | wxALL, dialog.FromDIP(10));
