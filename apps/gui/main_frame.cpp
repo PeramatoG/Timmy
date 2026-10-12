@@ -419,11 +419,12 @@ namespace timmy::gui {
             }
             event.Skip();
         });
-        // Use the spare vertical space below the audio controls. The artwork
-        // keeps its logical size while the spacer grows with the column.
+        // Center the fixed-size artwork in the unused space below the audio
+        // controls, rather than anchoring it to the bottom of the window.
         sizer->AddStretchSpacer();
         sizer->Add(createBrandingHeader(panel), 0,
             wxALIGN_CENTER_HORIZONTAL | wxALL, panel->FromDIP(8));
+        sizer->AddStretchSpacer();
         panel->SetSizer(sizer);
         columns->Add(panel, 3, wxEXPAND | wxALL, 4);
     }
