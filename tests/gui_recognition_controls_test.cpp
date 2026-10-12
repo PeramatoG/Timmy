@@ -11,6 +11,7 @@
 #include "main_frame.h"
 #include "gui_branding.h"
 #include <wx/menu.h>
+#include <wx/panel.h>
 
 #include <wx/app.h>
 #include <wx/button.h>
@@ -93,6 +94,29 @@ namespace {
                 button && button->GetLabel() == "Reset to defaults") continue;
             if (auto* control = dynamic_cast<Control*>(child)) controls.push_back(control);
             collect(*child, controls);
+        }
+    }
+
+    // Check the sizer contract before Show() can repair missing initialization.
+    // This catches the MSW regression where all columns stayed at zero size.
+    void requireColumnLayout(wxFrame& frame)
+    {
+        auto* content = wxWindow::FindWindowByName("main.content", &frame);
+        REQUIRE(content != nullptr && frame.GetSizer() != nullptr);
+        REQUIRE(frame.GetSizer()->GetItem(content) != nullptr);
+        REQUIRE(content->GetSize() == frame.GetClientSize());
+        std::vector<wxScrolledWindow*> columns;
+        collect(frame, columns);
+        REQUIRE(columns.size() == 3);
+        int previousRight = -1;
+        for (auto* column : columns)
+        {
+            const auto bounds = column->GetRect();
+            REQUIRE(bounds.width > 0 && bounds.height > 0);
+            REQUIRE(bounds.x > previousRight);
+            REQUIRE(bounds.GetRight() < content->GetClientSize().x);
+            REQUIRE(bounds.GetBottom() < content->GetClientSize().y);
+            previousRight = bounds.GetRight();
         }
     }
 
@@ -233,6 +257,7 @@ namespace {
                 ++factories;
                 return emitter;
             }, false, std::move(discovery));
+            requireColumnLayout(*frame);
             frame->Bind(wxEVT_DESTROY, [this](wxWindowDestroyEvent& event) {
                 if (event.GetEventObject() == frame) destroyed = true;
                 event.Skip();
@@ -565,7 +590,15 @@ namespace {
         REQUIRE(fixture.frame->GetMenuBar()->FindItem(wxID_ABOUT) != nullptr);
         REQUIRE(wxString(TIMMY_GUI_VERSION) == wxString(TIMMY_EXPECTED_PROJECT_VERSION));
         REQUIRE(!gui::brandingBitmap("missing-ui010.png", *fixture.frame, 44).IsOk());
-        REQUIRE(wxWindow::FindWindowByName("branding.title", fixture.frame) != nullptr);
+        auto* wordmark = dynamic_cast<wxStaticBitmap*>(wxWindow::FindWindowByName("branding.wordmark", fixture.frame));
+        REQUIRE(wordmark != nullptr && wordmark->GetBitmap().IsOk());
+        // Source wordmark has a 3:1 ratio; scaling must preserve it.
+        REQUIRE(wordmark->GetBitmap().GetWidth() == 3 * wordmark->GetBitmap().GetHeight());
+        auto* fallbackParent = new wxPanel(fixture.frame);
+        fallbackParent->Hide();
+        fallbackParent->SetSizer(gui::createBrandingHeader(fallbackParent, "missing-ui010.png"));
+        REQUIRE(wxWindow::FindWindowByName("branding.title", fallbackParent) != nullptr);
+        fallbackParent->Destroy();
         for (const auto* name : {"recognition.engine_settings", "recognition.vad_settings"})
         {
             auto* pane = dynamic_cast<wxCollapsiblePane*>(wxWindow::FindWindowByName(name, fixture.frame));
@@ -908,6 +941,17 @@ namespace {
         std::filesystem::remove(path);
     }
 
+    void windowLayoutSurvivesResize()
+    {
+        FrameFixture fixture;
+        fixture.frame->SetSize(fixture.frame->FromDIP(wxSize(1100, 500)));
+        pumpEvents();
+        requireColumnLayout(*fixture.frame);
+        fixture.frame->SetSize(fixture.frame->FromDIP(wxSize(1400, 850)));
+        pumpEvents();
+        requireColumnLayout(*fixture.frame);
+    }
+
     void computeSelectionControls()
     {
         FrameFixture fixture;
@@ -1024,6 +1068,7 @@ int main(int argc, char** argv)
 {
     REQUIRE(wxEntryStart(argc, argv));
     REQUIRE(wxTheApp->CallOnInit());
+    windowLayoutSurvivesResize();
     computeSelectionControls();
     computeReadinessAndRuntimeStatus();
     dedicatedBenchmarkOpenCloseAndLayout();

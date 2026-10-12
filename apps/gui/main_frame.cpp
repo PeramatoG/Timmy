@@ -290,7 +290,7 @@ namespace timmy::gui {
 
         auto* panel = new wxPanel(this);
         auto* mainSizer = new wxBoxSizer(wxVERTICAL);
-        mainSizer->Add(createBrandingHeader(panel), 0, wxEXPAND | wxALL, FromDIP(16));
+        mainSizer->Add(createBrandingHeader(panel), 0, wxEXPAND | wxALL, FromDIP(8));
         setApplicationIcon(*this);
         auto* help = new wxMenu;
         help->Append(wxID_HELP, "&Quick Help\tF1");
@@ -307,9 +307,16 @@ namespace timmy::gui {
         createRecognitionColumn(panel, columns);
         createOutputColumn(panel, columns);
         mainSizer->Add(columns, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
-        SetSize(FromDIP(wxSize(1400, 850)));
-        SetMinSize(FromDIP(wxSize(1100, 500)));
+        // Install both sizers before resizing. MSW delivers size events during
+        // SetSize(), so relying on a later Show() to lay out children leaves
+        // the columns at their initial sizes on Windows.
+        panel->SetName("main.content");
         panel->SetSizer(mainSizer);
+        auto* frameSizer = new wxBoxSizer(wxVERTICAL);
+        frameSizer->Add(panel, 1, wxEXPAND);
+        SetSizer(frameSizer);
+        SetMinSize(FromDIP(wxSize(1100, 500)));
+        SetSize(FromDIP(wxSize(1400, 850)));
 
         deviceChoice_->Bind(wxEVT_CHOICE, &MainFrame::onDeviceSelected, this);
         channelChoice_->Bind(wxEVT_CHOICE, &MainFrame::onChannelSelected, this);
@@ -341,6 +348,8 @@ namespace timmy::gui {
         if (initializeAudio) populateAudioDevices();
         updateBenchmarkControls();
         updateComputeStatus();
+        Layout();
+        panel->Layout();
         Centre();
     }
 
@@ -526,11 +535,13 @@ namespace timmy::gui {
         benchmarkPathSummary_ = new wxStaticText(owner, wxID_ANY,
             "Guided command recognition diagnostics.");
         benchmarkPathSummary_->SetMinSize(wxSize(1, -1));
-        benchmark->Add(benchmarkPathSummary_, 0, wxEXPAND | wxALL, 4);
+        auto* benchmarkRow = new wxBoxSizer(wxHORIZONTAL);
+        benchmarkRow->Add(benchmarkPathSummary_, 1, wxALIGN_CENTER_VERTICAL | wxALL, 4);
         benchmarkOpenButton_ = new wxButton(owner, wxID_ANY, "Open benchmark...");
         benchmarkOpenButton_->SetName("benchmark.open");
         benchmarkOpenButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { openBenchmark(); });
-        benchmark->Add(benchmarkOpenButton_, 0, wxALL, 4);
+        benchmarkRow->Add(benchmarkOpenButton_, 0, wxALL, 4);
+        benchmark->Add(benchmarkRow, 0, wxEXPAND);
         sizer->Add(benchmark, 0, wxEXPAND | wxALL, 4);
         wxBoxSizer* sectionSizer = nullptr;
         wxWindow* settingsOwner = nullptr;

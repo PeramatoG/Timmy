@@ -14,6 +14,10 @@ if(WIN32)
     configure_file("${PROJECT_SOURCE_DIR}/apps/gui/timmy.rc.in"
         "${PROJECT_BINARY_DIR}/generated/timmy.rc" @ONLY)
     target_sources(timmy_gui PRIVATE "${PROJECT_BINARY_DIR}/generated/timmy.rc")
+    if(TARGET timmy_gui_recognition_controls_tests)
+        target_sources(timmy_gui_recognition_controls_tests PRIVATE
+            "${PROJECT_BINARY_DIR}/generated/timmy.rc")
+    endif()
     set_property(SOURCE "${PROJECT_BINARY_DIR}/generated/timmy.rc" PROPERTY
         OBJECT_DEPENDS "${PROJECT_SOURCE_DIR}/resources/icons/timmy.ico")
 endif()
@@ -28,6 +32,9 @@ add_custom_target(timmy_gui_resources ALL
     DEPENDS ${timmy_branding_files}
     VERBATIM)
 add_dependencies(timmy_gui timmy_gui_resources)
+if(TARGET timmy_gui_recognition_controls_tests)
+    add_dependencies(timmy_gui_recognition_controls_tests timmy_gui_resources)
+endif()
 # Place resources beside the installed executable, matching runtime lookup.
 install(TARGETS timmy_gui RUNTIME DESTINATION bin)
 install(FILES ${timmy_branding_files} DESTINATION bin/resources/branding)

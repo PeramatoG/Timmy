@@ -34,7 +34,7 @@ inline wxString brandingPath(const wxString& filename)
     return path.GetFullPath();
 }
 
-inline wxBitmap brandingBitmap(const wxString& filename, wxWindow& window, int logicalSize)
+inline wxBitmap brandingBitmap(const wxString& filename, wxWindow& window, const wxSize& logicalBounds)
 {
     // Register just the required handler; tests and other wxApp frontends may
     // construct MainFrame without running TimmyApp::OnInit.
@@ -43,19 +43,33 @@ inline wxBitmap brandingBitmap(const wxString& filename, wxWindow& window, int l
     wxImage image;
     const auto path = brandingPath(filename);
     if (!wxFileExists(path) || !image.LoadFile(path, wxBITMAP_TYPE_PNG)) return {};
-    const int size = window.FromDIP(logicalSize);
-    const double ratio = static_cast<double>(size) / std::max(image.GetWidth(), image.GetHeight());
+    const auto bounds = window.FromDIP(logicalBounds);
+    const double ratio = std::min(static_cast<double>(bounds.x) / image.GetWidth(),
+        static_cast<double>(bounds.y) / image.GetHeight());
     image.Rescale(std::max(1, static_cast<int>(image.GetWidth() * ratio)),
         std::max(1, static_cast<int>(image.GetHeight() * ratio)), wxIMAGE_QUALITY_HIGH);
     return wxBitmap(image);
 }
 
-inline wxSizer* createBrandingHeader(wxWindow* parent, int markSize = 44)
+inline wxBitmap brandingBitmap(const wxString& filename, wxWindow& window, int logicalSize)
+{
+    return brandingBitmap(filename, window, wxSize(logicalSize, logicalSize));
+}
+
+inline wxSizer* createBrandingHeader(wxWindow* parent,
+    const wxString& filename = "timmy_wordmark.png")
 {
     auto* row = new wxBoxSizer(wxHORIZONTAL);
-    const auto mark = brandingBitmap("timmy_mark.png", *parent, markSize);
-    if (mark.IsOk()) row->Add(new wxStaticBitmap(parent, wxID_ANY, mark), 0,
-        wxALIGN_CENTER_VERTICAL | wxRIGHT, parent->FromDIP(10));
+    const auto wordmark = brandingBitmap(filename, *parent, wxSize(300, 100));
+    if (wordmark.IsOk())
+    {
+        auto* artwork = new wxStaticBitmap(parent, wxID_ANY, wordmark);
+        artwork->SetName("branding.wordmark");
+        artwork->SetToolTip("TIMMY — The Imaginary Man, Minding You");
+        row->Add(artwork, 0, wxALIGN_CENTER_VERTICAL);
+        return row;
+    }
+    // Native text remains a useful fallback when optional artwork is absent.
     auto* text = new wxBoxSizer(wxVERTICAL);
     auto* title = new wxStaticText(parent, wxID_ANY, "TIMMY");
     title->SetFont(title->GetFont().Scaled(1.65).Bold());
@@ -87,7 +101,18 @@ inline void showAbout(wxWindow* parent)
         wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
     dialog.SetName("help.about");
     auto* sizer = new wxBoxSizer(wxVERTICAL);
-    sizer->Add(createBrandingHeader(&dialog, 64), 0, wxALL, dialog.FromDIP(16));
+    const auto logo = brandingBitmap("timmy_logo.png", dialog, 144);
+    if (logo.IsOk())
+    {
+        auto* artwork = new wxStaticBitmap(&dialog, wxID_ANY, logo);
+        artwork->SetName("branding.logo");
+        sizer->Add(artwork, 0, wxALIGN_CENTER | wxTOP, dialog.FromDIP(16));
+    }
+    auto* title = new wxStaticText(&dialog, wxID_ANY, "TIMMY");
+    title->SetFont(title->GetFont().Scaled(1.4).Bold());
+    sizer->Add(title, 0, wxALIGN_CENTER | wxTOP, dialog.FromDIP(10));
+    sizer->Add(new wxStaticText(&dialog, wxID_ANY, "The Imaginary Man, Minding You"),
+        0, wxALIGN_CENTER | wxALL, dialog.FromDIP(10));
     auto* description = new wxStaticText(&dialog, wxID_ANY,
         "Offline-first voice command assistant for lighting consoles and OSC-controlled systems.");
     description->Wrap(dialog.FromDIP(400));
