@@ -28,6 +28,7 @@ public:
 
     BenchmarkDialog(wxWindow* parent, Actions actions);
     wxString resultPath() const;
+    void setComputeStatus(const wxString& status);
     void beginSession(const core::RecognitionBenchmarkSnapshot& snapshot);
     void setCase(std::size_t index);
     void showAttempt(const core::RecognitionBenchmarkAttempt& attempt);
@@ -45,8 +46,10 @@ private:
     wxTextCtrl* path_ = nullptr;
     wxButton *start_, *stop_, *next_, *retry_, *noResult_, *browse_, *startAttempt_;
     wxStaticText *summary_, *case_, *phrase_, *state_, *instruction_, *result_, *counts_;
+    wxStaticText* compute_ = nullptr;
     wxTextCtrl* details_ = nullptr;
     wxString summaryText_, caseText_, phraseText_, instructionText_;
+    wxString computeText_;
     wxString stateText_{"Ready to start"}, resultText_{"Last result: -"};
     unsigned passes_ = 0, failures_ = 0, noResults_ = 0;
     bool finished_ = false;

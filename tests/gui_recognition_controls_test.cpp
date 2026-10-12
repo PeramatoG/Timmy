@@ -225,12 +225,12 @@ namespace {
 
     struct FrameFixture
     {
-        FrameFixture()
+        FrameFixture(asr::ComputeDiscovery discovery = {false, false, {}, "vulkan_not_compiled"})
         {
             frame = new gui::MainFrame(backend, [this](auto, auto) {
                 ++factories;
                 return emitter;
-            }, false);
+            }, false, std::move(discovery));
             frame->Bind(wxEVT_DESTROY, [this](wxWindowDestroyEvent& event) {
                 if (event.GetEventObject() == frame) destroyed = true;
                 event.Skip();
@@ -816,7 +816,10 @@ namespace {
 
     void dedicatedBenchmarkOpenCloseAndLayout()
     {
-        FrameFixture fixture;
+        const asr::ComputeDiscovery discovery{true, true,
+            {{asr::ComputeBackend::vulkan, 0, "Vulkan0", "NVIDIA GeForce RTX 3070", "gpu"}}, {}};
+        FrameFixture fixture(discovery);
+        fixture.backend->compute = asr::initializeCompute({}, discovery, [](const auto&) { return true; });
         auto* open = dynamic_cast<wxButton*>(wxWindow::FindWindowByName("benchmark.open", fixture.frame));
         REQUIRE(open != nullptr);
         REQUIRE(wxWindow::FindWindowByName("benchmark.start", fixture.frame) == nullptr);
@@ -824,6 +827,9 @@ namespace {
         auto& dialog = benchmarkControl<wxDialog>(fixture, "benchmark.window");
         pumpEvents();
         REQUIRE(dialog.IsShown());
+        auto& compute = benchmarkControl<wxStaticText>(fixture, "benchmark.compute_status");
+        REQUIRE(compute.IsShownOnScreen());
+        REQUIRE(displayedText(compute).Contains("Active: Not initialized Available: Vulkan"));
         auto& start = benchmarkControl<wxButton>(fixture, "benchmark.start");
         REQUIRE(wxGetTopLevelParent(&start) == &dialog);
         REQUIRE(benchmarkControl<wxStaticText>(fixture, "benchmark.state").GetLabel() == "Ready to start");
@@ -836,6 +842,7 @@ namespace {
         file.SetValue(wxString::FromUTF8(path.string()));
         click(start);
         pumpEvents();
+        REQUIRE(displayedText(compute).Contains("Active: Vulkan · NVIDIA GeForce RTX 3070"));
         details.Collapse(false);
         wxCollapsiblePaneEvent expanded(&details, details.GetId(), false);
         details.GetEventHandler()->ProcessEvent(expanded);
@@ -877,29 +884,88 @@ namespace {
         auto* status = dynamic_cast<wxStaticText*>(wxWindow::FindWindowByName("recognition.compute_status", fixture.frame));
         REQUIRE(backend && device && status);
         REQUIRE(backend->GetSelection() == 0 && device->GetSelection() == 0);
+        REQUIRE(status->IsShownOnScreen());
+        REQUIRE(displayedText(*status).Contains("Vulkan support is not included in this build"));
         backend->SetSelection(1);
         wxCommandEvent change(wxEVT_CHOICE, backend->GetId());
         change.SetEventObject(backend);
         backend->GetEventHandler()->ProcessEvent(change);
         REQUIRE(!device->IsEnabled());
+        REQUIRE(status->GetLabel().Contains("Available: CPU"));
+        REQUIRE(!status->GetLabel().Contains("Reason:"));
         fixture.backend->compute = asr::initializeCompute({asr::ComputeBackend::cpu, {}}, {},
             [](const auto&) { return true; });
         click(fixture.recognition());
         waitFor([&] { return fixture.backend->starts == 1; });
         REQUIRE(fixture.backend->configurations.back().compute.backend == asr::ComputeBackend::cpu);
         REQUIRE(!backend->IsEnabled() && !device->IsEnabled());
-        REQUIRE(status->GetLabel() == "Recognition device: CPU");
+        REQUIRE(status->GetLabel() == "Compute: CPU\nActive: CPU");
         click(fixture.recognition());
         waitFor([&] { return backend->IsEnabled(); });
         click(fixture.reset());
         REQUIRE(backend->GetSelection() == 0 && device->GetSelection() == 0);
+        REQUIRE(displayedText(*status).Contains("Vulkan support is not included in this build"));
         backend->SetSelection(2);
         fixture.backend->compute = asr::initializeCompute({asr::ComputeBackend::vulkan, {}}, {},
             [](const auto&) { return true; });
         click(fixture.recognition());
         waitFor([&] { return fixture.backend->starts == 2; });
         REQUIRE(fixture.backend->configurations.back().compute.backend == asr::ComputeBackend::vulkan);
-        REQUIRE(status->GetLabel().Contains("using CPU"));
+        REQUIRE(status->GetLabel().Contains("Active: CPU"));
+    }
+
+    void computeReadinessAndRuntimeStatus()
+    {
+        using Backend = asr::ComputeBackend;
+        const asr::ComputeDiscovery available{true, true,
+            {{Backend::vulkan, 0, "Vulkan0", "NVIDIA GeForce RTX 3070", "gpu"},
+             {Backend::vulkan, 1, "Vulkan1", "GPU one", "integrated_gpu"}}, {}};
+        for (int state = 0; state < 4; ++state)
+        {
+            const auto discovery = state == 1
+                ? asr::ComputeDiscovery{false, false, {}, "vulkan_not_compiled"}
+                : state == 2 ? asr::ComputeDiscovery{true, false, {}, "no_usable_vulkan_device"}
+                : available;
+            FrameFixture fixture(discovery);
+            auto* status = dynamic_cast<wxStaticText*>(wxWindow::FindWindowByName("recognition.compute_status", fixture.frame));
+            auto* backend = dynamic_cast<wxChoice*>(wxWindow::FindWindowByName("recognition.compute_backend", fixture.frame));
+            auto* device = dynamic_cast<wxChoice*>(wxWindow::FindWindowByName("recognition.compute_device", fixture.frame));
+            REQUIRE(status && backend && device && status->IsShownOnScreen());
+            REQUIRE(displayedText(*status).Contains("Compute: Automatic Active: Not initialized"));
+            REQUIRE(fixture.backend->starts == 0);
+            if (state == 0 || state == 3)
+            {
+                REQUIRE(displayedText(*status).Contains("Available: Vulkan"));
+                device->SetSelection(2);
+                wxCommandEvent change(wxEVT_CHOICE, device->GetId());
+                change.SetEventObject(device);
+                device->GetEventHandler()->ProcessEvent(change);
+                REQUIRE(displayedText(*status).Contains("Available: Vulkan · GPU one"));
+            }
+            else
+                REQUIRE(displayedText(*status).Contains("Available: CPU"));
+            fixture.backend->compute = asr::initializeCompute({Backend::automatic, state == 0 || state == 3
+                    ? std::optional<int>{1} : std::nullopt}, discovery,
+                [state](const auto& device) { return state != 3 || device.backend == Backend::cpu; });
+            click(fixture.recognition());
+            waitFor([&] { return fixture.backend->starts == 1; });
+            REQUIRE(fixture.backend->configurations.back().compute.backend == Backend::automatic);
+            if (state == 0)
+            {
+                REQUIRE(displayedText(*status).Contains("Active: Vulkan · GPU one"));
+                REQUIRE(fixture.backend->configurations.back().compute.deviceIndex == 1);
+            }
+            else
+            {
+                REQUIRE(displayedText(*status).Contains("Active: CPU"));
+                REQUIRE(displayedText(*status).Contains(state == 1
+                    ? "Vulkan support is not included in this build" : state == 2
+                    ? "Vulkan is unavailable on this system" : "Vulkan initialization failed; using CPU"));
+            }
+            click(fixture.recognition());
+            waitFor([&] { return backend->IsEnabled(); });
+            REQUIRE(displayedText(*status).Contains("Active: Not initialized"));
+        }
     }
 
     class TestApp final : public wxApp
@@ -921,6 +987,7 @@ int main(int argc, char** argv)
     REQUIRE(wxEntryStart(argc, argv));
     REQUIRE(wxTheApp->CallOnInit());
     computeSelectionControls();
+    computeReadinessAndRuntimeStatus();
     dedicatedBenchmarkOpenCloseAndLayout();
     benchmarkNoResultAndFrozenAudioSource();
     guidedBenchmarkControlsAndIsolation();
