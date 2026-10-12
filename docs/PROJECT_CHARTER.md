@@ -413,13 +413,25 @@ explicit intensity commands.
 Representative supported phrases include `enciende canal 1`, `apaga canal 10`,
 `fuera todo`, `enciende los canales del 2 al 40`, and
 `canales del 2 al 40 al 50`. The default TIMMY language profile explicitly sets
-Channel as the omitted target for prefix intensity commands (`apaga 10`). This
-profile default is separate from the existing last-explicit-target linguistic
-context for relative selection edits. Numeric fragments cannot silently replace
-pending selections. Generic parser/assembler instances have no default target.
-Prefix intensity supplies the level; extra value clauses are rejected. Ambiguous
-singular forms such as `apaga canal 10 al 50` are rejected; plural selection,
-`del ... al ...`, or explicit `through`/`hasta` makes a range clear.
+Channel as the initial omitted target for intensity and selection commands.
+Frontends expose Channel, Fixture and Group as a configurable default, frozen
+with the listening/benchmark profile. Explicit targets override this preference;
+it is separate from last-explicit-target context for relative selection edits.
+Numeric continuations preserve pending selections. Generic parser/assembler
+instances have no default target.
+
+Canonical tokens pass through explicit grammar before bounded numeric-role
+fallback: implicit intensity uses the final numeric level in 0..100, while
+explicit ON/OFF and selection actions retain all numeric selection terms.
+Missing selection separators form lists. Explicit connectors remain authoritative;
+contextual final `a` after an exclusion can recover a level outside the included
+selection, retaining existing in-selection exclusion ranges. Inference reasons
+are observable in parse results and benchmark diagnostics. Inferred commands use
+the same validation/rendering path and cannot create global/editor operations.
+Prefix intensity supplies the level; extra value clauses are rejected. Singular
+`a` ranges are supported for ON/OFF, while ambiguous singular `al` forms such as
+`apaga canal 10 al 50` remain rejected unless `del ... al ...` or an explicit
+range connector makes the range clear.
 
 ### 8.2 Profile configuration
 

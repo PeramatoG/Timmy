@@ -185,6 +185,26 @@ namespace {
             }
             else REQUIRE(!result.semanticCommand || !result.validation.accepted || !result.rendering.text);
         }
+        // Keep live corpus expectations unchanged; simulate connector-loss ASR
+        // transcripts against those same semantic results.
+        for (const auto& phrase : {"canales 1 a 10 excepto 5 a 50",
+                "canales 1 a 10 excepto 5 50", "channels 1 through 10 except 5 50"}) {
+            const auto result = fixture.recognize(phrase);
+            REQUIRE(core::benchmarkPasses(corpus[18], result));
+            REQUIRE(!result.numericInferenceReasons.empty());
+            const auto json = core::benchmarkJson(snapshot(), "numeric-regression", corpus[18], 1, result);
+            REQUIRE(json.find("exclusion_level_disambiguation") != std::string::npos);
+            REQUIRE(json.find("\"default_target\":\"channel\"") != std::string::npos);
+        }
+        REQUIRE(core::benchmarkPasses(corpus[0], fixture.recognize("1 50")));
+        REQUIRE(core::benchmarkPasses(corpus[14], fixture.recognize("canales 2 a 40 50")));
+        REQUIRE(core::benchmarkPasses(corpus[15], fixture.recognize("enciende 2 a 40")));
+        REQUIRE(core::benchmarkPasses(corpus[16], fixture.recognize("selecciona fixture 1 3 5")));
+        core::RecognitionBenchmarkCase onList{"on-list", "numeric-regression", "",
+            command::SetIntensity{command::TargetSelection{command::TargetType::channel, {{10,10}, {20,20}}},
+                *command::IntensityLevel::fromPercent(100)}};
+        REQUIRE(core::benchmarkPasses(onList, fixture.recognize("enciende 10 20")));
+        REQUIRE(fixture.recognize("channel 1 at 50").numericInferenceReasons.empty());
         REQUIRE(core::benchmarkPasses(corpus[0], fixture.recognize("Channel 1 At 50")));
         REQUIRE(!core::benchmarkPasses(corpus[0], fixture.recognize("Channel 5 At 50")));
         REQUIRE(!core::benchmarkPasses(corpus[0], fixture.recognize("Channel 1 At Full")));
@@ -207,6 +227,10 @@ namespace {
         normal.pipeline.discardPendingAssembly();
         normal.recognize("Channel 5");
         REQUIRE(normal.recognize("At 50").semanticCommand.has_value());
+        normal.recognize("fixtures 1,");
+        const auto continued = normal.recognize("3, 5 at 50");
+        REQUIRE(continued.semanticCommand && continued.validation.accepted);
+        REQUIRE(command::describe(*continued.semanticCommand) == "SetIntensity(Fixture(1, 3, 5), 50%)");
     }
     void metrics()
     {

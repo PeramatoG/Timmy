@@ -44,6 +44,7 @@ namespace timmy::cli {
             std::filesystem::path vadModelPath;
             std::optional<std::string> preferredLanguage;
             std::string profile;
+            command::TargetType defaultTarget = command::TargetType::channel;
             std::string host;
             std::uint32_t port = 0;
             transport::Hydra2OscOptions hydra;
@@ -186,6 +187,7 @@ namespace timmy::cli {
                 << "  --model PATH       Local whisper.cpp model file.\n"
                 << "  --vad-model PATH   Local ggml-silero-v6.2.0.bin file.\n"
                 << "  --language CODE    Preferred language code.\n"
+                << "  --default-target TYPE  channel (default), fixture or group.\n"
                 << "  --profile NAME     Opt in to hydra2 or generic OSC emission.\n"
                 << "  --host HOST        Required with --profile.\n"
                 << "  --port PORT        Required with --profile (Hydra II: 8000).\n"
@@ -210,13 +212,19 @@ namespace timmy::cli {
                     options.outputOptions = options.hydraOptions = true;
                     continue;
                 }
-                if (argument == "--profile" || argument == "--host"
+                if (argument == "--default-target" || argument == "--profile" || argument == "--host"
                     || argument == "--port" || argument == "--key-hold-ms"
                     || argument == "--key-gap-ms")
                 {
                     if (++index >= argc) return false;
                     const std::string_view value = argv[index];
-                    if (argument == "--profile")
+                    if (argument == "--default-target")
+                    {
+                        const auto target = command::defaultTargetFromName(value);
+                        if (!target) return false;
+                        options.defaultTarget = *target;
+                    }
+                    else if (argument == "--profile")
                     {
                         if (value != "hydra2" && value != "generic") return false;
                         options.profile = value;
@@ -326,9 +334,10 @@ namespace timmy::cli {
         auto backend = core::createAsrBackend(core::AsrEngineId::whisperCpp,
             { options.vadModelPath });
         auto selector = std::make_shared<audio::AudioChannelSelector>(0);
-        const auto languageProfile = options.profile == "hydra2"
+        auto languageProfile = options.profile == "hydra2"
             ? command::hydra2CommandProfile(options.hydra.preClear) : command::CommandProfile{};
         audio::AudioEngine engine;
+        languageProfile.parsing.defaultTarget = options.defaultTarget;
         core::RecognitionPipeline pipeline(selector, std::move(backend), languageProfile, false, false, engine.captureStatsSource());
         auto observer = std::make_shared<ConsoleRecognitionObserver>();
         std::unique_ptr<core::RecognitionCommandExecutor> executor;

@@ -13,12 +13,26 @@
 #include "timmy/command/semantic_command.h"
 #include "timmy/command/command_lexicon.h"
 #include "timmy/command/transcript_normalizer.h"
+#include <array>
 #include <cstdint>
+#include <string_view>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace timmy::command {
+    struct DefaultTargetOption
+    {
+        TargetType type;
+        std::string_view name;
+    };
+    inline constexpr std::array defaultTargetOptions{
+        DefaultTargetOption{TargetType::channel, "channel"},
+        DefaultTargetOption{TargetType::fixture, "fixture"},
+        DefaultTargetOption{TargetType::group, "group"}};
+    [[nodiscard]] std::optional<TargetType> defaultTargetFromName(std::string_view name);
+    [[nodiscard]] std::string_view defaultTargetName(TargetType type);
+
     // Plain configuration values: no widgets, ASR backend types or transport.
     struct SemanticParsingConfiguration
     {

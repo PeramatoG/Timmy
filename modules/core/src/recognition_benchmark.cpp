@@ -285,6 +285,9 @@ namespace timmy::core {
             }
             out << ']';
         }
+        out << ",\"numeric_inference_reasons\":";
+        if (noResult) out << "null";
+        else strings(out, transcript.numericInferenceReasons);
         out << ",\"assembly_state\":" << quoted(assembly) << ",\"assembly_text\":" << (noResult ? "null" : quoted(transcript.assemblyText))
             << ",\"actual_semantic_description\":" << (transcript.semanticCommand ? quoted(command::describe(*transcript.semanticCommand)) : "null")
             << ",\"validation_state\":" << quoted(!transcript.semanticCommand ? "not_attempted" : transcript.validation.accepted ? "accepted" : "rejected")
@@ -307,6 +310,8 @@ namespace timmy::core {
             << ",\"command_profile_id\":" << quoted(snapshot.commandProfile.id)
             << ",\"rendering_target\":" << quoted(snapshot.commandProfile.rendering.target == command::RenderingTarget::nativeText ? "native" : "hydra2")
             << ",\"pre_clear\":" << snapshot.commandProfile.rendering.preClear
+            << ",\"default_target\":" << (snapshot.commandProfile.parsing.defaultTarget
+                ? quoted(std::string(command::defaultTargetName(*snapshot.commandProfile.parsing.defaultTarget))) : "null")
             << ",\"tuning\":";
         settings(out, snapshot.settings);
         out << ",\"active_guidance\":";

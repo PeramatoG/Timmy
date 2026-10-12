@@ -170,7 +170,10 @@ void BenchmarkDialog::beginSession(const core::RecognitionBenchmarkSnapshot& sna
     summaryText_ = "Frozen engine: " + wxString::FromUTF8(snapshot.engineId)
         + "\nModel: " + displayPath(snapshot.configuration.modelResourcePath)
         + "\nLanguage: " + wxString::FromUTF8(snapshot.configuration.preferredLanguage.value_or("automatic"))
-        + " | Profile: " + wxString::FromUTF8(snapshot.commandProfile.id);
+        + " | Profile: " + wxString::FromUTF8(snapshot.commandProfile.id)
+        + " | Default target: " + (snapshot.commandProfile.parsing.defaultTarget
+            ? wxString::FromUTF8(command::defaultTargetName(*snapshot.commandProfile.parsing.defaultTarget).data())
+            : wxString("None"));
     wrapLabels();
 }
 
@@ -239,10 +242,17 @@ void BenchmarkDialog::showDetails(const core::RecognitionTranscript& transcript)
     const auto timing = [](const std::optional<double>& value) {
         return value ? wxString::Format("%.3f s", *value) : wxString("Unavailable");
     };
+    wxString numericResolution;
+    for (const auto& reason : transcript.numericInferenceReasons) {
+        if (!numericResolution.empty()) numericResolution += ", ";
+        numericResolution += wxString::FromUTF8(reason);
+    }
+    if (numericResolution.empty()) numericResolution = "explicit";
     details_->ChangeValue("Raw transcript: " + wxString::FromUTF8(transcript.rawTranscript)
         + "\nNormalized transcript: " + wxString::FromUTF8(transcript.normalizedTranscript)
         + "\nRepaired transcript: " + wxString::FromUTF8(transcript.repairedTranscript)
         + "\nRepair applied: " + (transcript.repairApplied ? "yes" : "no")
+        + "\nNumeric resolution: " + numericResolution
         + "\nAssembly: " + wxString::FromUTF8(transcript.assemblyText)
         + "\nSemantic command: " + (transcript.semanticCommand
             ? wxString::FromUTF8(command::describe(*transcript.semanticCommand)) : wxString("None"))

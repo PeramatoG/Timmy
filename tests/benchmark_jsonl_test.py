@@ -10,7 +10,7 @@ entry = json.loads(line, parse_constant=lambda value: (_ for _ in ()).throw(Valu
 required = {
     "schema_version", "corpus_version", "session_id", "timestamp", "case_id", "category",
     "displayed_phrase", "expected_semantic_result", "expected_no_command", "raw_transcript",
-    "normalized_transcript", "repaired_transcript", "repair_applied", "repairs", "assembly_state", "assembly_text", "actual_semantic_description",
+    "normalized_transcript", "repaired_transcript", "repair_applied", "repairs", "numeric_inference_reasons", "assembly_state", "assembly_text", "actual_semantic_description",
     "validation_state", "rendered_command", "result", "detected_language", "asr_engine_id",
     "model_filename", "vad_model_filename", "selected_language", "recognition_settings",
     "attempt_number", "retry_number", "metrics", "recognition_outcome", "audio_source",
@@ -24,6 +24,8 @@ assert entry["result"] == "PASS" and entry["expected_no_command"] is False
 assert entry["attempt_number"] == 2 and entry["retry_number"] == 1
 assert entry["metrics"] == {"audio_duration_seconds": 2.5, "inference_duration_seconds": 0.75}
 snapshot = entry["recognition_settings"]
+assert snapshot["default_target"] == "channel"
+assert entry["numeric_inference_reasons"] == []
 assert snapshot["active_guidance"] is None  # Unsupported backends must remain explicitly unreported.
 assert snapshot["model_path"] == str(Path("models/niño.bin"))
 assert snapshot["vad_model_path"] == str(Path("models/vad.bin"))
@@ -49,7 +51,7 @@ for index, line in enumerate(no_result_lines):
     assert absent["recognition_outcome"] == "operator_no_result"
     assert absent["result"] == ("FAIL" if index == 0 else "PASS")
     assert absent["expected_no_command"] == (index == 1)
-    for field in ("raw_transcript", "normalized_transcript", "repaired_transcript", "repair_applied", "repairs", "assembly_text", "actual_semantic_description",
+    for field in ("raw_transcript", "normalized_transcript", "repaired_transcript", "repair_applied", "repairs", "numeric_inference_reasons", "assembly_text", "actual_semantic_description",
                   "rendered_command", "detected_language"):
         assert absent[field] is None, (field, absent[field])
     assert absent["assembly_state"] == "not_attempted"

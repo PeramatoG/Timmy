@@ -441,3 +441,23 @@ else()
     target_compile_options(timmy_command_lexical_repair_tests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME timmy.command_lexical_repair COMMAND timmy_command_lexical_repair_tests)
+
+add_executable(timmy_numeric_role_resolution_tests numeric_role_resolution_test.cpp)
+target_link_libraries(timmy_numeric_role_resolution_tests PRIVATE timmy_command)
+if(MSVC)
+    target_compile_options(timmy_numeric_role_resolution_tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(timmy_numeric_role_resolution_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME timmy.numeric_role_resolution COMMAND timmy_numeric_role_resolution_tests)
+add_test(NAME timmy.cli_default_fixture COMMAND timmy_cli osc send --dry-run
+    --default-target fixture --command "20 50")
+set_tests_properties(timmy.cli_default_fixture PROPERTIES
+    PASS_REGULAR_EXPRESSION "RENDERED COMMAND: Fixture 20 At 50")
+add_test(NAME timmy.cli_default_group_on COMMAND timmy_cli osc send --dry-run
+    --default-target group --command "enciende 10 20")
+set_tests_properties(timmy.cli_default_group_on PROPERTIES
+    PASS_REGULAR_EXPRESSION "RENDERED COMMAND: Group 10 [+] 20 At 100")
+add_test(NAME timmy.cli_invalid_default_target COMMAND timmy_cli osc send --dry-run
+    --default-target cue --command "20 50")
+set_tests_properties(timmy.cli_invalid_default_target PROPERTIES WILL_FAIL TRUE)

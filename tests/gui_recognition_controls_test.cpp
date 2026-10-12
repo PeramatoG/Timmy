@@ -232,7 +232,7 @@ namespace {
             collect(*frame, buttons);
             collect(*frame, checkboxes);
             collect(*frame, labels);
-            REQUIRE(choices.size() == 5 && texts.size() == 6);
+            REQUIRE(choices.size() == 6 && texts.size() == 6);
             REQUIRE(buttons.size() == 3 && checkboxes.size() == 2);
             // Simulate selectable audio inputs without opening any microphone.
             choices[0]->Append("Deterministic input");
@@ -402,6 +402,39 @@ namespace {
         fixture.backend->releaseStop();
         waitFor([&] { return fixture.destroyed; });
         pumpEvents();
+    }
+
+    void configurableDefaultTarget()
+    {
+        FrameFixture fixture;
+        auto* target = dynamic_cast<wxChoice*>(wxWindow::FindWindowByName("command.default_target", fixture.frame));
+        REQUIRE(target && target->GetSelection() == 0 && target->GetCount() == 3);
+        fixture.host().ChangeValue("192.0.2.5");
+        target->SetSelection(1); // Fixture, without enabling output.
+        wxCommandEvent changed(wxEVT_CHOICE, target->GetId());
+        changed.SetEventObject(target);
+        target->GetEventHandler()->ProcessEvent(changed);
+        click(fixture.recognition());
+        pumpEvents();
+        REQUIRE(!target->IsEnabled());
+        fixture.backend->emit("20 50");
+        pumpEvents();
+        REQUIRE(displayedText(fixture.label("Semantic command:")).Contains("SetIntensity(Fixture(20), 50%)"));
+        REQUIRE(displayedText(fixture.label("Semantic command:")).Contains("Rendered command: FXT 2 0 AT 5 0"));
+        REQUIRE(fixture.emitter->calls == 0);
+        toggle(fixture.output(), true);
+        REQUIRE(fixture.label("OSC output:").GetLabel() == "OSC output: Armed");
+        fixture.backend->emit("20 50");
+        waitFor([&] { return fixture.emitter->completed == 1; });
+        pumpEvents();
+        REQUIRE(displayedText(fixture.label("Execution:")).Contains("Rendered command: FXT 2 0 AT 5 0"));
+        fixture.backend->emit("canal 20 50");
+        waitFor([&] { return fixture.emitter->completed == 2; });
+        pumpEvents();
+        REQUIRE(displayedText(fixture.label("Execution:")).Contains("Rendered command: CH 2 0 AT 5 0"));
+        click(fixture.recognition());
+        waitFor([&] { return target->IsEnabled(); });
+        REQUIRE(target->GetSelection() == 1);
     }
 
     void invalidArmKeepsRecognitionListening()
@@ -852,6 +885,7 @@ int main(int argc, char** argv)
     benchmarkStopPreservesUnprocessedResultAndRecoversFailure();
     recognitionTuningAndColumns();
     runtimeArmingAndAsyncShutdown();
+    configurableDefaultTarget();
     invalidArmKeepsRecognitionListening();
     unsupportedRenderingRemainsObservable();
     linguisticContextResetsAcrossArms();

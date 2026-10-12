@@ -399,7 +399,8 @@ namespace timmy::core {
                 diagnostics,
                 std::move(repaired.repairedText),
                 repaired.applied(),
-                std::move(repaired.repairs)
+                std::move(repaired.repairs),
+                std::move(semantic.inferenceReasons)
             });
         }
     }

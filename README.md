@@ -301,6 +301,46 @@ OSC mapping reject it with diagnostics. See
 [ADR 0003](docs/decisions/0003-semantic-command-processing-stages.md) for this
 compatibility boundary and the future validated semantic fallback extension point.
 
+### Contextual numeric roles (CMD-NUM-020)
+
+Commands can use `[target optional] [selection] [level]`, such as `channel 20 10`
+(Channel 20 at 10%) or `fixture 1 3 5 70` (Fixtures 1 + 3 + 5 at 70%). A final
+number in 0..100 becomes a level only when a valid selection remains. Bare
+selection numbers form lists, never inferred ranges.
+
+Explicit actions take priority: `enciende 20 10` sets both targets to 100%,
+`apaga 1 3 5` sets all three to 0%, and `selecciona 1 3 5` selects all three.
+Prefix ON/OFF supports singular `a` ranges (`enciende fixture 1 a 10`) without a
+trailing level; an additional explicit `at` value remains invalid. Explicit
+lists, `through` ranges and `at` levels retain their meaning. Existing valid
+parses win before connector-loss fallback.
+
+`canales 1 a 10 excepto 5 a 50` and `canales 1 a 10 excepto 5 50` recover
+Channels 1..10 except 5 at 50%. The contextual `a` rule applies when its proposed
+exclusion endpoint lies outside the included selection. In-selection exclusion
+ranges (`excepto 5 a 8`), explicit selection actions, and explicit `through`
+exclusion ranges retain their existing meaning. Missing connectors in additions
+also allow a final level, for example `channels 1 through 10 plus 15 50`.
+
+Choose **Default command target** in the GUI, or `--default-target channel`,
+`fixture`, or `group` for `asr listen` and `osc send`. Channel is the initial
+default. This preference applies to omitted targets; `canal 20 50` still targets
+Channel when Fixture is configured. GUI configuration is frozen while listening
+or benchmarking. Relative edits continue to use the last explicit target context.
+Numeric continuations retain a pending selection's target before using a default.
+
+```sh
+./build/timmy-cli osc send --dry-run --default-target fixture --command "20 50"
+./build/timmy-cli osc send --dry-run --command "enciende 10 20"
+```
+
+Dry-run and benchmark diagnostics expose `implicit_final_level`, `default_target`,
+`bare_numeric_list`, and `exclusion_level_disambiguation` when applicable. Numeric
+recovery never creates global/editor actions or an all-target selection. Invalid
+identifiers, malformed ranges and unsupported operations still fail the shared
+semantic validation and rendering path. Whisper, recognition guidance, VAD,
+Hydra key rendering and transport behavior are unchanged.
+
 ### Guided live recognition benchmark (ASR-BENCH-011)
 
 Choose **Open benchmark...** under Recognition benchmark to open the dedicated

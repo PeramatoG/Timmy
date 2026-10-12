@@ -14,6 +14,7 @@
 #include <charconv>
 #include <cctype>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -219,7 +220,6 @@ namespace timmy::command {
         auto words = canonicalizeCommandText(text, configuration_.vocabulary);
         if (words.empty()) return {};
         const bool prefixLevel = words[0] == "on" || words[0] == "off" || words[0] == "full";
-        const bool prefixOff = words[0] == "off";
         // A numeric sentence comma can finish intensity, but a selection's
         // terminal comma is a pending list connector. Keep that distinction in
         // the grammar rather than transcript formatting.
@@ -246,6 +246,94 @@ namespace timmy::command {
                     && std::holds_alternative<SetIntensity>(*candidate.command)) return candidate;
             }
         }
+        auto decorate = [](CommandTextResult result) {
+            if (result.command && !result.explicitTargetType)
+            {
+                const bool hasTarget = std::visit([](const auto& command) {
+                    if constexpr (requires { command.target; })
+                        return !std::is_same_v<std::decay_t<decltype(command)>, ModifySelection>;
+                    else return false;
+                }, *result.command);
+                if (hasTarget) result.inferenceReasons.push_back("default_target");
+            }
+            return result;
+        };
+        auto result = decorate(classifyCanonical(words, context));
+        // A final Spanish "a" after an exclusion can be a lost intensity
+        // connector. Retain existing in-selection ranges; a level beyond the
+        // included selection is the benchmark's command-level reading.
+        bool exclusionLevel = false;
+        if (!prefixLevel && actionFor(words[0]) == Action::none && words.size() >= 4
+            && words[words.size() - 2] == "a" && parseUnsigned(words.back()) && parseLevel(words.back())
+            && parseUnsigned(words[words.size() - 3]) && result.command
+            && std::holds_alternative<SelectSelection>(*result.command))
+        {
+            const auto& selection = std::get<SelectSelection>(*result.command).target;
+            const auto last = *parseUnsigned(words.back());
+            exclusionLevel = !selection.excluded.empty() && !selection.all;
+            for (const auto& range : selection.included)
+                if (last >= range.first && last <= range.last) exclusionLevel = false;
+        }
+        if (result.state == CommandTextState::complete && !exclusionLevel) return result;
+
+        // Numeric-role resolution works only on canonical tokens and retries
+        // the same bounded selection grammar. It never invents action words.
+        const auto action = actionFor(words[0]);
+        const bool selectionAction = action == Action::select || action == Action::release
+            || action == Action::test || action == Action::home;
+        const bool implicitIntensity = action == Action::none && !prefixLevel;
+        if (!prefixLevel && !selectionAction && !implicitIntensity) return result;
+        Words candidate = words;
+        std::vector<std::string> reasons;
+        if (exclusionLevel)
+        {
+            candidate[candidate.size() - 2] = "at";
+            reasons.push_back("exclusion_level_disambiguation");
+        }
+        else if (implicitIntensity && candidate.size() >= 2 && candidate.back() != "full"
+            && parseLevel(candidate.back())
+            && parseUnsigned(candidate[candidate.size() - 2]))
+        {
+            candidate.insert(candidate.end() - 1, "at");
+            reasons.push_back("implicit_final_level");
+            for (const auto& word : words)
+                if (isModification(word)) {
+                    reasons.push_back("exclusion_level_disambiguation");
+                    break;
+                }
+        }
+        Words resolved;
+        bool bareList = false;
+        for (const auto& word : candidate)
+        {
+            if (!resolved.empty() && parseUnsigned(resolved.back()) && parseUnsigned(word))
+            {
+                resolved.push_back("and");
+                bareList = true;
+            }
+            resolved.push_back(word);
+        }
+        if (bareList) reasons.push_back("bare_numeric_list");
+        if (reasons.empty()) return result;
+        auto inferred = decorate(classifyCanonical(std::move(resolved), context));
+        if (inferred.state != CommandTextState::complete || !inferred.command) return result;
+        // Inference cannot turn an implicit fragment into an editor/global or
+        // selection command. Explicit action fallback only completes selections.
+        if (implicitIntensity && !std::holds_alternative<SetIntensity>(*inferred.command)) return result;
+        const bool all = std::visit([](const auto& command) {
+            if constexpr (requires { command.target; }) return command.target.all;
+            else return true;
+        }, *inferred.command);
+        if (all) return result;
+        inferred.inferenceReasons.insert(inferred.inferenceReasons.end(), reasons.begin(), reasons.end());
+        return inferred;
+    }
+
+    CommandTextResult SemanticCommandParser::classifyCanonical(Words words,
+        const CommandContext& context) const
+    {
+        const bool prefixLevel = words[0] == "on" || words[0] == "off" || words[0] == "full";
+        const bool prefixOff = words[0] == "off";
         // Prefix actions reuse selection grammar directly. Preserve its pending
         // range/list states; do not append synthetic tokens to an ASR fragment.
         if (prefixLevel) words[0] = "set";
@@ -277,8 +365,9 @@ namespace timmy::command {
         if (index < words.size() && words[index] == canonicalArticle) ++index;
         if (index == words.size()) return action != Action::none ? pending() : CommandTextResult{};
         const auto explicitType = targetType(words[index]);
-        const auto type = explicitType ? explicitType : (prefixLevel ? configuration_.defaultTarget : std::nullopt);
+        const auto type = explicitType ? explicitType : configuration_.defaultTarget;
         if (!type) return {};
+        if (!explicitType && index < words.size() && words[index] == "all" && !prefixLevel) return {};
         const bool plural = explicitType && words[index].back() == 's';
         if (explicitType) ++index;
         bool incomplete = false;
@@ -290,8 +379,8 @@ namespace timmy::command {
             selection.all = true;
             ++index;
         }
-        else if (!parseRanges(words, index, selection.included, selectionAction || (prefixLevel && plural),
-                plural || selectionAction, incomplete, TargetSelection::maxTerms))
+        else if (!parseRanges(words, index, selection.included, selectionAction || (prefixLevel && (plural || !explicitType)),
+                plural || selectionAction || prefixLevel, incomplete, TargetSelection::maxTerms))
             return incomplete ? pending() : CommandTextResult{};
 
         bool modified = false;
@@ -331,16 +420,16 @@ namespace timmy::command {
                 return complete(SetIntensity{selection, *IntensityLevel::fromPercent(prefixOff ? 0 : 100)}, explicitType);
             switch (action)
             {
-            case Action::select: return complete(SelectSelection{selection}, type);
-            case Action::release: return complete(ReleaseSelection{selection}, type);
-            case Action::test: return complete(TestSelection{selection}, type);
+            case Action::select: return complete(SelectSelection{selection}, explicitType);
+            case Action::release: return complete(ReleaseSelection{selection}, explicitType);
+            case Action::test: return complete(TestSelection{selection}, explicitType);
             case Action::home:
-                return *type == TargetType::fixture ? complete(HomeSelection{selection}, type)
+                return *type == TargetType::fixture ? complete(HomeSelection{selection}, explicitType)
                     : CommandTextResult{};
             case Action::homeTo:
                 return *type == TargetType::fixture ? pending() : CommandTextResult{};
             case Action::none:
-                if (modified) return complete(SelectSelection{selection}, type);
+                if (modified) return complete(SelectSelection{selection}, explicitType);
                 return pending();
             case Action::intensity: return pending();
             case Action::add:
@@ -360,7 +449,7 @@ namespace timmy::command {
         if (words.size() - index == 2 && isConnector(words[index]))
         {
             if (words[index + 1] == "home" && acceptsHome)
-                return complete(HomeSelection{selection}, type);
+                return complete(HomeSelection{selection}, explicitType);
             if (acceptsIntensity)
             {
                 const auto level = parseLevel(words[index + 1]);
@@ -375,7 +464,7 @@ namespace timmy::command {
     {
         auto result = classify(completeText, context);
         if (result.state != CommandTextState::complete || !result.command) return {};
-        return {SemanticParseState::produced, std::move(result.command), result.explicitTargetType};
+        return {SemanticParseState::produced, std::move(result.command), result.explicitTargetType, std::move(result.inferenceReasons)};
     }
 
     void CommandContext::observe(const SemanticParseResult& result)
