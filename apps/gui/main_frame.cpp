@@ -1549,12 +1549,16 @@ namespace timmy::gui {
                 semantic += " | Rendered command: " + wxString::FromUTF8(*payload.transcript.rendering.text);
         }
         semanticCommandText_->SetLabel(semantic);
+        auto* detailsPane = semanticCommandText_->GetParent();
+        // MSW leaves collapsed pane content at its creation size. Use the
+        // allocated pane width for wrapping even before details are expanded.
+        detailsPane->SetSize(detailsPane->GetParent()->GetClientSize().x, detailsPane->GetSize().y);
         const int resultWidth = std::max(100,
-            semanticCommandText_->GetParent()->GetClientSize().GetWidth() - 16);
+            detailsPane->GetClientSize().GetWidth() - 16);
         for (auto* label : {rawTranscriptText_, normalizedTranscriptText_,
                 assemblyText_, semanticCommandText_})
             label->Wrap(resultWidth);
-        semanticCommandText_->GetParent()->Layout();
+        detailsPane->Layout();
         if (benchmarkSession_ && payload.benchmarkAttempt)
         {
             updateBenchmarkControls();

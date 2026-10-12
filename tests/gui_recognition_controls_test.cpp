@@ -67,6 +67,8 @@ namespace {
 
     wxString displayedText(const wxStaticText& label)
     {
+        // Wrap inserts visual line breaks that depend on viewport and native
+        // font metrics. Content assertions compare the complete displayed text.
         auto text = label.GetLabel();
         text.Replace("\n", " ");
         return text;
@@ -307,7 +309,7 @@ namespace {
                 return *result;
             }
             for (auto* label : labels)
-                if (label->GetLabel().StartsWith(prefix)) return *label;
+                if (displayedText(*label).StartsWith(prefix)) return *label;
             REQUIRE(false);
             std::abort();
         }
@@ -368,11 +370,17 @@ namespace {
 
         // A produced command is visible with output OFF. Arming before the
         // queued wx transcript arrives cannot turn it into a dispatch.
+        // Simulate MSW's small creation size for the hidden details content.
+        fixture.label("Semantic command:").GetParent()->SetSize(fixture.frame->FromDIP(wxSize(100, 100)));
         fixture.backend->emit("Channel 5 At 50");
         toggle(fixture.output(), true);
         fixture.listeningControls();
         pumpEvents();
-        REQUIRE(fixture.label("Raw transcript:").GetLabel() == "Raw transcript: Channel 5 At 50");
+        REQUIRE(displayedText(fixture.label("Raw transcript:")) == "Raw transcript: Channel 5 At 50");
+        auto& raw = fixture.label("Raw transcript:");
+        raw.Wrap(fixture.frame->FromDIP(100));
+        REQUIRE(raw.GetLabel().Contains("\n"));
+        REQUIRE(displayedText(raw) == "Raw transcript: Channel 5 At 50");
         REQUIRE(fixture.label("Semantic command:").GetLabel().Contains("produced"));
         REQUIRE(displayedText(fixture.label("Semantic command:")).Contains("Validation: accepted"));
         REQUIRE(displayedText(fixture.label("Semantic command:")).Contains("Rendered command: CH 5 AT 5 0"));
@@ -392,7 +400,7 @@ namespace {
         REQUIRE(fixture.label("OSC output:").GetLabel() == "OSC output: Disarmed");
         fixture.backend->emit("Channel 7 At 70");
         pumpEvents();
-        REQUIRE(fixture.label("Raw transcript:").GetLabel() == "Raw transcript: Channel 7 At 70");
+        REQUIRE(displayedText(fixture.label("Raw transcript:")) == "Raw transcript: Channel 7 At 70");
         REQUIRE(fixture.emitter->calls == 1);
         fixture.emitter->release();
         waitFor([&] { return fixture.label("Execution:").GetLabel().Contains("Succeeded"); });
@@ -404,7 +412,7 @@ namespace {
         waitFor([&] { return fixture.emitter->completed == 2; });
         REQUIRE(fixture.factories == 1);
         pumpEvents();
-        const auto lastRaw = fixture.label("Raw transcript:").GetLabel();
+        const auto lastRaw = displayedText(fixture.label("Raw transcript:"));
         fixture.backend->blockStop();
         fixture.backend->emit("Channel 9 At 90");
         fixture.backend->emitDiagnostic();
@@ -416,13 +424,13 @@ namespace {
         waitFor([&] { return fixture.backend->stopEntered.load(); });
         fixture.responsive();
         REQUIRE(fixture.recognition().GetLabel() == "Stopping...");
-        REQUIRE(fixture.label("Raw transcript:").GetLabel() == lastRaw);
+        REQUIRE(displayedText(fixture.label("Raw transcript:")) == lastRaw);
         for (auto* choice : fixture.choices) REQUIRE(!choice->IsEnabled());
         for (auto* text : fixture.texts) REQUIRE(!text->IsEnabled());
         fixture.backend->releaseStop();
         waitFor([&] { return fixture.recognition().IsEnabled(); });
         REQUIRE(fixture.recognition().GetLabel() == "Start listening");
-        REQUIRE(fixture.label("Raw transcript:").GetLabel() == lastRaw);
+        REQUIRE(displayedText(fixture.label("Raw transcript:")) == lastRaw);
         REQUIRE(fixture.host().IsEnabled());
 
         // Closing has the same nonblocking contract: callbacks and queued wx
@@ -488,7 +496,7 @@ namespace {
         REQUIRE(fixture.label("OSC output:").GetLabel() == "OSC output: Disarmed");
         fixture.backend->emit("Channel 2 At 20");
         pumpEvents();
-        REQUIRE(fixture.label("Raw transcript:").GetLabel() == "Raw transcript: Channel 2 At 20");
+        REQUIRE(displayedText(fixture.label("Raw transcript:")) == "Raw transcript: Channel 2 At 20");
         REQUIRE(fixture.label("Semantic command:").GetLabel().Contains("produced"));
         REQUIRE(fixture.backend->starts == 1 && fixture.emitter->calls == 0);
     }
