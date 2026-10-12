@@ -106,14 +106,7 @@ namespace timmy::gui {
                     hint->Wrap(width);
                     hint->SetMinSize(wxSize(1,
                         static_cast<int>(hint->GetLabel().Freq('\n') + 1) * hint->GetCharHeight() + 2));
-                    hint->CallAfter([hint] {
-                        auto* parent = hint->GetParent();
-                        parent->Layout();
-                        // Wrapping changes the sizer minimum without resizing
-                        // the viewport. Refresh MSW's cached scroll extent too.
-                        if (auto* column = wxDynamicCast(parent, wxScrolledWindow))
-                            column->FitInside();
-                    });
+                    hint->CallAfter([hint] { hint->GetParent()->Layout(); });
                 }
                 event.Skip();
             });
@@ -378,11 +371,6 @@ namespace timmy::gui {
         SetClientSize(GetClientSize().x, clientHeight);
         Layout();
         panel->Layout();
-        // The final height can remove scrollbars and change the usable width.
-        // Recompute each virtual extent after the completed layout.
-        for (auto* item : columns->GetChildren())
-            if (auto* column = wxDynamicCast(item->GetWindow(), wxScrolledWindow))
-                column->FitInside();
         Centre();
     }
 
@@ -409,7 +397,6 @@ namespace timmy::gui {
     {
         auto* panel = new wxScrolledWindow(parent);
         panel->SetScrollRate(panel->FromDIP(10), panel->FromDIP(10));
-        panel->SetMinSize(panel->FromDIP(wxSize(250, 200)));
         auto* sizer = new wxBoxSizer(wxVERTICAL);
         addSectionHeading(panel, sizer, "Audio",
             "Select the microphone and input channel TIMMY listens to.");
@@ -449,11 +436,7 @@ namespace timmy::gui {
                 audioStatusText_->SetMinSize(wxSize(1,
                     static_cast<int>(audioStatusText_->GetLabel().Freq('\n') + 1)
                         * audioStatusText_->GetCharHeight() + 2));
-                audioStatusText_->CallAfter([text = audioStatusText_] {
-                    auto* column = wxStaticCast(text->GetParent(), wxScrolledWindow);
-                    column->Layout();
-                    column->FitInside();
-                });
+                audioStatusText_->CallAfter([text = audioStatusText_] { text->GetParent()->Layout(); });
             }
             event.Skip();
         });
@@ -462,6 +445,12 @@ namespace timmy::gui {
         sizer->Add(createBrandingHeader(panel), 0,
             wxALIGN_LEFT | wxALL, panel->FromDIP(8));
         panel->SetSizer(sizer);
+        // Scrolling hides the content's minimum from the outer sizer. Reserve
+        // the fixed wordmark width even when MSW limits the initial frame size
+        // to a small desktop, including space for a vertical scrollbar.
+        const int contentWidth = sizer->CalcMin().x + panel->GetWindowBorderSize().x
+            + std::max(0, wxSystemSettings::GetMetric(wxSYS_VSCROLL_X, panel));
+        panel->SetMinSize(wxSize(std::max(panel->FromDIP(250), contentWidth), panel->FromDIP(200)));
         columns->Add(panel, 3, wxEXPAND | wxALL, 4);
     }
 

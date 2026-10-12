@@ -963,12 +963,18 @@ namespace {
     void windowLayoutSurvivesResize()
     {
         FrameFixture fixture;
+        std::vector<wxScrolledWindow*> columns;
+        collect(*fixture.frame, columns);
         fixture.frame->SetSize(fixture.frame->FromDIP(wxSize(1100, 500)));
         pumpEvents();
         requireColumnLayout(*fixture.frame);
+        // Keep the fixed-size Audio artwork visible at the minimum frame width,
+        // including when vertical scrolling reduces the available client area.
+        REQUIRE(columns[0]->GetVirtualSize().x <= columns[0]->GetClientSize().x);
         fixture.frame->SetSize(fixture.frame->FromDIP(wxSize(1400, 850)));
         pumpEvents();
         requireColumnLayout(*fixture.frame);
+        REQUIRE(columns[0]->GetVirtualSize().x <= columns[0]->GetClientSize().x);
     }
 
     void computeSelectionControls()
