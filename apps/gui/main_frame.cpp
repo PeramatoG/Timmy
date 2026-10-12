@@ -290,7 +290,6 @@ namespace timmy::gui {
 
         auto* panel = new wxPanel(this);
         auto* mainSizer = new wxBoxSizer(wxVERTICAL);
-        mainSizer->Add(createBrandingHeader(panel), 0, wxEXPAND | wxALL, FromDIP(8));
         setApplicationIcon(*this);
         auto* help = new wxMenu;
         help->Append(wxID_HELP, "&Quick Help\tF1");
@@ -420,6 +419,11 @@ namespace timmy::gui {
             }
             event.Skip();
         });
+        // Use the spare vertical space below the audio controls. The artwork
+        // keeps its logical size while the spacer grows with the column.
+        sizer->AddStretchSpacer();
+        sizer->Add(createBrandingHeader(panel), 0,
+            wxALIGN_CENTER_HORIZONTAL | wxALL, panel->FromDIP(8));
         panel->SetSizer(sizer);
         columns->Add(panel, 3, wxEXPAND | wxALL, 4);
     }

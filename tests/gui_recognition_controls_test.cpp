@@ -592,6 +592,8 @@ namespace {
         REQUIRE(!gui::brandingBitmap("missing-ui010.png", *fixture.frame, 44).IsOk());
         auto* wordmark = dynamic_cast<wxStaticBitmap*>(wxWindow::FindWindowByName("branding.wordmark", fixture.frame));
         REQUIRE(wordmark != nullptr && wordmark->GetBitmap().IsOk());
+        REQUIRE(wordmark->GetParent() == columns[0]);
+        REQUIRE(wordmark->GetPosition().y > columns[0]->GetClientSize().y / 2);
         // Source wordmark has a 3:1 ratio; scaling must preserve it.
         REQUIRE(wordmark->GetBitmap().GetWidth() == 3 * wordmark->GetBitmap().GetHeight());
         auto* fallbackParent = new wxPanel(fixture.frame);
