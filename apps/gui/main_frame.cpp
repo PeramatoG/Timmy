@@ -106,7 +106,14 @@ namespace timmy::gui {
                     hint->Wrap(width);
                     hint->SetMinSize(wxSize(1,
                         static_cast<int>(hint->GetLabel().Freq('\n') + 1) * hint->GetCharHeight() + 2));
-                    hint->CallAfter([hint] { hint->GetParent()->Layout(); });
+                    hint->CallAfter([hint] {
+                        auto* parent = hint->GetParent();
+                        parent->Layout();
+                        // Wrapping changes the sizer minimum without resizing
+                        // the viewport. Refresh MSW's cached scroll extent too.
+                        if (auto* column = wxDynamicCast(parent, wxScrolledWindow))
+                            column->FitInside();
+                    });
                 }
                 event.Skip();
             });
@@ -371,6 +378,11 @@ namespace timmy::gui {
         SetClientSize(GetClientSize().x, clientHeight);
         Layout();
         panel->Layout();
+        // The final height can remove scrollbars and change the usable width.
+        // Recompute each virtual extent after the completed layout.
+        for (auto* item : columns->GetChildren())
+            if (auto* column = wxDynamicCast(item->GetWindow(), wxScrolledWindow))
+                column->FitInside();
         Centre();
     }
 
@@ -437,7 +449,11 @@ namespace timmy::gui {
                 audioStatusText_->SetMinSize(wxSize(1,
                     static_cast<int>(audioStatusText_->GetLabel().Freq('\n') + 1)
                         * audioStatusText_->GetCharHeight() + 2));
-                audioStatusText_->CallAfter([text = audioStatusText_] { text->GetParent()->Layout(); });
+                audioStatusText_->CallAfter([text = audioStatusText_] {
+                    auto* column = wxStaticCast(text->GetParent(), wxScrolledWindow);
+                    column->Layout();
+                    column->FitInside();
+                });
             }
             event.Skip();
         });

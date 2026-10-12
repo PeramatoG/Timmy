@@ -626,6 +626,15 @@ namespace {
         auto* captureStatus = wxWindow::FindWindowByName("audio.capture_status", fixture.frame);
         REQUIRE(captureStatus != nullptr && captureStatus->IsShownOnScreen());
         REQUIRE(captureStatus->GetSize().y >= captureStatus->GetCharHeight());
+        for (std::size_t index = 0; index < columns.size(); ++index)
+        {
+            const auto client = columns[index]->GetClientSize();
+            const auto virtualSize = columns[index]->GetVirtualSize();
+            const auto minimum = columns[index]->GetSizer()->CalcMin();
+            std::cout << "Column " << index << ": client " << client.x << 'x' << client.y
+                << ", virtual " << virtualSize.x << 'x' << virtualSize.y
+                << ", content minimum " << minimum.x << 'x' << minimum.y << '\n';
+        }
         REQUIRE(columns[0]->GetVirtualSize().x <= columns[0]->GetClientSize().x);
         REQUIRE(columns[1]->GetVirtualSize().y <= columns[1]->GetClientSize().y);
         int tallestContent = 0;
