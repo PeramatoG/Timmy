@@ -625,6 +625,10 @@ namespace {
         REQUIRE(captureStatus->GetSize().y >= captureStatus->GetCharHeight());
         REQUIRE(columns[0]->GetVirtualSize().x <= columns[0]->GetClientSize().x);
         REQUIRE(columns[1]->GetVirtualSize().y <= columns[1]->GetClientSize().y);
+        int tallestContent = 0;
+        for (auto* column : columns)
+            tallestContent = std::max(tallestContent, column->GetSizer()->CalcMin().y);
+        REQUIRE(fixture.frame->GetClientSize().y <= tallestContent + fixture.frame->FromDIP(40));
         auto* settingLabel = wxWindow::FindWindowByLabel("Threads", fixture.frame);
         REQUIRE(settingLabel != nullptr);
         auto* propertyGrid = dynamic_cast<wxFlexGridSizer*>(settingLabel->GetContainingSizer());

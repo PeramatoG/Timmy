@@ -25,6 +25,7 @@
 #include <wx/choice.h>
 #include <wx/collpane.h>
 #include <wx/filedlg.h>
+#include <wx/display.h>
 #include <wx/filename.h>
 #include <wx/gauge.h>
 #include <wx/menu.h>
@@ -349,6 +350,27 @@ namespace timmy::gui {
         updateComputeStatus();
         Layout();
         panel->Layout();
+        // Scrolled windows advertise a small viewport minimum, not the height
+        // of their controls. Measure the collapsed content after laying it out
+        // at the preferred width, then fit only the initial window height.
+        int contentHeight = 0;
+        for (auto* item : columns->GetChildren())
+        {
+            auto* column = item->GetWindow();
+            contentHeight = std::max(contentHeight,
+                column->GetSizer()->CalcMin().y + 2 * item->GetBorder());
+        }
+        int clientHeight = contentHeight + 12 + FromDIP(16);
+        const int displayIndex = wxDisplay::GetFromWindow(this);
+        if (displayIndex != wxNOT_FOUND)
+        {
+            const auto workArea = wxDisplay(static_cast<unsigned int>(displayIndex)).GetClientArea();
+            clientHeight = std::min(clientHeight,
+                workArea.height - (GetSize().y - GetClientSize().y));
+        }
+        SetClientSize(GetClientSize().x, clientHeight);
+        Layout();
+        panel->Layout();
         Centre();
     }
 
@@ -419,12 +441,10 @@ namespace timmy::gui {
             }
             event.Skip();
         });
-        // Center the fixed-size artwork in the unused space below the audio
-        // controls, rather than anchoring it to the bottom of the window.
+        // Keep the fixed-size artwork at the lower left of the audio column.
         sizer->AddStretchSpacer();
         sizer->Add(createBrandingHeader(panel), 0,
-            wxALIGN_CENTER_HORIZONTAL | wxALL, panel->FromDIP(8));
-        sizer->AddStretchSpacer();
+            wxALIGN_LEFT | wxALL, panel->FromDIP(8));
         panel->SetSizer(sizer);
         columns->Add(panel, 3, wxEXPAND | wxALL, 4);
     }
