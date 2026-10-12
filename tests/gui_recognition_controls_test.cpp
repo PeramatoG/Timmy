@@ -916,7 +916,8 @@ namespace {
         file.SetValue(wxString::FromUTF8(path.string()));
         click(start);
         pumpEvents();
-        REQUIRE(displayedText(compute).Contains("Active: Vulkan · NVIDIA GeForce RTX 3070"));
+        REQUIRE(displayedText(compute).Contains(
+            wxString::FromUTF8("Active: Vulkan \xC2\xB7 NVIDIA GeForce RTX 3070")));
         details.Collapse(false);
         wxCollapsiblePaneEvent expanded(&details, details.GetId(), false);
         details.GetEventHandler()->ProcessEvent(expanded);
@@ -1031,7 +1032,9 @@ namespace {
                 wxCommandEvent change(wxEVT_CHOICE, device->GetId());
                 change.SetEventObject(device);
                 device->GetEventHandler()->ProcessEvent(change);
-                REQUIRE(displayedText(*status).Contains("Available: Vulkan · GPU one"));
+                // Match the GUI's explicit UTF-8 conversion, not the Windows locale.
+                REQUIRE(displayedText(*status).Contains(
+                    wxString::FromUTF8("Available: Vulkan \xC2\xB7 GPU one")));
             }
             else
                 REQUIRE(displayedText(*status).Contains("Available: CPU"));
@@ -1043,7 +1046,8 @@ namespace {
             REQUIRE(fixture.backend->configurations.back().compute.backend == Backend::automatic);
             if (state == 0)
             {
-                REQUIRE(displayedText(*status).Contains("Active: Vulkan · GPU one"));
+                REQUIRE(displayedText(*status).Contains(
+                    wxString::FromUTF8("Active: Vulkan \xC2\xB7 GPU one")));
                 REQUIRE(fixture.backend->configurations.back().compute.deviceIndex == 1);
             }
             else

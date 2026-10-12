@@ -29,6 +29,7 @@ namespace timmy::gui {
 
     // Presentation only: discovery supplies readiness, runtime diagnostics supply
     // the confirmed active backend. Never infer successful initialization from discovery.
+    // Keep the UTF-8 separator independent of the compiler's execution charset.
     inline std::string recognitionComputeStatus(const asr::ComputeSelection& selection,
         const asr::ComputeDiscovery& discovery,
         const std::optional<asr::ComputeDiagnostics>& runtime = {})
@@ -50,7 +51,7 @@ namespace timmy::gui {
             else {
                 status += backendName(*runtime->activeBackend);
                 if (*runtime->activeBackend == asr::ComputeBackend::vulkan)
-                    status += " · " + runtime->activeDeviceName;
+                    status += " \xC2\xB7 " + runtime->activeDeviceName;
             }
             if (!runtime->initializationFailure.empty())
                 status += "\nReason: " + computeReasonText(runtime->initializationFailure);
@@ -69,7 +70,7 @@ namespace timmy::gui {
         for (const auto& device : discovery.devices) {
             if (device.backend == asr::ComputeBackend::vulkan
                 && (!requested.deviceIndex || device.index == *requested.deviceIndex))
-                return status + "\nAvailable: Vulkan · " + device.name;
+                return status + "\nAvailable: Vulkan \xC2\xB7 " + device.name;
         }
         return status + "\nAvailable: CPU\nReason: " + computeReasonText("requested_device_unavailable");
     }

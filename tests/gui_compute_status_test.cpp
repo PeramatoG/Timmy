@@ -29,9 +29,10 @@ int main()
          {Backend::vulkan, 1, "Vulkan1", "GPU one", "integrated_gpu"}}, {}};
     const asr::ComputeDiscovery notCompiled{false, false, {}, "vulkan_not_compiled"};
     const auto format = gui::recognitionComputeStatus;
-    require(format({}, available, {}).find("Active: Not initialized\nAvailable: Vulkan · NVIDIA GeForce RTX 3070")
+    // Assert the UTF-8 bytes, independently of the compiler's execution charset.
+    require(format({}, available, {}).find("Active: Not initialized\nAvailable: Vulkan \xC2\xB7 NVIDIA GeForce RTX 3070")
         != std::string::npos, "GPU readiness before model initialization");
-    require(format({Backend::automatic, 1}, available, {}).find("Available: Vulkan · GPU one")
+    require(format({Backend::automatic, 1}, available, {}).find("Available: Vulkan \xC2\xB7 GPU one")
         != std::string::npos, "Explicit device readiness");
     require(format({Backend::vulkan, 7}, available, {}).find("selected Vulkan device is unavailable")
         != std::string::npos, "Missing explicit device readiness");
@@ -42,7 +43,7 @@ int main()
     for (auto requested : {Backend::automatic, Backend::cpu, Backend::vulkan}) {
         const auto active = asr::initializeCompute({requested, 1}, available, [](const auto&) { return true; });
         const auto text = format({}, notCompiled, active);
-        require(text.find(requested == Backend::cpu ? "Active: CPU" : "Active: Vulkan · GPU one")
+        require(text.find(requested == Backend::cpu ? "Active: CPU" : "Active: Vulkan \xC2\xB7 GPU one")
             != std::string::npos, "Runtime diagnostics override discovery preview");
         require(text.find("Reason:") == std::string::npos, "Successful initialization has no fallback reason");
         if (requested == Backend::cpu) continue;
