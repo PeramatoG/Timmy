@@ -29,6 +29,7 @@
 #include <atomic>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <map>
 #include <string>
 #include <vector>
@@ -56,7 +57,8 @@ namespace timmy::gui {
         MainFrame();
         // Frontends supplying PCM/backends can skip physical capture bootstrap.
         MainFrame(std::shared_ptr<asr::IAsrBackend> backend,
-            CommandOutputSession::EmitterFactory emitterFactory, bool initializeAudio = true);
+            CommandOutputSession::EmitterFactory emitterFactory, bool initializeAudio = true,
+            std::optional<asr::ComputeDiscovery> computeDiscovery = {});
         ~MainFrame() override;
 
     private:
@@ -84,6 +86,8 @@ namespace timmy::gui {
         void drainBenchmarkResults();
         void pollShutdown();
         void updateRecognitionControls();
+        void updateComputeStatus();
+        asr::ComputeSelection selectedCompute() const;
         void updateOutputControls();
         void updateOutputStatus();
         void armOutput();
@@ -124,7 +128,10 @@ namespace timmy::gui {
         wxChoice* computeChoice_ = nullptr;
         wxChoice* gpuChoice_ = nullptr;
         wxStaticText* computeStatusText_ = nullptr;
+        int computeStatusWidth_ = 0;
         std::vector<asr::ComputeDevice> computeDevices_;
+        asr::ComputeDiscovery computeDiscovery_;
+        std::optional<asr::ComputeDiagnostics> activeCompute_;
         wxButton* recognitionButton_ = nullptr;
         BenchmarkDialog* benchmarkDialog_ = nullptr;
         wxButton* benchmarkOpenButton_ = nullptr;

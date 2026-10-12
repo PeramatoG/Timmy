@@ -68,6 +68,8 @@ BenchmarkDialog::BenchmarkDialog(wxWindow* parent, Actions actions)
     });
     summaryText_ = "Engine / model / language / profile will be frozen at Start.";
     summary_ = label(summaryText_, "benchmark.summary");
+    compute_ = label("", "benchmark.compute_status");
+    compute_->SetFont(compute_->GetFont().Bold());
     state_ = label("Ready to start", "benchmark.state");
     state_->SetFont(state_->GetFont().Bold());
     instruction_ = label("", "benchmark.instruction");
@@ -132,11 +134,18 @@ BenchmarkDialog::BenchmarkDialog(wxWindow* parent, Actions actions)
 
 wxString BenchmarkDialog::resultPath() const { return path_->GetValue(); }
 
+void BenchmarkDialog::setComputeStatus(const wxString& status)
+{
+    if (computeText_ == status) return;
+    computeText_ = status;
+    wrapLabels();
+}
+
 void BenchmarkDialog::wrapLabels()
 {
     const int width = std::max(100, phrase_->GetParent()->GetClientSize().x - 24);
     const std::pair<wxStaticText*, wxString> labels[] = {
-        {summary_, summaryText_}, {case_, caseText_}, {phrase_, phraseText_},
+        {summary_, summaryText_}, {compute_, computeText_}, {case_, caseText_}, {phrase_, phraseText_},
         {instruction_, instructionText_}, {state_, stateText_}, {result_, resultText_}};
     for (const auto& [control, text] : labels)
     {

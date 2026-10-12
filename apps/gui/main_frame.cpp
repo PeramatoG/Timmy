@@ -9,6 +9,7 @@
  */
 
 #include "main_frame.h"
+#include "compute_status.h"
 #include "benchmark_dialog.h"
 #include "command_output_events.h"
 
@@ -235,10 +236,13 @@ namespace timmy::gui {
     }
 
     MainFrame::MainFrame(std::shared_ptr<asr::IAsrBackend> backend,
-        CommandOutputSession::EmitterFactory emitterFactory, bool initializeAudio)
+        CommandOutputSession::EmitterFactory emitterFactory, bool initializeAudio,
+        std::optional<asr::ComputeDiscovery> computeDiscovery)
         : wxFrame(nullptr, wxID_ANY, "TIMMY", wxDefaultPosition, wxSize(1400, 850))
         , backendOverride_(std::move(backend)), outputSession_(std::move(emitterFactory))
     {
+        computeDiscovery_ = computeDiscovery ? std::move(*computeDiscovery)
+            : core::availableComputeDevices(core::availableAsrEngines().front().id);
         channelSelector_ = std::make_shared<audio::AudioChannelSelector>(0);
         meter_ = std::make_shared<audio::AudioMeter>();
         channelSelector_->addConsumer(meter_);
@@ -276,6 +280,7 @@ namespace timmy::gui {
         resolveDefaultResources();
         if (initializeAudio) populateAudioDevices();
         updateBenchmarkControls();
+        updateComputeStatus();
         Centre();
     }
 
@@ -379,13 +384,24 @@ namespace timmy::gui {
         resources->Add(gpuChoice_, 1, wxEXPAND);
         gpuChoice_->SetName("recognition.compute_device");
         gpuChoice_->Append("Automatic");
-        computeDevices_ = core::availableComputeDevices(core::availableAsrEngines().front().id).devices;
+        computeDevices_ = computeDiscovery_.devices;
         for (const auto& device : computeDevices_)
             gpuChoice_->Append(wxString::FromUTF8(device.name));
         gpuChoice_->SetSelection(0);
+        gpuChoice_->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { updateComputeStatus(); });
         gpuLabel->Show(computeDevices_.size() > 1);
         gpuChoice_->Show(computeDevices_.size() > 1);
         selection->Add(resources, 0, wxEXPAND | wxALL, 4);
+        computeStatusText_ = new wxStaticText(selectionOwner, wxID_ANY, "",
+            wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE);
+        computeStatusText_->SetName("recognition.compute_status");
+        computeStatusText_->SetMinSize(wxSize(1, -1));
+        computeStatusText_->SetFont(computeStatusText_->GetFont().Bold());
+        selection->Add(computeStatusText_, 0, wxEXPAND | wxALL, 4);
+        computeStatusText_->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
+            if (event.GetSize().x != computeStatusWidth_) updateComputeStatus();
+            event.Skip();
+        });
         auto* engineHint = new wxStaticText(selectionOwner, wxID_ANY,
             "Settings below belong to the selected engine.");
         selection->Add(engineHint, 0, wxALL, 4);
@@ -400,9 +416,6 @@ namespace timmy::gui {
         recognitionStatusText_->SetMinSize(wxSize(1, -1));
         sessionRow->Add(recognitionStatusText_, 1, wxALIGN_CENTER_VERTICAL);
         session->Add(sessionRow, 0, wxEXPAND | wxALL, 4);
-        computeStatusText_ = new wxStaticText(sessionOwner, wxID_ANY, "Recognition device: inactive");
-        computeStatusText_->SetName("recognition.compute_status");
-        session->Add(computeStatusText_, 0, wxEXPAND | wxALL, 4);
         rawTranscriptText_ = new wxStaticText(sessionOwner, wxID_ANY, "Raw transcript: -");
         session->Add(rawTranscriptText_, 0, wxEXPAND | wxALL, 4);
         auto* details = new wxCollapsiblePane(sessionOwner, wxID_ANY, "Transcript details",
@@ -856,10 +869,10 @@ namespace timmy::gui {
             benchmarkSession_.reset();
             benchmarkResults_.reset();
         }
+        activeCompute_.reset();
         updateRecognitionControls();
         updateOutputStatus();
         const auto& diagnostic = recognitionLifecycle_.diagnostic();
-        computeStatusText_->SetLabel("Recognition device: inactive");
         recognitionStatusText_->SetLabel(!diagnostic.empty()
             ? wxString::FromUTF8(diagnostic)
             : (stopDiagnostic_.empty() ? wxString("Stopped.") : stopDiagnostic_));
@@ -869,6 +882,35 @@ namespace timmy::gui {
             if (benchmarkCloseRequested_) { benchmarkDialog_->Hide(); benchmarkCloseRequested_ = false; }
         }
         stopDiagnostic_.clear();
+    }
+
+    asr::ComputeSelection MainFrame::selectedCompute() const
+    {
+        asr::ComputeSelection selection;
+        constexpr asr::ComputeBackend backends[]{asr::ComputeBackend::automatic,
+            asr::ComputeBackend::cpu, asr::ComputeBackend::vulkan};
+        const int backend = computeChoice_->GetSelection();
+        if (backend >= 0 && backend < 3) selection.backend = backends[backend];
+        const int device = gpuChoice_->GetSelection();
+        if (device > 0 && static_cast<std::size_t>(device) <= computeDevices_.size())
+            selection.deviceIndex = computeDevices_[static_cast<std::size_t>(device - 1)].index;
+        return selection;
+    }
+
+    void MainFrame::updateComputeStatus()
+    {
+        const int width = computeStatusText_->GetSize().x;
+        computeStatusWidth_ = width;
+        const auto status = wxString::FromUTF8(
+            recognitionComputeStatus(selectedCompute(), computeDiscovery_, activeCompute_));
+        computeStatusText_->SetLabel(status);
+        if (width > 1) computeStatusText_->Wrap(width);
+        computeStatusText_->SetMinSize(wxSize(1,
+            static_cast<int>(computeStatusText_->GetLabel().Freq('\n') + 1)
+                * computeStatusText_->GetCharHeight() + 2));
+        auto* panel = wxDynamicCast(computeStatusText_->GetParent()->GetParent(), wxScrolledWindow);
+        if (panel) { panel->Layout(); panel->FitInside(); }
+        if (benchmarkDialog_) benchmarkDialog_->setComputeStatus(status);
     }
 
     // One policy freezes input/resources throughout listening and stopping,
@@ -892,6 +934,7 @@ namespace timmy::gui {
         gpuChoice_->Enable(idle && computeChoice_->GetSelection() != 1);
         for (const auto& [id, control] : tuningControls_) control->Enable(idle);
         resetRecognitionButton_->Enable(idle);
+        updateComputeStatus();
         updateBenchmarkControls();
         updateOutputControls();
     }
@@ -1154,6 +1197,7 @@ namespace timmy::gui {
             });
         }
         updateBenchmarkControls();
+        updateComputeStatus();
         benchmarkDialog_->Show();
         benchmarkDialog_->Raise();
     }
@@ -1242,14 +1286,7 @@ namespace timmy::gui {
                 configuration.preferredLanguage = "en";
             }
             configuration.recognitionHints = core::commandRecognitionHints(languageProfile);
-            constexpr asr::ComputeBackend computeBackends[]{asr::ComputeBackend::automatic,
-                asr::ComputeBackend::cpu, asr::ComputeBackend::vulkan};
-            const int computeChoice = computeChoice_->GetSelection();
-            if (computeChoice >= 0 && computeChoice < 3)
-                configuration.compute.backend = computeBackends[computeChoice];
-            const int gpuChoice = gpuChoice_->GetSelection();
-            if (gpuChoice > 0 && static_cast<std::size_t>(gpuChoice) <= computeDevices_.size())
-                configuration.compute.deviceIndex = computeDevices_[static_cast<std::size_t>(gpuChoice - 1)].index;
+            configuration.compute = selectedCompute();
             if (benchmarkSession_) configuration = benchmarkSession_->snapshot().configuration;
             if (benchmarkStartRequested_)
             {
@@ -1281,9 +1318,12 @@ namespace timmy::gui {
                 return;
             }
             const auto diagnostics = recognitionPipeline_->attemptDiagnostics();
-            computeStatusText_->SetLabel(diagnostics.compute
-                ? wxString::FromUTF8(asr::computeStatus(*diagnostics.compute))
-                : wxString("Recognition device: unreported"));
+            activeCompute_ = diagnostics.compute;
+            if (!activeCompute_) {
+                activeCompute_.emplace();
+                activeCompute_->requested = configuration.compute;
+            }
+            updateComputeStatus();
             if (benchmarkSession_) prepareBenchmarkAttempt();
             else if (outputEnabledCheck_->GetValue()) armOutput();
             updateOutputStatus();

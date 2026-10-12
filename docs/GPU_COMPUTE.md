@@ -23,12 +23,19 @@ cmake -S . -B build -DTIMMY_BUILD_GUI=OFF -DTIMMY_ENABLE_VULKAN=OFF
 cmake --build build
 ```
 
-On the prepared Windows development machine, use the existing preset plus:
+Both `windows-debug` and `windows-release` enable Vulkan automatically, including
+the normal Visual Studio Community Build command with these CMake presets.
+Install the Vulkan SDK on the development machine and reconfigure an existing
+build after updating the presets. For example:
 
 ```sh
-cmake --preset windows-release -DTIMMY_ENABLE_VULKAN=ON
+cmake --preset windows-release
 cmake --build out/build/windows-release
 ```
+
+The global option remains OFF for manual/non-preset builds and direct CPU-only
+CI configurations. To use a Windows preset without the SDK, explicitly override
+it with `cmake --preset windows-debug -DTIMMY_ENABLE_VULKAN=OFF`.
 
 Enabling Vulkan requires the SDK/development headers, loader import library,
 `glslc` and SPIRV-Headers CMake package. CMake fails explicitly when these are
@@ -74,8 +81,14 @@ state and worker resources are released on stop/restart.
 
 ## Diagnostics and comparison
 
-The recognition status shows the active device, e.g. `Recognition device:
-NVIDIA GeForce RTX 3070 · Vulkan`, or a CPU fallback reason. Headless use supports
+The Recognition engine area and benchmark window show compute readiness before
+listening or a benchmark starts. They label the backend/device as **Available**, with **Active:
+Not initialized**, until model initialization confirms the runtime backend.
+While running it shows, for example, `Compute: Automatic` and `Active: Vulkan ·
+NVIDIA GeForce RTX 3070`, or `Active: CPU` with a concise fallback reason.
+Missing build support, unavailable Vulkan and initialization failure have
+distinct messages; detailed reason codes remain in the existing diagnostics.
+Headless use supports
 `asr listen --compute automatic|cpu|vulkan [--compute-device N]` and prints the
 same status.
 
