@@ -1,0 +1,53 @@
+name: Windows GUI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Locate vcpkg caches
+        id: cache-paths
+        run: |
+          "downloads=$env:VCPKG_INSTALLATION_ROOT/downloads" >> $env:GITHUB_OUTPUT
+          "binaries=$env:LOCALAPPDATA/vcpkg/archives" >> $env:GITHUB_OUTPUT
+
+      - name: Restore verified dependency downloads and binaries
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ steps.cache-paths.outputs.downloads }}
+            ${{ steps.cache-paths.outputs.binaries }}
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Configure native wxWidgets GUI and deterministic tests
+        run: |
+          $assetScript = Join-Path $env:GITHUB_WORKSPACE '.github/scripts/fetch-github-archive.ps1'
+          $env:X_VCPKG_ASSET_SOURCES = "x-script,powershell.exe -NoProfile -File `"$assetScript`" -Url `"{url}`" -Sha512 `"{sha512}`" -Destination `"{dst}`""
+          cmake -S . -B build -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DTIMMY_BUILD_GUI=ON -DBUILD_TESTING=ON `
+            -DTIMMY_ENABLE_VULKAN=OFF -DGGML_NATIVE=OFF
+
+      - name: Build GUI, CLI, and tests
+        run: cmake --build build --config Debug --parallel 2
+
+      - name: Run tests including initial window layout
+        run: ctest --test-dir build -C Debug --output-on-failure
+
+      - name: Save dependency caches even if a GUI assertion fails
+        if: always() && !cancelled() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ steps.cache-paths.outputs.downloads }}
+            ${{ steps.cache-paths.outputs.binaries }}
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}

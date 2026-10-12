@@ -1,0 +1,2 @@
+// First icon resource is also the Windows executable/application icon.
+TIMMY_ICON ICON "@PROJECT_SOURCE_DIR@/resources/icons/timmy.ico"

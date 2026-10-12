@@ -69,11 +69,11 @@ namespace timmy::command {
                 if (!validSelection(operation.target, config)) return false;
                 if constexpr (std::is_same_v<T, HomeSelection>)
                     return operation.target.type == TargetType::fixture;
-                if constexpr (std::is_same_v<T, ModifySelection>)
+                else if constexpr (std::is_same_v<T, ModifySelection>)
                     return !operation.target.all && operation.target.excluded.empty()
                         && (operation.modification == SelectionModification::add
                             || operation.modification == SelectionModification::remove);
-                return true;
+                else return true;
             }
         }, intent);
         return {valid, valid ? "" : "Intent rejected by semantic validation."};

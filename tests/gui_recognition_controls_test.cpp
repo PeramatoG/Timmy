@@ -9,8 +9,12 @@
  */
 
 #include "main_frame.h"
+#include "gui_branding.h"
+#include <wx/menu.h>
+#include <wx/panel.h>
 
 #include <wx/app.h>
+#include <wx/evtloop.h>
 #include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/choice.h>
@@ -46,8 +50,10 @@ namespace {
     void require(bool condition, const char* expression, int line)
     {
         if (condition) return;
-        std::cerr << "Line " << line << ": " << expression << '\n';
-        std::abort();
+        std::cerr << "Line " << line << ": " << expression << '\n' << std::flush;
+        // Fail immediately instead of opening an interactive CRT abort dialog
+        // in Debug Windows CI, which would obscure the failing assertion.
+        std::_Exit(EXIT_FAILURE);
     }
 
 #define REQUIRE(expression) require((expression), #expression, __LINE__)
@@ -61,6 +67,8 @@ namespace {
 
     wxString displayedText(const wxStaticText& label)
     {
+        // Wrap inserts visual line breaks that depend on viewport and native
+        // font metrics. Content assertions compare the complete displayed text.
         auto text = label.GetLabel();
         text.Replace("\n", " ");
         return text;
@@ -91,6 +99,29 @@ namespace {
                 button && button->GetLabel() == "Reset to defaults") continue;
             if (auto* control = dynamic_cast<Control*>(child)) controls.push_back(control);
             collect(*child, controls);
+        }
+    }
+
+    // Check the sizer contract before Show() can repair missing initialization.
+    // This catches the MSW regression where all columns stayed at zero size.
+    void requireColumnLayout(wxFrame& frame)
+    {
+        auto* content = wxWindow::FindWindowByName("main.content", &frame);
+        REQUIRE(content != nullptr && frame.GetSizer() != nullptr);
+        REQUIRE(frame.GetSizer()->GetItem(content) != nullptr);
+        REQUIRE(content->GetSize() == frame.GetClientSize());
+        std::vector<wxScrolledWindow*> columns;
+        collect(frame, columns);
+        REQUIRE(columns.size() == 3);
+        int previousRight = -1;
+        for (auto* column : columns)
+        {
+            const auto bounds = column->GetRect();
+            REQUIRE(bounds.width > 0 && bounds.height > 0);
+            REQUIRE(bounds.x > previousRight);
+            REQUIRE(bounds.GetRight() < content->GetClientSize().x);
+            REQUIRE(bounds.GetBottom() < content->GetClientSize().y);
+            previousRight = bounds.GetRight();
         }
     }
 
@@ -231,6 +262,7 @@ namespace {
                 ++factories;
                 return emitter;
             }, false, std::move(discovery));
+            requireColumnLayout(*frame);
             frame->Bind(wxEVT_DESTROY, [this](wxWindowDestroyEvent& event) {
                 if (event.GetEventObject() == frame) destroyed = true;
                 event.Skip();
@@ -277,7 +309,7 @@ namespace {
                 return *result;
             }
             for (auto* label : labels)
-                if (label->GetLabel().StartsWith(prefix)) return *label;
+                if (displayedText(*label).StartsWith(prefix)) return *label;
             REQUIRE(false);
             std::abort();
         }
@@ -338,11 +370,17 @@ namespace {
 
         // A produced command is visible with output OFF. Arming before the
         // queued wx transcript arrives cannot turn it into a dispatch.
+        // Simulate MSW's small creation size for the hidden details content.
+        fixture.label("Semantic command:").GetParent()->SetSize(fixture.frame->FromDIP(wxSize(100, 100)));
         fixture.backend->emit("Channel 5 At 50");
         toggle(fixture.output(), true);
         fixture.listeningControls();
         pumpEvents();
-        REQUIRE(fixture.label("Raw transcript:").GetLabel() == "Raw transcript: Channel 5 At 50");
+        REQUIRE(displayedText(fixture.label("Raw transcript:")) == "Raw transcript: Channel 5 At 50");
+        auto& raw = fixture.label("Raw transcript:");
+        raw.Wrap(fixture.frame->FromDIP(100));
+        REQUIRE(raw.GetLabel().Contains("\n"));
+        REQUIRE(displayedText(raw) == "Raw transcript: Channel 5 At 50");
         REQUIRE(fixture.label("Semantic command:").GetLabel().Contains("produced"));
         REQUIRE(displayedText(fixture.label("Semantic command:")).Contains("Validation: accepted"));
         REQUIRE(displayedText(fixture.label("Semantic command:")).Contains("Rendered command: CH 5 AT 5 0"));
@@ -362,7 +400,7 @@ namespace {
         REQUIRE(fixture.label("OSC output:").GetLabel() == "OSC output: Disarmed");
         fixture.backend->emit("Channel 7 At 70");
         pumpEvents();
-        REQUIRE(fixture.label("Raw transcript:").GetLabel() == "Raw transcript: Channel 7 At 70");
+        REQUIRE(displayedText(fixture.label("Raw transcript:")) == "Raw transcript: Channel 7 At 70");
         REQUIRE(fixture.emitter->calls == 1);
         fixture.emitter->release();
         waitFor([&] { return fixture.label("Execution:").GetLabel().Contains("Succeeded"); });
@@ -374,7 +412,7 @@ namespace {
         waitFor([&] { return fixture.emitter->completed == 2; });
         REQUIRE(fixture.factories == 1);
         pumpEvents();
-        const auto lastRaw = fixture.label("Raw transcript:").GetLabel();
+        const auto lastRaw = displayedText(fixture.label("Raw transcript:"));
         fixture.backend->blockStop();
         fixture.backend->emit("Channel 9 At 90");
         fixture.backend->emitDiagnostic();
@@ -386,13 +424,13 @@ namespace {
         waitFor([&] { return fixture.backend->stopEntered.load(); });
         fixture.responsive();
         REQUIRE(fixture.recognition().GetLabel() == "Stopping...");
-        REQUIRE(fixture.label("Raw transcript:").GetLabel() == lastRaw);
+        REQUIRE(displayedText(fixture.label("Raw transcript:")) == lastRaw);
         for (auto* choice : fixture.choices) REQUIRE(!choice->IsEnabled());
         for (auto* text : fixture.texts) REQUIRE(!text->IsEnabled());
         fixture.backend->releaseStop();
         waitFor([&] { return fixture.recognition().IsEnabled(); });
         REQUIRE(fixture.recognition().GetLabel() == "Start listening");
-        REQUIRE(fixture.label("Raw transcript:").GetLabel() == lastRaw);
+        REQUIRE(displayedText(fixture.label("Raw transcript:")) == lastRaw);
         REQUIRE(fixture.host().IsEnabled());
 
         // Closing has the same nonblocking contract: callbacks and queued wx
@@ -458,7 +496,7 @@ namespace {
         REQUIRE(fixture.label("OSC output:").GetLabel() == "OSC output: Disarmed");
         fixture.backend->emit("Channel 2 At 20");
         pumpEvents();
-        REQUIRE(fixture.label("Raw transcript:").GetLabel() == "Raw transcript: Channel 2 At 20");
+        REQUIRE(displayedText(fixture.label("Raw transcript:")) == "Raw transcript: Channel 2 At 20");
         REQUIRE(fixture.label("Semantic command:").GetLabel().Contains("produced"));
         REQUIRE(fixture.backend->starts == 1 && fixture.emitter->calls == 0);
     }
@@ -559,11 +597,64 @@ namespace {
             }
         };
         checkDefaults();
+        REQUIRE(fixture.frame->GetMenuBar()->FindItem(wxID_HELP) != nullptr);
+        REQUIRE(fixture.frame->GetMenuBar()->FindItem(wxID_ABOUT) != nullptr);
+        REQUIRE(wxString(TIMMY_GUI_VERSION) == wxString(TIMMY_EXPECTED_PROJECT_VERSION));
+        REQUIRE(!gui::brandingBitmap("missing-ui010.png", *fixture.frame, 44).IsOk());
+        auto* wordmark = dynamic_cast<wxStaticBitmap*>(wxWindow::FindWindowByName("branding.wordmark", fixture.frame));
+        REQUIRE(wordmark != nullptr && wordmark->GetBitmap().IsOk());
+        REQUIRE(wordmark->GetParent() == columns[0]);
+        REQUIRE(wordmark->GetPosition().y > columns[0]->GetClientSize().y / 2);
+        // Source wordmark has a 3:1 ratio; scaling must preserve it.
+        REQUIRE(wordmark->GetBitmap().GetWidth() == 3 * wordmark->GetBitmap().GetHeight());
+        auto* fallbackParent = new wxPanel(fixture.frame);
+        fallbackParent->Hide();
+        fallbackParent->SetSizer(gui::createBrandingHeader(fallbackParent, "missing-ui010.png"));
+        REQUIRE(wxWindow::FindWindowByName("branding.title", fallbackParent) != nullptr);
+        fallbackParent->Destroy();
+        for (const auto* name : {"recognition.engine_settings", "recognition.vad_settings"})
+        {
+            auto* pane = dynamic_cast<wxCollapsiblePane*>(wxWindow::FindWindowByName(name, fixture.frame));
+            REQUIRE(pane != nullptr && pane->IsCollapsed());
+            const auto* setting = wxString(name).Contains("vad") ? "vad.speech_threshold" : "whisper.threads";
+            auto* before = wxWindow::FindWindowByName(setting, fixture.frame);
+            REQUIRE(before != nullptr && before->GetParent() == pane->GetPane());
+            pane->Collapse(false);
+            wxCollapsiblePaneEvent expanded(pane, pane->GetId(), false);
+            pane->GetEventHandler()->ProcessEvent(expanded);
+            pumpEvents();
+            REQUIRE(wxWindow::FindWindowByName(setting, fixture.frame) == before);
+            REQUIRE(before->IsShownOnScreen());
+            checkDefaults();
+            pane->Collapse(true);
+            wxCollapsiblePaneEvent collapsed(pane, pane->GetId(), true);
+            pane->GetEventHandler()->ProcessEvent(collapsed);
+        }
+        pumpEvents();
+        auto* captureStatus = wxWindow::FindWindowByName("audio.capture_status", fixture.frame);
+        REQUIRE(captureStatus != nullptr && captureStatus->IsShownOnScreen());
+        REQUIRE(captureStatus->GetSize().y >= captureStatus->GetCharHeight());
+        for (std::size_t index = 0; index < columns.size(); ++index)
+        {
+            const auto client = columns[index]->GetClientSize();
+            const auto virtualSize = columns[index]->GetVirtualSize();
+            const auto minimum = columns[index]->GetSizer()->CalcMin();
+            std::cout << "Column " << index << ": client " << client.x << 'x' << client.y
+                << ", virtual " << virtualSize.x << 'x' << virtualSize.y
+                << ", content minimum " << minimum.x << 'x' << minimum.y << '\n';
+        }
+        REQUIRE(columns[0]->GetVirtualSize().x <= columns[0]->GetClientSize().x);
+        REQUIRE(columns[1]->GetVirtualSize().y <= columns[1]->GetClientSize().y);
+        int tallestContent = 0;
+        for (auto* column : columns)
+            tallestContent = std::max(tallestContent, column->GetSizer()->CalcMin().y);
+        REQUIRE(fixture.frame->GetClientSize().y <= tallestContent + fixture.frame->FromDIP(40));
         auto* settingLabel = wxWindow::FindWindowByLabel("Threads", fixture.frame);
         REQUIRE(settingLabel != nullptr);
         auto* propertyGrid = dynamic_cast<wxFlexGridSizer*>(settingLabel->GetContainingSizer());
-        REQUIRE(propertyGrid != nullptr && propertyGrid->GetCols() == 4);
-        REQUIRE(wxWindow::FindWindowByLabel("Engine settings", fixture.frame) != nullptr);
+        REQUIRE(propertyGrid != nullptr && propertyGrid->GetCols()
+            == (columns[1]->GetClientSize().x >= columns[1]->FromDIP(620) ? 4 : 2));
+        REQUIRE(wxWindow::FindWindowByName("recognition.engine_settings", fixture.frame) != nullptr);
         REQUIRE(wxWindow::FindWindowByLabel("Output profile", fixture.frame) != nullptr);
         REQUIRE(wxWindow::FindWindowByLabel("Profile settings", fixture.frame) != nullptr);
         auto* meter = dynamic_cast<wxGauge*>(wxWindow::FindWindowByName("audio.level", fixture.frame));
@@ -842,7 +933,8 @@ namespace {
         file.SetValue(wxString::FromUTF8(path.string()));
         click(start);
         pumpEvents();
-        REQUIRE(displayedText(compute).Contains("Active: Vulkan · NVIDIA GeForce RTX 3070"));
+        REQUIRE(displayedText(compute).Contains(
+            wxString::FromUTF8("Active: Vulkan \xC2\xB7 NVIDIA GeForce RTX 3070")));
         details.Collapse(false);
         wxCollapsiblePaneEvent expanded(&details, details.GetId(), false);
         details.GetEventHandler()->ProcessEvent(expanded);
@@ -876,6 +968,23 @@ namespace {
         std::filesystem::remove(path);
     }
 
+    void windowLayoutSurvivesResize()
+    {
+        FrameFixture fixture;
+        std::vector<wxScrolledWindow*> columns;
+        collect(*fixture.frame, columns);
+        fixture.frame->SetSize(fixture.frame->FromDIP(wxSize(1100, 500)));
+        pumpEvents();
+        requireColumnLayout(*fixture.frame);
+        // Keep the fixed-size Audio artwork visible at the minimum frame width,
+        // including when vertical scrolling reduces the available client area.
+        REQUIRE(columns[0]->GetVirtualSize().x <= columns[0]->GetClientSize().x);
+        fixture.frame->SetSize(fixture.frame->FromDIP(wxSize(1400, 850)));
+        pumpEvents();
+        requireColumnLayout(*fixture.frame);
+        REQUIRE(columns[0]->GetVirtualSize().x <= columns[0]->GetClientSize().x);
+    }
+
     void computeSelectionControls()
     {
         FrameFixture fixture;
@@ -898,6 +1007,12 @@ namespace {
         click(fixture.recognition());
         waitFor([&] { return fixture.backend->starts == 1; });
         REQUIRE(fixture.backend->configurations.back().compute.backend == asr::ComputeBackend::cpu);
+        auto* sessionState = dynamic_cast<wxStaticText*>(wxWindow::FindWindowByName("recognition.state", fixture.frame));
+        REQUIRE(sessionState != nullptr);
+        fixture.backend->progress(asr::RecognitionProgressState::inferenceStarted);
+        waitFor([&] { return sessionState->GetLabel() == "Processing..."; });
+        fixture.backend->progress(asr::RecognitionProgressState::inferenceCompletedNoText);
+        waitFor([&] { return sessionState->GetLabel() == "Listening."; });
         REQUIRE(!backend->IsEnabled() && !device->IsEnabled());
         REQUIRE(status->GetLabel() == "Compute: CPU\nActive: CPU");
         click(fixture.recognition());
@@ -940,7 +1055,9 @@ namespace {
                 wxCommandEvent change(wxEVT_CHOICE, device->GetId());
                 change.SetEventObject(device);
                 device->GetEventHandler()->ProcessEvent(change);
-                REQUIRE(displayedText(*status).Contains("Available: Vulkan · GPU one"));
+                // Match the GUI's explicit UTF-8 conversion, not the Windows locale.
+                REQUIRE(displayedText(*status).Contains(
+                    wxString::FromUTF8("Available: Vulkan \xC2\xB7 GPU one")));
             }
             else
                 REQUIRE(displayedText(*status).Contains("Available: CPU"));
@@ -952,7 +1069,8 @@ namespace {
             REQUIRE(fixture.backend->configurations.back().compute.backend == Backend::automatic);
             if (state == 0)
             {
-                REQUIRE(displayedText(*status).Contains("Active: Vulkan · GPU one"));
+                REQUIRE(displayedText(*status).Contains(
+                    wxString::FromUTF8("Active: Vulkan \xC2\xB7 GPU one")));
                 REQUIRE(fixture.backend->configurations.back().compute.deviceIndex == 1);
             }
             else
@@ -986,18 +1104,29 @@ int main(int argc, char** argv)
 {
     REQUIRE(wxEntryStart(argc, argv));
     REQUIRE(wxTheApp->CallOnInit());
-    computeSelectionControls();
-    computeReadinessAndRuntimeStatus();
-    dedicatedBenchmarkOpenCloseAndLayout();
-    benchmarkNoResultAndFrozenAudioSource();
-    guidedBenchmarkControlsAndIsolation();
-    benchmarkStopPreservesUnprocessedResultAndRecoversFailure();
-    recognitionTuningAndColumns();
-    runtimeArmingAndAsyncShutdown();
-    configurableDefaultTarget();
-    invalidArmKeepsRecognitionListening();
-    unsupportedRenderingRemainsObservable();
-    linguisticContextResetsAcrossArms();
+    {
+        // MSW Yield dispatches native messages through wxApp::Dispatch(),
+        // which requires an active loop. GTK also supports this same pump.
+        wxEventLoop eventLoop;
+        wxEventLoopActivator activate(&eventLoop);
+        const auto run = [](const char* name, void (*test)()) {
+            std::cout << "Running " << name << '\n' << std::flush;
+            test();
+        };
+        run("windowLayoutSurvivesResize", windowLayoutSurvivesResize);
+        run("computeSelectionControls", computeSelectionControls);
+        run("computeReadinessAndRuntimeStatus", computeReadinessAndRuntimeStatus);
+        run("dedicatedBenchmarkOpenCloseAndLayout", dedicatedBenchmarkOpenCloseAndLayout);
+        run("benchmarkNoResultAndFrozenAudioSource", benchmarkNoResultAndFrozenAudioSource);
+        run("guidedBenchmarkControlsAndIsolation", guidedBenchmarkControlsAndIsolation);
+        run("benchmarkStopPreservesUnprocessedResultAndRecoversFailure", benchmarkStopPreservesUnprocessedResultAndRecoversFailure);
+        run("recognitionTuningAndColumns", recognitionTuningAndColumns);
+        run("runtimeArmingAndAsyncShutdown", runtimeArmingAndAsyncShutdown);
+        run("configurableDefaultTarget", configurableDefaultTarget);
+        run("invalidArmKeepsRecognitionListening", invalidArmKeepsRecognitionListening);
+        run("unsupportedRenderingRemainsObservable", unsupportedRenderingRemainsObservable);
+        run("linguisticContextResetsAcrossArms", linguisticContextResetsAcrossArms);
+    }
     wxTheApp->OnExit();
     wxEntryCleanup();
 }
