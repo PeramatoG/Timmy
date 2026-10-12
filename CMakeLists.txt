@@ -186,6 +186,8 @@ if(TIMMY_BUILD_GUI)
         endif()
     endif()
 
+    include(cmake/GuiResources.cmake)
+
 endif()
 
 include(cmake/ComputeRuntime.cmake)

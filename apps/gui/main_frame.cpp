@@ -12,6 +12,7 @@
 #include "compute_status.h"
 #include "benchmark_dialog.h"
 #include "command_output_events.h"
+#include "gui_branding.h"
 
 #include "timmy/audio/audio_device_enumerator.h"
 #include "timmy/core/asr_engine_factory.h"
@@ -26,6 +27,8 @@
 #include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wx/gauge.h>
+#include <wx/menu.h>
+#include <wx/settings.h>
 #include <wx/scrolwin.h>
 #include <wx/spinctrl.h>
 #include <wx/statbox.h>
@@ -55,6 +58,13 @@ namespace timmy::gui {
         constexpr int recognitionStateEventId = wxID_HIGHEST + 100;
         constexpr int recognitionDiagnosticEventId = wxID_HIGHEST + 101;
         constexpr int recognitionTranscriptEventId = wxID_HIGHEST + 102;
+        constexpr int recognitionProgressEventId = wxID_HIGHEST + 104;
+
+        struct ProgressEventPayload
+        {
+            std::uint64_t generation;
+            asr::RecognitionProgressState state;
+        };
 
         struct StateEventPayload
         {
@@ -75,6 +85,31 @@ namespace timmy::gui {
             core::RecognitionTranscript transcript;
             std::optional<core::RecognitionBenchmarkAttempt> benchmarkAttempt{};
         };
+
+        void addSectionHeading(wxWindow* parent, wxBoxSizer* sizer,
+            const wxString& title, const wxString& description)
+        {
+            auto* heading = new wxStaticText(parent, wxID_ANY, title);
+            heading->SetFont(heading->GetFont().Scaled(1.15).Bold());
+            sizer->Add(heading, 0, wxLEFT | wxRIGHT | wxTOP, parent->FromDIP(6));
+            auto* hint = new wxStaticText(parent, wxID_ANY, description,
+                wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE);
+            hint->SetMinSize(wxSize(1, -1));
+            hint->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
+            sizer->Add(hint, 0, wxEXPAND | wxALL, parent->FromDIP(6));
+            hint->Bind(wxEVT_SIZE, [hint, description, width = 0](wxSizeEvent& event) mutable {
+                if (event.GetSize().x > hint->FromDIP(80) && event.GetSize().x != width)
+                {
+                    width = event.GetSize().x;
+                    hint->SetLabel(description);
+                    hint->Wrap(width);
+                    hint->SetMinSize(wxSize(1,
+                        static_cast<int>(hint->GetLabel().Freq('\n') + 1) * hint->GetCharHeight() + 2));
+                    hint->CallAfter([hint] { hint->GetParent()->Layout(); });
+                }
+                event.Skip();
+            });
+        }
 
         // Converts a filesystem path without narrowing Windows Unicode text.
         wxString pathToWxString(const std::filesystem::path& path)
@@ -193,7 +228,12 @@ namespace timmy::gui {
 
         // Preserve worker timestamps before the GUI event queue introduces delay.
         void onRecognitionProgress(const asr::RecognitionProgress& progress) override
-        { if (benchmark_) benchmark_->progress(progress); }
+        {
+            if (benchmark_) benchmark_->progress(progress);
+            auto* event = new wxThreadEvent(wxEVT_THREAD, recognitionProgressEventId);
+            event->SetPayload(ProgressEventPayload{generation_, progress.state});
+            wxQueueEvent(&target_, event);
+        }
 
         // Queues raw and normalized UTF-8 transcript text for the GUI thread.
         void onRecognitionTranscript(const core::RecognitionTranscript& transcript) override
@@ -238,7 +278,7 @@ namespace timmy::gui {
     MainFrame::MainFrame(std::shared_ptr<asr::IAsrBackend> backend,
         CommandOutputSession::EmitterFactory emitterFactory, bool initializeAudio,
         std::optional<asr::ComputeDiscovery> computeDiscovery)
-        : wxFrame(nullptr, wxID_ANY, "TIMMY", wxDefaultPosition, wxSize(1400, 850))
+        : wxFrame(nullptr, wxID_ANY, "TIMMY", wxDefaultPosition, wxDefaultSize)
         , backendOverride_(std::move(backend)), outputSession_(std::move(emitterFactory))
     {
         computeDiscovery_ = computeDiscovery ? std::move(*computeDiscovery)
@@ -250,9 +290,16 @@ namespace timmy::gui {
 
         auto* panel = new wxPanel(this);
         auto* mainSizer = new wxBoxSizer(wxVERTICAL);
-        auto* title = new wxStaticText(panel, wxID_ANY,
-            "TIMMY\nThe Imaginary Man, Minding You");
-        mainSizer->Add(title, 0, wxALIGN_CENTER | wxALL, 12);
+        mainSizer->Add(createBrandingHeader(panel), 0, wxEXPAND | wxALL, FromDIP(16));
+        setApplicationIcon(*this);
+        auto* help = new wxMenu;
+        help->Append(wxID_HELP, "&Quick Help\tF1");
+        help->Append(wxID_ABOUT, "&About TIMMY");
+        auto* menuBar = new wxMenuBar;
+        menuBar->Append(help, "&Help");
+        SetMenuBar(menuBar);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { showQuickHelp(this); }, wxID_HELP);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { showAbout(this); }, wxID_ABOUT);
         recognitionSettings_ = asr::defaultSettings(
             core::asrSettingDescriptors(core::availableAsrEngines().front().id));
         auto* columns = new wxBoxSizer(wxHORIZONTAL);
@@ -260,7 +307,8 @@ namespace timmy::gui {
         createRecognitionColumn(panel, columns);
         createOutputColumn(panel, columns);
         mainSizer->Add(columns, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
-        SetMinSize(wxSize(1100, 500));
+        SetSize(FromDIP(wxSize(1400, 850)));
+        SetMinSize(FromDIP(wxSize(1100, 500)));
         panel->SetSizer(mainSizer);
 
         deviceChoice_->Bind(wxEVT_CHOICE, &MainFrame::onDeviceSelected, this);
@@ -271,6 +319,18 @@ namespace timmy::gui {
         Bind(wxEVT_THREAD, &MainFrame::onRecognitionTranscript, this,
             recognitionTranscriptEventId);
         Bind(wxEVT_THREAD, &MainFrame::onExecutionResult, this, commandOutputEventId);
+        Bind(wxEVT_THREAD, [this](wxThreadEvent& event) {
+            const auto payload = event.GetPayload<ProgressEventPayload>();
+            if (!recognitionLifecycle_.accepts(payload.generation)
+                || !recognitionPipeline_
+                || recognitionPipeline_->state() != core::RecognitionPipelineState::listening) return;
+            if (payload.state == asr::RecognitionProgressState::inferenceStarted)
+                recognitionStatusText_->SetLabel("Processing...");
+            else if (payload.state == asr::RecognitionProgressState::waitingForSpeech
+                || payload.state == asr::RecognitionProgressState::inferenceCompletedWithText
+                || payload.state == asr::RecognitionProgressState::inferenceCompletedNoText)
+                recognitionStatusText_->SetLabel("Listening.");
+        }, recognitionProgressEventId);
         Bind(wxEVT_CLOSE_WINDOW, &MainFrame::onClose, this);
         meterTimer_.SetOwner(this);
         Bind(wxEVT_TIMER, &MainFrame::onMeterTimer, this);
@@ -306,43 +366,64 @@ namespace timmy::gui {
     void MainFrame::createAudioColumn(wxWindow* parent, wxBoxSizer* columns)
     {
         auto* panel = new wxScrolledWindow(parent);
-        panel->SetScrollRate(10, 10);
-        panel->SetMinSize(wxSize(250, 200));
+        panel->SetScrollRate(panel->FromDIP(10), panel->FromDIP(10));
+        panel->SetMinSize(panel->FromDIP(wxSize(250, 200)));
         auto* sizer = new wxBoxSizer(wxVERTICAL);
-        sizer->Add(new wxStaticText(panel, wxID_ANY, "Audio"), 0, wxALL, 8);
+        addSectionHeading(panel, sizer, "Audio",
+            "Select the microphone and input channel TIMMY listens to.");
         auto addChoice = [&](const wxString& label, wxChoice*& choice) {
-            auto* row = new wxBoxSizer(wxHORIZONTAL);
+            auto* row = new wxBoxSizer(wxVERTICAL);
             row->Add(new wxStaticText(panel, wxID_ANY, label), 0,
-                wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+                wxBOTTOM, panel->FromDIP(3));
             choice = new wxChoice(panel, wxID_ANY);
-            row->Add(choice, 1, wxEXPAND);
-            sizer->Add(row, 0, wxEXPAND | wxALL, 12);
+            choice->SetMinSize(panel->FromDIP(wxSize(100, -1)));
+            row->Add(choice, 0, wxEXPAND);
+            sizer->Add(row, 0, wxEXPAND | wxALL, panel->FromDIP(6));
         };
         addChoice("Input device:", deviceChoice_);
         addChoice("Channel:", channelChoice_);
         sizer->Add(new wxStaticText(panel, wxID_ANY, "Input level:"), 0,
-            wxLEFT | wxRIGHT | wxTOP, 12);
+            wxLEFT | wxRIGHT | wxTOP, panel->FromDIP(6));
         levelGauge_ = new wxGauge(panel, wxID_ANY, 1000);
+        levelGauge_->SetMinSize(panel->FromDIP(wxSize(100, 14)));
         levelGauge_->SetName("audio.level");
         levelGauge_->SetForegroundColour(wxColour(70, 180, 100));
-        sizer->Add(levelGauge_, 0, wxEXPAND | wxALL, 12);
+        sizer->Add(levelGauge_, 0, wxEXPAND | wxALL, panel->FromDIP(6));
         levelText_ = new wxStaticText(panel, wxID_ANY, "Peak: 0.0000   RMS: 0.0000");
-        sizer->Add(levelText_, 0, wxLEFT | wxRIGHT, 12);
+        sizer->Add(levelText_, 0, wxLEFT | wxRIGHT, panel->FromDIP(6));
         audioStatusText_ = new wxStaticText(panel, wxID_ANY,
-            "Searching for capture devices...");
-        sizer->Add(audioStatusText_, 0, wxALL, 12);
+            "Searching for capture devices...", wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE);
+        audioStatusText_->SetName("audio.capture_status");
+        sizer->Add(audioStatusText_, 0, wxEXPAND | wxALL, panel->FromDIP(6));
+        audioStatusText_->SetMinSize(wxSize(1, -1));
+        audioStatusText_->Bind(wxEVT_SIZE, [this, width = 0](wxSizeEvent& event) mutable {
+            if (event.GetSize().x > FromDIP(80) && event.GetSize().x != width)
+            {
+                width = event.GetSize().x;
+                auto label = audioStatusText_->GetLabel();
+                label.Replace("\n", " ");
+                audioStatusText_->SetLabel(label);
+                audioStatusText_->Wrap(width);
+                audioStatusText_->SetMinSize(wxSize(1,
+                    static_cast<int>(audioStatusText_->GetLabel().Freq('\n') + 1)
+                        * audioStatusText_->GetCharHeight() + 2));
+                audioStatusText_->CallAfter([text = audioStatusText_] { text->GetParent()->Layout(); });
+            }
+            event.Skip();
+        });
         panel->SetSizer(sizer);
-        columns->Add(panel, 1, wxEXPAND | wxALL, 4);
+        columns->Add(panel, 3, wxEXPAND | wxALL, 4);
     }
 
     // Builds the native controls for recognition resources and results.
     void MainFrame::createRecognitionColumn(wxWindow* parent, wxBoxSizer* columns)
     {
         auto* panel = new wxScrolledWindow(parent);
-        panel->SetScrollRate(10, 10);
-        panel->SetMinSize(wxSize(250, 200));
+        panel->SetScrollRate(panel->FromDIP(10), panel->FromDIP(10));
+        panel->SetMinSize(panel->FromDIP(wxSize(250, 200)));
         auto* sizer = new wxBoxSizer(wxVERTICAL);
-        sizer->Add(new wxStaticText(panel, wxID_ANY, "Recognition"), 0, wxALL, 8);
+        addSectionHeading(panel, sizer, "Recognition",
+            "Convert speech into validated lighting commands.");
         auto* selection = new wxStaticBoxSizer(wxVERTICAL, panel, "Recognition engine");
         auto* selectionOwner = selection->GetStaticBox();
         auto* resources = new wxFlexGridSizer(2, 4, 6);
@@ -354,6 +435,7 @@ namespace timmy::gui {
         auto addChoice = [&](const wxString& label, wxChoice*& choice) {
             addLabel(label);
             choice = new wxChoice(selectionOwner, wxID_ANY);
+            choice->SetMinSize(panel->FromDIP(wxSize(120, -1)));
             resources->Add(choice, 1, wxEXPAND);
         };
         auto addPath = [&](const wxString& label, wxTextCtrl*& text, wxButton*& button,
@@ -361,6 +443,7 @@ namespace timmy::gui {
             addLabel(label);
             auto* row = new wxBoxSizer(wxHORIZONTAL);
             text = new wxTextCtrl(selectionOwner, wxID_ANY);
+            text->SetMinSize(panel->FromDIP(wxSize(100, -1)));
             row->Add(text, 1, wxEXPAND | wxRIGHT, 4);
             button = new wxButton(selectionOwner, wxID_ANY, "Browse...");
             button->Bind(wxEVT_BUTTON, handler, this);
@@ -381,6 +464,7 @@ namespace timmy::gui {
         auto* gpuLabel = new wxStaticText(selectionOwner, wxID_ANY, "GPU:");
         resources->Add(gpuLabel, 0, wxALIGN_CENTER_VERTICAL);
         gpuChoice_ = new wxChoice(selectionOwner, wxID_ANY);
+        gpuChoice_->SetMinSize(panel->FromDIP(wxSize(120, -1)));
         resources->Add(gpuChoice_, 1, wxEXPAND);
         gpuChoice_->SetName("recognition.compute_device");
         gpuChoice_->Append("Automatic");
@@ -396,15 +480,12 @@ namespace timmy::gui {
             wxDefaultPosition, wxDefaultSize, wxST_NO_AUTORESIZE);
         computeStatusText_->SetName("recognition.compute_status");
         computeStatusText_->SetMinSize(wxSize(1, -1));
-        computeStatusText_->SetFont(computeStatusText_->GetFont().Bold());
+        computeStatusText_->SetFont(computeStatusText_->GetFont().Scaled(0.95));
         selection->Add(computeStatusText_, 0, wxEXPAND | wxALL, 4);
         computeStatusText_->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
             if (event.GetSize().x != computeStatusWidth_) updateComputeStatus();
             event.Skip();
         });
-        auto* engineHint = new wxStaticText(selectionOwner, wxID_ANY,
-            "Settings below belong to the selected engine.");
-        selection->Add(engineHint, 0, wxALL, 4);
         sizer->Add(selection, 0, wxEXPAND | wxALL, 4);
         auto* session = new wxStaticBoxSizer(wxVERTICAL, panel, "Recognition session");
         auto* sessionOwner = session->GetStaticBox();
@@ -414,9 +495,12 @@ namespace timmy::gui {
         sessionRow->Add(recognitionButton_, 0, wxRIGHT, 6);
         recognitionStatusText_ = new wxStaticText(sessionOwner, wxID_ANY, "Stopped.");
         recognitionStatusText_->SetMinSize(wxSize(1, -1));
+        recognitionStatusText_->SetFont(recognitionStatusText_->GetFont().Bold());
+        recognitionStatusText_->SetName("recognition.state");
         sessionRow->Add(recognitionStatusText_, 1, wxALIGN_CENTER_VERTICAL);
         session->Add(sessionRow, 0, wxEXPAND | wxALL, 4);
         rawTranscriptText_ = new wxStaticText(sessionOwner, wxID_ANY, "Raw transcript: -");
+        rawTranscriptText_->SetMinSize(wxSize(1, -1));
         session->Add(rawTranscriptText_, 0, wxEXPAND | wxALL, 4);
         auto* details = new wxCollapsiblePane(sessionOwner, wxID_ANY, "Transcript details",
             wxDefaultPosition, wxDefaultSize, wxCP_NO_TLW_RESIZE);
@@ -440,7 +524,7 @@ namespace timmy::gui {
         auto* benchmark = new wxStaticBoxSizer(wxVERTICAL, panel, "Recognition benchmark");
         auto* owner = benchmark->GetStaticBox();
         benchmarkPathSummary_ = new wxStaticText(owner, wxID_ANY,
-            "Guided live test. Select a JSONL file in the benchmark window.");
+            "Guided command recognition diagnostics.");
         benchmarkPathSummary_->SetMinSize(wxSize(1, -1));
         benchmark->Add(benchmarkPathSummary_, 0, wxEXPAND | wxALL, 4);
         benchmarkOpenButton_ = new wxButton(owner, wxID_ANY, "Open benchmark...");
@@ -448,7 +532,8 @@ namespace timmy::gui {
         benchmarkOpenButton_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { openBenchmark(); });
         benchmark->Add(benchmarkOpenButton_, 0, wxALL, 4);
         sizer->Add(benchmark, 0, wxEXPAND | wxALL, 4);
-        wxStaticBoxSizer* sectionSizer = nullptr;
+        wxBoxSizer* sectionSizer = nullptr;
+        wxWindow* settingsOwner = nullptr;
         wxFlexGridSizer* settingsGrid = nullptr;
         std::vector<wxFlexGridSizer*> settingsGrids;
         std::string section;
@@ -457,17 +542,27 @@ namespace timmy::gui {
             if (section != descriptor.section)
             {
                 section = descriptor.section;
-                sectionSizer = new wxStaticBoxSizer(wxVERTICAL, panel,
-                    sectionSizer ? wxString::FromUTF8(section) : wxString("Engine settings"));
-                sectionSizer->GetStaticBox()->SetToolTip(wxString::FromUTF8(section));
-                sizer->Add(sectionSizer, 0, wxEXPAND | wxALL, 4);
+                auto* pane = new wxCollapsiblePane(panel, wxID_ANY,
+                    sectionSizer ? wxString::FromUTF8(section) : wxString("Engine settings"),
+                    wxDefaultPosition, wxDefaultSize, wxCP_NO_TLW_RESIZE);
+                pane->SetName(sectionSizer ? "recognition.vad_settings" : "recognition.engine_settings");
+                pane->SetToolTip(wxString::FromUTF8(section));
+                pane->Collapse(true);
+                settingsOwner = pane->GetPane();
+                sectionSizer = new wxBoxSizer(wxVERTICAL);
+                settingsOwner->SetSizer(sectionSizer);
+                sizer->Add(pane, 0, wxEXPAND | wxALL, panel->FromDIP(4));
+                pane->Bind(wxEVT_COLLAPSIBLEPANE_CHANGED, [panel](wxCollapsiblePaneEvent&) {
+                    panel->Layout();
+                    panel->FitInside();
+                });
                 settingsGrid = new wxFlexGridSizer(4, 3, 6);
                 settingsGrid->AddGrowableCol(0);
                 settingsGrid->AddGrowableCol(2);
                 settingsGrids.push_back(settingsGrid);
                 sectionSizer->Add(settingsGrid, 0, wxEXPAND | wxALL, 4);
             }
-            auto* owner = sectionSizer->GetStaticBox();
+            auto* owner = settingsOwner;
             wxString label = wxString::FromUTF8(descriptor.label);
             label.Replace("Thread count (0 = automatic)", "Threads");
             label.Replace("Temperature increment", "Temp. increment");
@@ -515,13 +610,13 @@ namespace timmy::gui {
             control->SetName(wxString::FromUTF8(id));
             tuningControls_.emplace(id, control);
             control->SetToolTip(wxString::FromUTF8(descriptor.label));
-            if (!dynamic_cast<wxCheckBox*>(control)) control->SetMinSize(wxSize(120, -1));
+            if (!dynamic_cast<wxCheckBox*>(control)) control->SetMinSize(panel->FromDIP(wxSize(100, -1)));
             settingsGrid->Add(control, 0, wxALIGN_CENTER_VERTICAL);
         }
         // Pair short properties when there is space; keep one pair per row on
         // smaller windows rather than squeezing labels or numeric input.
         panel->Bind(wxEVT_SIZE, [panel, settingsGrids](wxSizeEvent& event) {
-            const int columns = panel->GetClientSize().x >= 620 ? 4 : 2;
+            const int columns = panel->GetClientSize().x >= panel->FromDIP(620) ? 4 : 2;
             for (auto* grid : settingsGrids)
             {
                 if (grid->GetCols() == columns) continue;
@@ -540,7 +635,7 @@ namespace timmy::gui {
         sizer->Add(resetRecognitionButton_, 0, wxALL, 8);
         refreshRecognitionSettings();
         panel->SetSizer(sizer);
-        columns->Add(panel, 2, wxEXPAND | wxALL, 4);
+        columns->Add(panel, 5, wxEXPAND | wxALL, 4);
     }
 
     // Edits frontend configuration; OSC mapping and execution remain in transport/Core.
@@ -548,17 +643,18 @@ namespace timmy::gui {
     {
         const CommandOutputConfiguration defaults;
         auto* panel = new wxScrolledWindow(parent);
-        panel->SetScrollRate(10, 10);
-        panel->SetMinSize(wxSize(250, 200));
+        panel->SetScrollRate(panel->FromDIP(10), panel->FromDIP(10));
+        panel->SetMinSize(panel->FromDIP(wxSize(250, 200)));
         auto* sizer = new wxBoxSizer(wxVERTICAL);
-        sizer->Add(new wxStaticText(panel, wxID_ANY, "Output"), 0, wxALL, 8);
+        addSectionHeading(panel, sizer, "Output",
+            "Send validated commands to the selected console or output profile.");
         outputEnabledCheck_ = new wxCheckBox(panel, wxID_ANY, "Enable OSC command output");
         outputEnabledCheck_->SetValue(defaults.enabled);
         outputEnabledCheck_->SetToolTip(
             "Arm OSC while listening, or enable it for the next Start listening.");
         outputEnabledCheck_->Bind(wxEVT_CHECKBOX,
             &MainFrame::onOutputConfigurationChanged, this);
-        sizer->Add(outputEnabledCheck_, 0, wxALL, 12);
+        sizer->Add(outputEnabledCheck_, 0, wxALL, panel->FromDIP(6));
         sizer->Add(new wxStaticText(panel, wxID_ANY, "Default command target:"), 0, wxALL, 4);
         defaultTargetChoice_ = new wxChoice(panel, wxID_ANY);
         for (const auto& option : command::defaultTargetOptions)
@@ -618,10 +714,10 @@ namespace timmy::gui {
 
         executionStatusText_ = new wxStaticText(panel, wxID_ANY, "OSC output: Disarmed");
         executionResultText_ = new wxStaticText(panel, wxID_ANY, "Execution: -");
-        sizer->Add(executionStatusText_, 0, wxEXPAND | wxALL, 12);
+        sizer->Add(executionStatusText_, 0, wxEXPAND | wxALL, panel->FromDIP(6));
         sizer->Add(executionResultText_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
         panel->SetSizer(sizer);
-        columns->Add(panel, 1, wxEXPAND | wxALL, 4);
+        columns->Add(panel, 4, wxEXPAND | wxALL, 4);
         updateOutputControls();
     }
 

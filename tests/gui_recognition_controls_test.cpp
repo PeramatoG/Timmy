@@ -9,6 +9,8 @@
  */
 
 #include "main_frame.h"
+#include "gui_branding.h"
+#include <wx/menu.h>
 
 #include <wx/app.h>
 #include <wx/button.h>
@@ -559,11 +561,41 @@ namespace {
             }
         };
         checkDefaults();
+        REQUIRE(fixture.frame->GetMenuBar()->FindItem(wxID_HELP) != nullptr);
+        REQUIRE(fixture.frame->GetMenuBar()->FindItem(wxID_ABOUT) != nullptr);
+        REQUIRE(wxString(TIMMY_GUI_VERSION) == wxString(TIMMY_EXPECTED_PROJECT_VERSION));
+        REQUIRE(!gui::brandingBitmap("missing-ui010.png", *fixture.frame, 44).IsOk());
+        REQUIRE(wxWindow::FindWindowByName("branding.title", fixture.frame) != nullptr);
+        for (const auto* name : {"recognition.engine_settings", "recognition.vad_settings"})
+        {
+            auto* pane = dynamic_cast<wxCollapsiblePane*>(wxWindow::FindWindowByName(name, fixture.frame));
+            REQUIRE(pane != nullptr && pane->IsCollapsed());
+            const auto* setting = wxString(name).Contains("vad") ? "vad.speech_threshold" : "whisper.threads";
+            auto* before = wxWindow::FindWindowByName(setting, fixture.frame);
+            REQUIRE(before != nullptr && before->GetParent() == pane->GetPane());
+            pane->Collapse(false);
+            wxCollapsiblePaneEvent expanded(pane, pane->GetId(), false);
+            pane->GetEventHandler()->ProcessEvent(expanded);
+            pumpEvents();
+            REQUIRE(wxWindow::FindWindowByName(setting, fixture.frame) == before);
+            REQUIRE(before->IsShownOnScreen());
+            checkDefaults();
+            pane->Collapse(true);
+            wxCollapsiblePaneEvent collapsed(pane, pane->GetId(), true);
+            pane->GetEventHandler()->ProcessEvent(collapsed);
+        }
+        pumpEvents();
+        auto* captureStatus = wxWindow::FindWindowByName("audio.capture_status", fixture.frame);
+        REQUIRE(captureStatus != nullptr && captureStatus->IsShownOnScreen());
+        REQUIRE(captureStatus->GetSize().y >= captureStatus->GetCharHeight());
+        REQUIRE(columns[0]->GetVirtualSize().x <= columns[0]->GetClientSize().x);
+        REQUIRE(columns[1]->GetVirtualSize().y <= columns[1]->GetClientSize().y);
         auto* settingLabel = wxWindow::FindWindowByLabel("Threads", fixture.frame);
         REQUIRE(settingLabel != nullptr);
         auto* propertyGrid = dynamic_cast<wxFlexGridSizer*>(settingLabel->GetContainingSizer());
-        REQUIRE(propertyGrid != nullptr && propertyGrid->GetCols() == 4);
-        REQUIRE(wxWindow::FindWindowByLabel("Engine settings", fixture.frame) != nullptr);
+        REQUIRE(propertyGrid != nullptr && propertyGrid->GetCols()
+            == (columns[1]->GetClientSize().x >= columns[1]->FromDIP(620) ? 4 : 2));
+        REQUIRE(wxWindow::FindWindowByName("recognition.engine_settings", fixture.frame) != nullptr);
         REQUIRE(wxWindow::FindWindowByLabel("Output profile", fixture.frame) != nullptr);
         REQUIRE(wxWindow::FindWindowByLabel("Profile settings", fixture.frame) != nullptr);
         auto* meter = dynamic_cast<wxGauge*>(wxWindow::FindWindowByName("audio.level", fixture.frame));
@@ -898,6 +930,12 @@ namespace {
         click(fixture.recognition());
         waitFor([&] { return fixture.backend->starts == 1; });
         REQUIRE(fixture.backend->configurations.back().compute.backend == asr::ComputeBackend::cpu);
+        auto* sessionState = dynamic_cast<wxStaticText*>(wxWindow::FindWindowByName("recognition.state", fixture.frame));
+        REQUIRE(sessionState != nullptr);
+        fixture.backend->progress(asr::RecognitionProgressState::inferenceStarted);
+        waitFor([&] { return sessionState->GetLabel() == "Processing..."; });
+        fixture.backend->progress(asr::RecognitionProgressState::inferenceCompletedNoText);
+        waitFor([&] { return sessionState->GetLabel() == "Listening."; });
         REQUIRE(!backend->IsEnabled() && !device->IsEnabled());
         REQUIRE(status->GetLabel() == "Compute: CPU\nActive: CPU");
         click(fixture.recognition());
