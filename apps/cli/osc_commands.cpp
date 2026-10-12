@@ -30,6 +30,7 @@ namespace timmy::cli {
         struct OscSendOptions
         {
             std::string profile = "generic";
+            command::TargetType defaultTarget = command::TargetType::channel;
             transport::Hydra2OscOptions hydra;
             bool hydraOptions = false;
             bool dryRun = false;
@@ -47,6 +48,7 @@ namespace timmy::cli {
                    "--command \"Channel 1 At 50\"\n\n"
                 << "Use --dry-run --command <text> to inspect processing without a destination.\n"
                 << "Profiles: --profile generic (default) or hydra2.\n"
+                << "Default target: --default-target channel (default), fixture or group.\n"
                 << "Hydra II: --key-hold-ms <ms> --key-gap-ms <ms> --pre-clear\n"
                 << "This path sends one explicitly supplied semantic command; "
                    "recognized voice commands are not sent.\n";
@@ -89,6 +91,12 @@ namespace timmy::cli {
                 {
                     if (value != "generic" && value != "hydra2") return std::nullopt;
                     options.profile = value;
+                }
+                else if (option == "--default-target")
+                {
+                    const auto target = command::defaultTargetFromName(value);
+                    if (!target) return std::nullopt;
+                    options.defaultTarget = *target;
                 }
                 else if (option == "--key-hold-ms" || option == "--key-gap-ms")
                 {
@@ -151,13 +159,15 @@ namespace timmy::cli {
             return 2;
         }
 
-        const auto languageProfile = options->profile == "hydra2"
+        auto languageProfile = options->profile == "hydra2"
             ? command::hydra2CommandProfile(options->hydra.preClear) : command::CommandProfile{};
+        languageProfile.parsing.defaultTarget = options->defaultTarget;
         const auto processed = command::CommandProcessor{languageProfile}.process(options->commandText);
         const auto& parsed = processed.parsed;
         std::cout << "HEARD: " << processed.transcript.originalText
             << "\nNORMALIZED: " << processed.transcript.normalizedText
             << "\nREPAIRED: " << processed.repair.repairedText << '\n';
+        for (const auto& reason : parsed.inferenceReasons) std::cout << "NUMERIC RESOLUTION: " << reason << '\n';
         if (parsed.command) std::cout << "PARSED INTENT: " << command::describe(*parsed.command) << '\n';
         std::cout << "VALIDATION: " << (processed.validation.accepted ? "accepted" : "rejected") << '\n';
         if (processed.rendering.text) std::cout << "RENDERED COMMAND: " << *processed.rendering.text << '\n';

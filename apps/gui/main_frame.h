@@ -137,6 +137,7 @@ namespace timmy::gui {
         wxStaticText* semanticCommandText_ = nullptr;
         wxCheckBox* outputEnabledCheck_ = nullptr;
         wxChoice* outputProfileChoice_ = nullptr;
+        wxChoice* defaultTargetChoice_ = nullptr;
         wxTextCtrl* outputHostText_ = nullptr;
         wxTextCtrl* outputPortText_ = nullptr;
         wxTextCtrl* hydraHoldText_ = nullptr;

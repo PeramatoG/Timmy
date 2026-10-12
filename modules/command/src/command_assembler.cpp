@@ -71,6 +71,30 @@ namespace timmy::command {
                 return {AssemblyState::complete, std::move(combined)};
             }
         }
+        // An omitted-target numeric fragment may now be complete on its own.
+        // Preserve its role as a continuation of an explicit pending selection
+        // before letting the configured default replace that selection/type.
+        auto numericStart = normalizedFragment;
+        while (!numericStart.empty() && std::isspace(static_cast<unsigned char>(numericStart.front())))
+            numericStart.remove_prefix(1);
+        if (!pending_.empty() && !fragment.explicitTargetType
+            && fragment.state == CommandTextState::complete && !numericStart.empty()
+            && numericStart.front() >= '0' && numericStart.front() <= '9'
+            && pending_.size() + normalizedFragment.size() + 1 <= maxPendingLength)
+        {
+            std::string combined = pending_ + " " + std::string(normalizedFragment);
+            const auto classification = parser.classify(combined, context);
+            if (classification.state == CommandTextState::complete)
+            {
+                pending_.clear();
+                return {AssemblyState::complete, std::move(combined)};
+            }
+            if (classification.state == CommandTextState::pending)
+            {
+                pending_ = std::move(combined);
+                return {AssemblyState::pending, pending_};
+            }
+        }
         if (fragment.state == CommandTextState::complete)
         {
             pending_.clear();

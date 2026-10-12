@@ -187,6 +187,16 @@ namespace {
         genericConfiguration.profile = gui::OutputProfile::genericOsc;
         REQUIRE(command::CommandProcessor{gui::commandProfileForOutput(genericConfiguration)}
             .process("enciende canal 1").rendering.text == "Channel 1 At 100");
+        for (const auto& option : command::defaultTargetOptions) {
+            genericConfiguration.defaultTarget = option.type;
+            const auto profile = gui::commandProfileForOutput(genericConfiguration);
+            REQUIRE(profile.parsing.defaultTarget == option.type);
+            const auto result = command::CommandProcessor{profile}.process("20 50");
+            REQUIRE(result.validation.accepted && result.parsed.command);
+            REQUIRE(std::get<command::SetIntensity>(*result.parsed.command).target.type == option.type);
+            REQUIRE(command::CommandProcessor{profile}.process("canal 20 50").rendering.text == "Channel 20 At 50");
+        }
+        REQUIRE(gui::CommandOutputConfiguration{}.defaultTarget == command::TargetType::channel);
         FactoryProbe factory;
         gui::CommandOutputSession session(factory.factory());
         const auto reject = [&](const auto& configuration, const std::string& field) {

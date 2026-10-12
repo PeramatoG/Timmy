@@ -276,3 +276,19 @@ boundaries. Model selection, CPU/GPU policy, decoder settings, prompt/grammar,
 Silero endpoint options, command semantics, rendering and OSC behavior are
 unchanged. Upstream ring occupancy and worker-stage timestamps are observations;
 this change does not flush extra captured audio or tune recognition to hide backlog.
+
+## Contextual numeric-role diagnostics (CMD-NUM-020)
+
+The live corpus and expected semantic results remain unchanged. Deterministic
+regressions feed connector-loss transcripts into the same recognition pipeline,
+including `canales 1 a 10 excepto 5 a 50`, omitted targets, and ON/OFF bare lists.
+JSONL adds `numeric_inference_reasons` (an array, empty for explicit parsing and
+null for no-result attempts) and `recognition_settings.default_target`. Existing
+`repair_applied`/`repairs` distinguish lexical repair from numeric inference;
+both may be applied to one transcript. Benchmark Details shows the numeric reasons.
+
+Keep the next live run on Whisper Base Q5_1, Spanish, Silero VAD with 300 ms
+minimum silence, Vocabulary Grammar ON and Compact Prompt ON, using the current
+beam search and grammar penalty. Select Channel as the default target for the
+existing live corpus. This change does not tune ASR or run a Small-model comparison;
+the next microphone benchmark measures semantic/contextual recovery alone.

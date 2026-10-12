@@ -11,6 +11,20 @@
 #include "timmy/command/command_profile.h"
 #include "timmy/command/command_lexicon.h"
 namespace timmy::command {
+    std::optional<TargetType> defaultTargetFromName(std::string_view name)
+    {
+        for (const auto& option : defaultTargetOptions)
+            if (option.name == name) return option.type;
+        return std::nullopt;
+    }
+
+    std::string_view defaultTargetName(TargetType type)
+    {
+        for (const auto& option : defaultTargetOptions)
+            if (option.type == type) return option.name;
+        return {};
+    }
+
     CommandProfile hydra2CommandProfile(bool preClear)
     {
         CommandProfile profile;

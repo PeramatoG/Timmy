@@ -524,6 +524,15 @@ namespace timmy::gui {
         outputEnabledCheck_->Bind(wxEVT_CHECKBOX,
             &MainFrame::onOutputConfigurationChanged, this);
         sizer->Add(outputEnabledCheck_, 0, wxALL, 12);
+        sizer->Add(new wxStaticText(panel, wxID_ANY, "Default command target:"), 0, wxALL, 4);
+        defaultTargetChoice_ = new wxChoice(panel, wxID_ANY);
+        for (const auto& option : command::defaultTargetOptions)
+            defaultTargetChoice_->Append(wxString::FromUTF8(option.name.data()));
+        defaultTargetChoice_->SetSelection(0);
+        defaultTargetChoice_->SetName("command.default_target");
+        defaultTargetChoice_->SetToolTip("Used when a command omits channel, fixture or group.");
+        defaultTargetChoice_->Bind(wxEVT_CHOICE, &MainFrame::onOutputConfigurationChanged, this);
+        sizer->Add(defaultTargetChoice_, 0, wxEXPAND | wxALL, 4);
 
         auto* grid = new wxFlexGridSizer(2, 4, 6);
         wxWindow* settingsOwner = panel;
@@ -866,6 +875,7 @@ namespace timmy::gui {
         const bool hydra = idle && outputProfileChoice_->GetSelection() == 0;
         outputEnabledCheck_->Enable(!recognitionLifecycle_.stopping() && !closing_ && !benchmarkSession_);
         outputProfileChoice_->Enable(idle);
+        defaultTargetChoice_->Enable(idle);
         outputHostText_->Enable(idle);
         outputPortText_->Enable(idle);
         hydraHoldText_->Enable(hydra);
@@ -914,6 +924,9 @@ namespace timmy::gui {
         configuration.keyHoldMs = hydraHoldText_->GetValue().ToStdString(wxConvUTF8);
         configuration.keyGapMs = hydraGapText_->GetValue().ToStdString(wxConvUTF8);
         configuration.preClear = hydraPreClearCheck_->GetValue();
+        const auto targetIndex = defaultTargetChoice_->GetSelection();
+        if (targetIndex >= 0 && static_cast<std::size_t>(targetIndex) < command::defaultTargetOptions.size())
+            configuration.defaultTarget = command::defaultTargetOptions[static_cast<std::size_t>(targetIndex)].type;
         return configuration;
     }
 

@@ -15,7 +15,9 @@
 
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace timmy::command {
 
@@ -30,6 +32,7 @@ namespace timmy::command {
         SemanticParseState state{SemanticParseState::unsupportedOrInvalid};
         std::optional<SemanticCommand> command;
         std::optional<TargetType> explicitTargetType;
+        std::vector<std::string> inferenceReasons{};
     };
 
     // Both assembly and semantic parsing use this one grammar classification.
@@ -39,6 +42,7 @@ namespace timmy::command {
         CommandTextState state{CommandTextState::invalid};
         std::optional<SemanticCommand> command;
         std::optional<TargetType> explicitTargetType;
+        std::vector<std::string> inferenceReasons{};
     };
 
     // Linguistic context only: never stores the console's selected identifiers.
@@ -62,6 +66,8 @@ namespace timmy::command {
             const CommandContext& context = {}) const;
 
     private:
+        [[nodiscard]] CommandTextResult classifyCanonical(std::vector<std::string> words,
+            const CommandContext& context) const;
         SemanticParsingConfiguration configuration_;
     };
 

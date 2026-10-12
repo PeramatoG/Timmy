@@ -68,6 +68,7 @@ namespace timmy::core {
         std::string repairedTranscript{};
         bool repairApplied{false};
         std::vector<command::CommandRepair> repairs{};
+        std::vector<std::string> numericInferenceReasons{};
     };
 
     class IRecognitionPipelineObserver

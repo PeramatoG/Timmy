@@ -39,6 +39,7 @@ namespace timmy::gui {
         std::string keyHoldMs = std::to_string(transport::Hydra2OscOptions{}.hold.count());
         std::string keyGapMs = std::to_string(transport::Hydra2OscOptions{}.gap.count());
         bool preClear = false;
+        command::TargetType defaultTarget = command::TargetType::channel;
 
         bool operator==(const CommandOutputConfiguration&) const = default;
     };

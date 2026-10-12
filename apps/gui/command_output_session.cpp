@@ -45,8 +45,10 @@ namespace timmy::gui {
 
     command::CommandProfile commandProfileForOutput(const CommandOutputConfiguration& configuration)
     {
-        return configuration.profile == OutputProfile::hydra2
+        auto profile = configuration.profile == OutputProfile::hydra2
             ? command::hydra2CommandProfile(configuration.preClear) : command::CommandProfile{};
+        profile.parsing.defaultTarget = configuration.defaultTarget;
+        return profile;
     }
 
     CommandOutputSession::CommandOutputSession(EmitterFactory factory)

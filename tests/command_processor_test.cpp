@@ -114,7 +114,7 @@ int main()
         require(intensity(command::CommandProcessor{fixtureDefault}.process("apaga 10")).target.type
             == command::TargetType::fixture, "Alternate default target");
         for (const auto text : {"enciende los canales del 2 al 40", "on channels 2 through 40",
-                "enciende canales 2 hasta 40", "enciende canales 2 a 40"}) {
+                "enciende canales 2 hasta 40", "enciende canales 2 a 40", "enciende canal 2 a 40"}) {
             const auto result = processor.process(text);
             const auto& range = intensity(result);
             require(range.target.included.size() == 1 && range.target.included[0].first == 2
@@ -171,7 +171,7 @@ int main()
         require(intensity(command::CommandProcessor{alternate}.process("ignite channel 1")).level.percent() == 100,
             "Profile parsing vocabulary");
         for (const auto text : {"apaga canal 0", "canales del 40 al 2 al 50", "channel 1 at 101",
-                "enciende canal 1 basura", "enciende canal 1 at 50", "apaga canal 10 al 50", "apaga canal 10 a 50", "apaga canal 1 at full", "channel 1 at 50; delete all", "record cue 1", "off all except 3", ""}) {
+                "enciende canal 1 basura", "enciende canal 1 at 50", "apaga canal 10 al 50", "apaga canal 1 at full", "channel 1 at 50; delete all", "record cue 1", "off all except 3", ""}) {
             const auto result = processor.process(text);
             require(!result.parsed.command && !result.rendering.text, "Unsupported expression produced output");
         }
