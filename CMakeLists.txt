@@ -187,3 +187,6 @@ if(TIMMY_BUILD_GUI)
     endif()
 
 endif()
+
+include(cmake/ComputeRuntime.cmake)
+timmy_stage_directory("${PROJECT_SOURCE_DIR}")

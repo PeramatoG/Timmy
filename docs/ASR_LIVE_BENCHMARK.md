@@ -203,6 +203,14 @@ empty and inference metrics/language remain available. Absence outcomes retain
 armed diagnostics. Version 1 used `no_result` for operator intervention; readers
 must select interpretation by `schema_version`. The corpus remains timmy-live-v1.
 
+GPU-010 adds compute metadata without changing schema-2 outcome semantics:
+`requested_compute_backend`, `requested_device`, `active_compute_backend`,
+`active_device`, `compute_device_index`, `compute_device_name`, `fallback_used`,
+`fallback_reason`, and `compute_discovery` (compiled/available Vulkan and detected
+device IDs, names, indices and classes). Active values are null when the backend
+does not report them. Older rows omit these fields; readers must tolerate missing
+or unknown additive fields. Compute diagnostics survive no-result outcomes.
+
 Armed input measurements count selected-channel samples delivered to Core while
 armed, before adaptation to 16 kHz. Duration uses the source sample rate; peak is
 the maximum absolute sample and RMS includes all armed samples. Speech and endpoint

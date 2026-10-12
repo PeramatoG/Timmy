@@ -37,6 +37,7 @@ namespace timmy::core {
     };
 
     [[nodiscard]] const std::vector<AsrEngineDescriptor>& availableAsrEngines();
+    [[nodiscard]] asr::ComputeDiscovery availableComputeDevices(AsrEngineId engine);
     [[nodiscard]] const std::vector<asr::SettingDescriptor>& asrSettingDescriptors(
         AsrEngineId engine);
     [[nodiscard]] std::shared_ptr<asr::IAsrBackend> createAsrBackend(

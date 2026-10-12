@@ -461,3 +461,11 @@ set_tests_properties(timmy.cli_default_group_on PROPERTIES
 add_test(NAME timmy.cli_invalid_default_target COMMAND timmy_cli osc send --dry-run
     --default-target cue --command "20 50")
 set_tests_properties(timmy.cli_invalid_default_target PROPERTIES WILL_FAIL TRUE)
+add_executable(timmy_compute_selection_tests compute_selection_test.cpp)
+target_link_libraries(timmy_compute_selection_tests PRIVATE timmy_core)
+if(MSVC)
+    target_compile_options(timmy_compute_selection_tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(timmy_compute_selection_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME timmy.compute_selection COMMAND timmy_compute_selection_tests)

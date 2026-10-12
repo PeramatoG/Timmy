@@ -388,6 +388,28 @@ int main(int argc, char** argv)
                 1, fixture.recognize("selecciona, fishtur cinco")) << '\n';
             return 0;
         }
+        if (argc == 2 && std::string(argv[1]) == "--compute-fixtures")
+        {
+            Fixture fixture;
+            using Backend = asr::ComputeBackend;
+            const asr::ComputeDiscovery discovery{true, true,
+                {{Backend::vulkan, 1, "Vulkan1", "GPU \"one\" · Vulkan", "gpu"}}, {}};
+            for (auto requested : {Backend::automatic, Backend::cpu, Backend::vulkan})
+            for (bool succeeds : {true, false}) {
+                auto source = snapshot();
+                source.configuration.compute = {requested, 1};
+                auto recognized = fixture.recognize("Channel 1 At 50");
+                recognized.diagnostics.compute = asr::initializeCompute(source.configuration.compute,
+                    discovery, [succeeds](const auto& d) { return succeeds || d.backend == Backend::cpu; });
+                for (auto outcome : {core::BenchmarkRecognitionOutcome::finalResult,
+                        core::BenchmarkRecognitionOutcome::noSpeech,
+                        core::BenchmarkRecognitionOutcome::emptyAsrResult,
+                        core::BenchmarkRecognitionOutcome::operatorNoResult})
+                    std::cout << core::benchmarkJson(source, "compute", core::liveBenchmarkCases().front(),
+                        1, recognized, outcome) << '\n';
+            }
+            return 0;
+        }
         if (argc == 2 && std::string(argv[1]) == "--json-fixture")
         { std::cout << jsonFixture() << '\n'; return 0; }
         if (argc == 2 && std::string(argv[1]) == "--guidance-fixtures")

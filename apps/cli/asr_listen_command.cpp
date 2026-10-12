@@ -43,6 +43,7 @@ namespace timmy::cli {
             std::filesystem::path modelPath;
             std::filesystem::path vadModelPath;
             std::optional<std::string> preferredLanguage;
+            asr::ComputeSelection compute{};
             std::string profile;
             command::TargetType defaultTarget = command::TargetType::channel;
             std::string host;
@@ -188,6 +189,8 @@ namespace timmy::cli {
                 << "  --vad-model PATH   Local ggml-silero-v6.2.0.bin file.\n"
                 << "  --language CODE    Preferred language code.\n"
                 << "  --default-target TYPE  channel (default), fixture or group.\n"
+                << "  --compute ID       automatic (default), cpu, or vulkan.\n"
+                << "  --compute-device N GGML GPU index (default: automatic).\n"
                 << "  --profile NAME     Opt in to hydra2 or generic OSC emission.\n"
                 << "  --host HOST        Required with --profile.\n"
                 << "  --port PORT        Required with --profile (Hydra II: 8000).\n"
@@ -252,6 +255,21 @@ namespace timmy::cli {
                             if (argument == "--key-hold-ms") options.hydra.hold = std::chrono::milliseconds{number};
                             else options.hydra.gap = std::chrono::milliseconds{number};
                         }
+                    }
+                    continue;
+                }
+                if (argument == "--compute" || argument == "--compute-device")
+                {
+                    if (index + 1 >= argc) return false;
+                    const std::string value = argv[++index];
+                    if (argument == "--compute") {
+                        try { options.compute.backend = asr::computeBackendFromId(value); }
+                        catch (const std::invalid_argument&) { return false; }
+                    } else {
+                        int device = -1;
+                        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), device);
+                        if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || device < 0) return false;
+                        options.compute.deviceIndex = device;
                     }
                     continue;
                 }
@@ -359,8 +377,13 @@ namespace timmy::cli {
         asr::AsrConfiguration asrConfiguration;
         asrConfiguration.modelResourcePath = options.modelPath;
         asrConfiguration.preferredLanguage = options.preferredLanguage;
+        asrConfiguration.compute = options.compute;
         asrConfiguration.recognitionHints = core::commandRecognitionHints(languageProfile);
         const auto asrStart = pipeline.start(asrConfiguration);
+        if (asrStart.succeeded) {
+            const auto diagnostics = pipeline.attemptDiagnostics();
+            if (diagnostics.compute) std::cout << asr::computeStatus(*diagnostics.compute) << '\n';
+        }
         if (!asrStart.succeeded)
         {
             std::cerr

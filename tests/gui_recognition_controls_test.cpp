@@ -84,6 +84,7 @@ namespace {
     {
         for (auto* child : parent.GetChildren())
         {
+            if (child->GetName().StartsWith("recognition.compute")) continue;
             if (child->GetName().StartsWith("benchmark.") && !dynamic_cast<wxStaticText*>(child)) continue;
             if (child->GetName().StartsWith("whisper.") || child->GetName().StartsWith("vad.")) continue;
             if (auto* button = dynamic_cast<wxButton*>(child);
@@ -170,6 +171,13 @@ namespace {
         }
 
         std::vector<asr::AsrConfiguration> configurations;
+        std::optional<asr::ComputeDiagnostics> compute{};
+        asr::AttemptDiagnostics attemptDiagnostics() const override
+        {
+            asr::AttemptDiagnostics diagnostics;
+            diagnostics.compute = compute;
+            return diagnostics;
+        }
         std::atomic<int> starts{0}, resets{0};
         std::atomic<asr::AttemptGeneration> generation{0};
         std::atomic<bool> resetEntered{false};
@@ -861,6 +869,39 @@ namespace {
         std::filesystem::remove(path);
     }
 
+    void computeSelectionControls()
+    {
+        FrameFixture fixture;
+        auto* backend = dynamic_cast<wxChoice*>(wxWindow::FindWindowByName("recognition.compute_backend", fixture.frame));
+        auto* device = dynamic_cast<wxChoice*>(wxWindow::FindWindowByName("recognition.compute_device", fixture.frame));
+        auto* status = dynamic_cast<wxStaticText*>(wxWindow::FindWindowByName("recognition.compute_status", fixture.frame));
+        REQUIRE(backend && device && status);
+        REQUIRE(backend->GetSelection() == 0 && device->GetSelection() == 0);
+        backend->SetSelection(1);
+        wxCommandEvent change(wxEVT_CHOICE, backend->GetId());
+        change.SetEventObject(backend);
+        backend->GetEventHandler()->ProcessEvent(change);
+        REQUIRE(!device->IsEnabled());
+        fixture.backend->compute = asr::initializeCompute({asr::ComputeBackend::cpu, {}}, {},
+            [](const auto&) { return true; });
+        click(fixture.recognition());
+        waitFor([&] { return fixture.backend->starts == 1; });
+        REQUIRE(fixture.backend->configurations.back().compute.backend == asr::ComputeBackend::cpu);
+        REQUIRE(!backend->IsEnabled() && !device->IsEnabled());
+        REQUIRE(status->GetLabel() == "Recognition device: CPU");
+        click(fixture.recognition());
+        waitFor([&] { return backend->IsEnabled(); });
+        click(fixture.reset());
+        REQUIRE(backend->GetSelection() == 0 && device->GetSelection() == 0);
+        backend->SetSelection(2);
+        fixture.backend->compute = asr::initializeCompute({asr::ComputeBackend::vulkan, {}}, {},
+            [](const auto&) { return true; });
+        click(fixture.recognition());
+        waitFor([&] { return fixture.backend->starts == 2; });
+        REQUIRE(fixture.backend->configurations.back().compute.backend == asr::ComputeBackend::vulkan);
+        REQUIRE(status->GetLabel().Contains("using CPU"));
+    }
+
     class TestApp final : public wxApp
     {
     public:
@@ -879,6 +920,7 @@ int main(int argc, char** argv)
 {
     REQUIRE(wxEntryStart(argc, argv));
     REQUIRE(wxTheApp->CallOnInit());
+    computeSelectionControls();
     dedicatedBenchmarkOpenCloseAndLayout();
     benchmarkNoResultAndFrozenAudioSource();
     guidedBenchmarkControlsAndIsolation();

@@ -23,6 +23,24 @@ assert entry["schema_version"] == 2 and entry["corpus_version"] == "timmy-live-v
 assert entry["result"] == "PASS" and entry["expected_no_command"] is False
 assert entry["attempt_number"] == 2 and entry["retry_number"] == 1
 assert entry["metrics"] == {"audio_duration_seconds": 2.5, "inference_duration_seconds": 0.75}
+assert entry["requested_compute_backend"] == "automatic"
+assert entry["active_compute_backend"] is None and entry["fallback_used"] is None
+compute_rows = [json.loads(row) for row in subprocess.check_output(
+    [sys.argv[1], "--compute-fixtures"], encoding="utf-8").splitlines()]
+assert len(compute_rows) == 24
+for index, requested in enumerate(("automatic", "cpu", "vulkan")):
+    for failed in (False, True):
+        for row in compute_rows[index * 8 + int(failed) * 4:index * 8 + int(failed) * 4 + 4]:
+            active_gpu = requested != "cpu" and not failed
+            assert row["requested_compute_backend"] == requested
+            assert row["active_compute_backend"] == ("vulkan" if active_gpu else "cpu")
+            assert row["requested_device"] == 1
+            assert row["compute_device_index"] == (1 if active_gpu else None)
+            assert row["compute_device_name"] == ('GPU "one" · Vulkan' if active_gpu else "CPU")
+            assert row["fallback_used"] == (requested != "cpu" and failed)
+            assert bool(row["fallback_reason"]) == row["fallback_used"]
+            assert row["compute_discovery"]["vulkan_compiled"] is True
+            assert row["compute_discovery"]["devices"][0]["class"] == "gpu"
 snapshot = entry["recognition_settings"]
 assert snapshot["default_target"] == "channel"
 assert entry["numeric_inference_reasons"] == []

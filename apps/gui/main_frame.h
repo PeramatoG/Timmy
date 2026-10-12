@@ -121,6 +121,10 @@ namespace timmy::gui {
         wxButton* modelBrowseButton_ = nullptr;
         wxButton* vadBrowseButton_ = nullptr;
         wxChoice* languageChoice_ = nullptr;
+        wxChoice* computeChoice_ = nullptr;
+        wxChoice* gpuChoice_ = nullptr;
+        wxStaticText* computeStatusText_ = nullptr;
+        std::vector<asr::ComputeDevice> computeDevices_;
         wxButton* recognitionButton_ = nullptr;
         BenchmarkDialog* benchmarkDialog_ = nullptr;
         wxButton* benchmarkOpenButton_ = nullptr;
