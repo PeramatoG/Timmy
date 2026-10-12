@@ -366,6 +366,25 @@ namespace timmy::gui {
         addPath("ASR model:", modelPathText_, modelBrowseButton_, &MainFrame::onBrowseModel);
         addPath("VAD model:", vadPathText_, vadBrowseButton_, &MainFrame::onBrowseVadModel);
         addChoice("Language:", languageChoice_);
+        addChoice("Compute device:", computeChoice_);
+        computeChoice_->SetName("recognition.compute_backend");
+        computeChoice_->Append("Automatic (recommended)");
+        computeChoice_->Append("CPU");
+        computeChoice_->Append("Vulkan");
+        computeChoice_->SetSelection(0);
+        computeChoice_->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { updateRecognitionControls(); });
+        auto* gpuLabel = new wxStaticText(selectionOwner, wxID_ANY, "GPU:");
+        resources->Add(gpuLabel, 0, wxALIGN_CENTER_VERTICAL);
+        gpuChoice_ = new wxChoice(selectionOwner, wxID_ANY);
+        resources->Add(gpuChoice_, 1, wxEXPAND);
+        gpuChoice_->SetName("recognition.compute_device");
+        gpuChoice_->Append("Automatic");
+        computeDevices_ = core::availableComputeDevices(core::availableAsrEngines().front().id).devices;
+        for (const auto& device : computeDevices_)
+            gpuChoice_->Append(wxString::FromUTF8(device.name));
+        gpuChoice_->SetSelection(0);
+        gpuLabel->Show(computeDevices_.size() > 1);
+        gpuChoice_->Show(computeDevices_.size() > 1);
         selection->Add(resources, 0, wxEXPAND | wxALL, 4);
         auto* engineHint = new wxStaticText(selectionOwner, wxID_ANY,
             "Settings below belong to the selected engine.");
@@ -381,6 +400,9 @@ namespace timmy::gui {
         recognitionStatusText_->SetMinSize(wxSize(1, -1));
         sessionRow->Add(recognitionStatusText_, 1, wxALIGN_CENTER_VERTICAL);
         session->Add(sessionRow, 0, wxEXPAND | wxALL, 4);
+        computeStatusText_ = new wxStaticText(sessionOwner, wxID_ANY, "Recognition device: inactive");
+        computeStatusText_->SetName("recognition.compute_status");
+        session->Add(computeStatusText_, 0, wxEXPAND | wxALL, 4);
         rawTranscriptText_ = new wxStaticText(sessionOwner, wxID_ANY, "Raw transcript: -");
         session->Add(rawTranscriptText_, 0, wxEXPAND | wxALL, 4);
         auto* details = new wxCollapsiblePane(sessionOwner, wxID_ANY, "Transcript details",
@@ -672,7 +694,10 @@ namespace timmy::gui {
         if (!recognitionLifecycle_.canConfigure() || closing_) return;
         recognitionSettings_ = asr::defaultSettings(
             core::asrSettingDescriptors(core::availableAsrEngines().front().id));
+        computeChoice_->SetSelection(0);
+        gpuChoice_->SetSelection(0);
         refreshRecognitionSettings();
+        updateRecognitionControls();
     }
 
     // Discovers capture devices and starts the platform default selection.
@@ -834,6 +859,7 @@ namespace timmy::gui {
         updateRecognitionControls();
         updateOutputStatus();
         const auto& diagnostic = recognitionLifecycle_.diagnostic();
+        computeStatusText_->SetLabel("Recognition device: inactive");
         recognitionStatusText_->SetLabel(!diagnostic.empty()
             ? wxString::FromUTF8(diagnostic)
             : (stopDiagnostic_.empty() ? wxString("Stopped.") : stopDiagnostic_));
@@ -862,6 +888,8 @@ namespace timmy::gui {
         modelBrowseButton_->Enable(idle);
         vadBrowseButton_->Enable(idle);
         languageChoice_->Enable(idle);
+        computeChoice_->Enable(idle);
+        gpuChoice_->Enable(idle && computeChoice_->GetSelection() != 1);
         for (const auto& [id, control] : tuningControls_) control->Enable(idle);
         resetRecognitionButton_->Enable(idle);
         updateBenchmarkControls();
@@ -1214,6 +1242,14 @@ namespace timmy::gui {
                 configuration.preferredLanguage = "en";
             }
             configuration.recognitionHints = core::commandRecognitionHints(languageProfile);
+            constexpr asr::ComputeBackend computeBackends[]{asr::ComputeBackend::automatic,
+                asr::ComputeBackend::cpu, asr::ComputeBackend::vulkan};
+            const int computeChoice = computeChoice_->GetSelection();
+            if (computeChoice >= 0 && computeChoice < 3)
+                configuration.compute.backend = computeBackends[computeChoice];
+            const int gpuChoice = gpuChoice_->GetSelection();
+            if (gpuChoice > 0 && static_cast<std::size_t>(gpuChoice) <= computeDevices_.size())
+                configuration.compute.deviceIndex = computeDevices_[static_cast<std::size_t>(gpuChoice - 1)].index;
             if (benchmarkSession_) configuration = benchmarkSession_->snapshot().configuration;
             if (benchmarkStartRequested_)
             {
@@ -1244,6 +1280,10 @@ namespace timmy::gui {
                 stopRecognition();
                 return;
             }
+            const auto diagnostics = recognitionPipeline_->attemptDiagnostics();
+            computeStatusText_->SetLabel(diagnostics.compute
+                ? wxString::FromUTF8(asr::computeStatus(*diagnostics.compute))
+                : wxString("Recognition device: unreported"));
             if (benchmarkSession_) prepareBenchmarkAttempt();
             else if (outputEnabledCheck_->GetValue()) armOutput();
             updateOutputStatus();

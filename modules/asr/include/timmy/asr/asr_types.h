@@ -11,6 +11,7 @@
 #pragma once
 
 #include "timmy/asr/configurable_settings.h"
+#include "timmy/asr/compute_selection.h"
 
 #include <filesystem>
 #include <chrono>
@@ -57,6 +58,7 @@ namespace timmy::asr {
         std::optional<std::string> preferredLanguage;
         std::filesystem::path modelResourcePath;
         RecognitionHints recognitionHints;
+        ComputeSelection compute{};
     };
 
     enum class AsrResultKind
@@ -132,6 +134,7 @@ namespace timmy::asr {
         // Backend-owned scalar diagnostics, using the settings serialization contract.
         // Empty means unreported. Passed flags describe actual inference in this attempt.
         SettingValues recognitionGuidance{};
+        std::optional<ComputeDiagnostics> compute{};
     };
     struct RecognitionProgress
     {

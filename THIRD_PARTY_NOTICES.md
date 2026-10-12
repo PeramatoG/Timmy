@@ -22,11 +22,31 @@ The complete license text distributed with the vendored source is available at
 - **Source:** <https://github.com/ggml-org/whisper.cpp>
 - **Version:** v1.9.4, commit `927cfce34f31707e17f2bff35c349632fb9e2c3a`
 - **License:** MIT
-- **Use in TIMMY:** Local CPU speech recognition and tensor computation
+- **Use in TIMMY:** Local CPU speech recognition/tensor computation, and optional
+  dynamically loaded Vulkan tensor computation
 
 The dependency source is retrieved and hash-verified by CMake; model weights
 are not included. The complete license text is available in the upstream
 source archive at `LICENSE` and from the project source link above.
+
+## Optional Vulkan development dependencies
+
+- **Projects:** Vulkan-Headers (including Vulkan-Hpp), SPIRV-Headers
+- **Copyright:** The Khronos Group and contributors
+- **Sources:** <https://github.com/KhronosGroup/Vulkan-Headers>,
+  <https://github.com/KhronosGroup/Vulkan-Hpp>,
+  <https://github.com/KhronosGroup/SPIRV-Headers>
+- **Licenses:** Vulkan-Headers/Vulkan-Hpp Apache-2.0 (some header files also
+  offer MIT); SPIRV-Headers MIT. These permissive licenses are compatible with
+  TIMMY's GPL-3.0-or-later license.
+- **Use in TIMMY:** Build-time headers/constants used by GGML's optional Vulkan
+  module. Compiled header code/constants may be present in that module.
+
+Complete license texts/notices accompany the SDK/source projects at
+`Vulkan-Headers/LICENSE.md`, `Vulkan-Hpp/LICENSE.txt`, and
+`SPIRV-Headers/LICENSE`. Distributors enabling Vulkan must preserve applicable
+upstream notices with their binaries. TIMMY does not redistribute the SDK,
+shader compiler or Vulkan loader; the system/graphics driver supplies the loader.
 
 ## wxWidgets
 

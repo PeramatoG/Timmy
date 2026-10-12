@@ -16,6 +16,7 @@
 #include "whisper_inference_cancellation.h"
 #include "diagnostic_queue.h"
 #include "whisper_recognition_guidance.h"
+#include "whisper_compute_runtime.h"
 
 #include "grammar-parser.h"
 #include <whisper.h>
@@ -96,6 +97,12 @@ namespace timmy::asr {
         }
 
     } // namespace
+
+    ComputeDiscovery whisperComputeDevices()
+    {
+        configureWhisperLogging();
+        return detail::discoverWhisperCompute();
+    }
 
     class WhisperAsrBackend::Impl
     {
@@ -376,6 +383,7 @@ namespace timmy::asr {
         detail::WhisperRecognitionGuidance guidance;
         grammar_parser::parse_state grammar;
         SettingValues guidanceDiagnostics;
+        ComputeDiagnostics computeDiagnostics;
         std::string preferredLanguage;
         std::mutex lifecycleMutex;
         std::mutex mutex;
@@ -432,8 +440,18 @@ namespace timmy::asr {
         impl_->stopWorkers();
         impl_->destroyContexts();
         impl_->lifecycle = AsrState::starting;
+        if ((configuration.compute.deviceIndex && *configuration.compute.deviceIndex < 0)
+            || (configuration.compute.backend != ComputeBackend::automatic
+                && configuration.compute.backend != ComputeBackend::cpu
+                && configuration.compute.backend != ComputeBackend::vulkan))
+        {
+            impl_->lifecycle = AsrState::failed;
+            return failure(AsrDiagnosticCode::invalidConfiguration, "Invalid compute selection.");
+        }
         {
             std::lock_guard lock(impl_->mutex);
+            impl_->computeDiagnostics = {};
+            impl_->computeDiagnostics.requested = configuration.compute;
             impl_->guidanceDiagnostics = detail::whisperGuidanceDiagnostics(
                 impl_->tuning, detail::makeWhisperCommandParameters(impl_->tuning));
         }
@@ -483,17 +501,28 @@ namespace timmy::asr {
 
         const std::string modelPath =
             configuration.modelResourcePath.string();
-        auto contextParameters = whisper_context_default_params();
-        contextParameters.use_gpu = false;
-        impl_->context = whisper_init_from_file_with_params(
-            modelPath.c_str(),
-            contextParameters);
+        const auto discovery = detail::discoverWhisperCompute(
+            configuration.compute.backend != ComputeBackend::cpu);
+        const auto compute = initializeCompute(configuration.compute, discovery,
+            [&](const ComputeDevice& device) {
+                auto parameters = whisper_context_default_params();
+                parameters.use_gpu = device.backend == ComputeBackend::vulkan;
+                if (parameters.use_gpu) parameters.gpu_device = device.index;
+                // The pinned overlay frees partial model/state resources and
+                // returns null on a failed GPU attempt, before CPU is retried.
+                impl_->context = whisper_init_from_file_with_params(modelPath.c_str(), parameters);
+                return impl_->context != nullptr;
+            });
+        {
+            std::lock_guard lock(impl_->mutex);
+            impl_->computeDiagnostics = compute;
+        }
         if (impl_->context == nullptr)
         {
             impl_->lifecycle = AsrState::failed;
             return failure(
                 AsrDiagnosticCode::initializationFailure,
-                "Whisper could not initialize the configured model.");
+                "Whisper could not initialize the configured model: " + compute.initializationFailure);
         }
 
         if (!impl_->options.vadModelPath.empty())
@@ -571,6 +600,7 @@ namespace timmy::asr {
         diagnostics.inferenceQueueWaitTotalSeconds = impl_->windows.waitTotal();
         diagnostics.inferenceQueueWaitMaxSeconds = impl_->windows.waitMax();
         diagnostics.recognitionGuidance = impl_->guidanceDiagnostics;
+        diagnostics.compute = impl_->computeDiagnostics;
         return diagnostics;
     }
 

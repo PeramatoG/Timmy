@@ -343,6 +343,14 @@ Hydra key rendering and transport behavior are unchanged.
 
 ### Guided live recognition benchmark (ASR-BENCH-011)
 
+Whisper also supports optional Vulkan acceleration. **Compute device** defaults
+to Automatic, **CPU** forces the baseline, and **Vulkan** requests GPU inference.
+Unavailable/failed Vulkan initialization retries CPU and displays the fallback.
+Silero VAD remains on CPU. Enable the build capability with
+`-DTIMMY_ENABLE_VULKAN=ON`; the default build needs no SDK. End users normally
+need only a Vulkan-capable graphics driver for acceleration. See
+[compute build/runtime details](docs/GPU_COMPUTE.md).
+
 Choose **Open benchmark...** under Recognition benchmark to open the dedicated
 operator window for the 36-case `timmy-live-v1` corpus. Select a JSONL result file,
 press **Start benchmark**, wait for **Ready**, press **Start attempt**, wait for

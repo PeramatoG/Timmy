@@ -112,6 +112,40 @@ namespace timmy::core {
             }
             out << '}';
         }
+        void computeMetadata(std::ostream& out, const asr::ComputeSelection& requested,
+            const std::optional<asr::ComputeDiagnostics>& diagnostics)
+        {
+            out << ",\"requested_compute_backend\":" << quoted(std::string(asr::computeBackendId(requested.backend)))
+                << ",\"requested_device\":";
+            if (requested.deviceIndex) out << *requested.deviceIndex;
+            else out << "null";
+            out << ",\"active_compute_backend\":";
+            if (diagnostics && diagnostics->activeBackend)
+                out << quoted(std::string(asr::computeBackendId(*diagnostics->activeBackend)));
+            else out << "null";
+            out << ",\"compute_device_index\":";
+            if (diagnostics && diagnostics->activeDeviceIndex) out << *diagnostics->activeDeviceIndex;
+            else out << "null";
+            out << ",\"compute_device_name\":" << (diagnostics ? quoted(diagnostics->activeDeviceName) : "null")
+                << ",\"active_device\":" << (diagnostics ? quoted(diagnostics->activeDeviceId) : "null")
+                << ",\"fallback_used\":" << (diagnostics ? diagnostics->fallbackUsed ? "true" : "false" : "null")
+                << ",\"fallback_reason\":" << (diagnostics ? quoted(diagnostics->fallbackReason) : "null")
+                << ",\"compute_initialization_failure\":" << (diagnostics ? quoted(diagnostics->initializationFailure) : "null")
+                << ",\"compute_discovery\":";
+            if (!diagnostics) { out << "null"; return; }
+            const auto& discovery = diagnostics->discovery;
+            out << "{\"vulkan_compiled\":" << discovery.vulkanCompiled
+                << ",\"vulkan_available\":" << discovery.vulkanAvailable << ",\"devices\":[";
+            bool first = true;
+            for (const auto& device : discovery.devices) {
+                if (!first) out << ',';
+                first = false;
+                out << "{\"backend\":" << quoted(std::string(asr::computeBackendId(device.backend)))
+                    << ",\"index\":" << device.index << ",\"id\":" << quoted(device.id)
+                    << ",\"name\":" << quoted(device.name) << ",\"class\":" << quoted(device.deviceClass) << '}';
+            }
+            out << "]}";
+        }
         // Compare semantic operations, including equivalent lists/ranges. Merge
         // and subtract compact intervals without expanding console identifiers.
         using Span = std::pair<std::uint64_t, std::uint64_t>;
@@ -299,8 +333,9 @@ namespace timmy::core {
             << ",\"asr_engine_id\":" << quoted(snapshot.engineId)
             << ",\"model_filename\":" << quoted(pathText(config.modelResourcePath.filename()))
             << ",\"vad_model_filename\":" << quoted(pathText(snapshot.vadModelPath.filename()))
-            << ",\"selected_language\":" << nullable(config.preferredLanguage)
-            << ",\"audio_source\":{\"device_display_name\":" << quoted(snapshot.audioSource.deviceDisplayName)
+            << ",\"selected_language\":" << nullable(config.preferredLanguage);
+        computeMetadata(out, config.compute, recognized.diagnostics.compute);
+        out << ",\"audio_source\":{\"device_display_name\":" << quoted(snapshot.audioSource.deviceDisplayName)
             << ",\"channel_index\":" << snapshot.audioSource.channelIndex
             << ",\"channel_display_name\":" << nullable(snapshot.audioSource.channelDisplayName) << '}'
             << ",\"recognition_settings\":{\"model_path\":" << quoted(pathText(config.modelResourcePath))

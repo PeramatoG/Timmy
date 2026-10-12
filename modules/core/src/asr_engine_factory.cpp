@@ -16,6 +16,14 @@
 
 namespace timmy::core {
 
+    asr::ComputeDiscovery availableComputeDevices(AsrEngineId engine)
+    {
+        switch (engine) {
+        case AsrEngineId::whisperCpp: return asr::whisperComputeDevices();
+        }
+        throw std::invalid_argument("Unknown ASR engine.");
+    }
+
     // Lists the backend-neutral recognition engines available to frontends.
     const std::vector<AsrEngineDescriptor>& availableAsrEngines()
     {

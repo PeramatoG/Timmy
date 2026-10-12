@@ -19,6 +19,7 @@
 namespace timmy::asr {
 
     [[nodiscard]] const std::vector<SettingDescriptor>& whisperSettingDescriptors();
+    [[nodiscard]] ComputeDiscovery whisperComputeDevices();
 
     struct WhisperAsrBackendOptions
     {
