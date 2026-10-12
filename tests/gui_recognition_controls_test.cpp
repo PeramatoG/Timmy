@@ -14,6 +14,7 @@
 #include <wx/panel.h>
 
 #include <wx/app.h>
+#include <wx/evtloop.h>
 #include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/choice.h>
@@ -49,8 +50,10 @@ namespace {
     void require(bool condition, const char* expression, int line)
     {
         if (condition) return;
-        std::cerr << "Line " << line << ": " << expression << '\n';
-        std::abort();
+        std::cerr << "Line " << line << ": " << expression << '\n' << std::flush;
+        // Fail immediately instead of opening an interactive CRT abort dialog
+        // in Debug Windows CI, which would obscure the failing assertion.
+        std::_Exit(EXIT_FAILURE);
     }
 
 #define REQUIRE(expression) require((expression), #expression, __LINE__)
@@ -1074,19 +1077,29 @@ int main(int argc, char** argv)
 {
     REQUIRE(wxEntryStart(argc, argv));
     REQUIRE(wxTheApp->CallOnInit());
-    windowLayoutSurvivesResize();
-    computeSelectionControls();
-    computeReadinessAndRuntimeStatus();
-    dedicatedBenchmarkOpenCloseAndLayout();
-    benchmarkNoResultAndFrozenAudioSource();
-    guidedBenchmarkControlsAndIsolation();
-    benchmarkStopPreservesUnprocessedResultAndRecoversFailure();
-    recognitionTuningAndColumns();
-    runtimeArmingAndAsyncShutdown();
-    configurableDefaultTarget();
-    invalidArmKeepsRecognitionListening();
-    unsupportedRenderingRemainsObservable();
-    linguisticContextResetsAcrossArms();
+    {
+        // MSW Yield dispatches native messages through wxApp::Dispatch(),
+        // which requires an active loop. GTK also supports this same pump.
+        wxEventLoop eventLoop;
+        wxEventLoopActivator activate(&eventLoop);
+        const auto run = [](const char* name, void (*test)()) {
+            std::cout << "Running " << name << '\n' << std::flush;
+            test();
+        };
+        run("windowLayoutSurvivesResize", windowLayoutSurvivesResize);
+        run("computeSelectionControls", computeSelectionControls);
+        run("computeReadinessAndRuntimeStatus", computeReadinessAndRuntimeStatus);
+        run("dedicatedBenchmarkOpenCloseAndLayout", dedicatedBenchmarkOpenCloseAndLayout);
+        run("benchmarkNoResultAndFrozenAudioSource", benchmarkNoResultAndFrozenAudioSource);
+        run("guidedBenchmarkControlsAndIsolation", guidedBenchmarkControlsAndIsolation);
+        run("benchmarkStopPreservesUnprocessedResultAndRecoversFailure", benchmarkStopPreservesUnprocessedResultAndRecoversFailure);
+        run("recognitionTuningAndColumns", recognitionTuningAndColumns);
+        run("runtimeArmingAndAsyncShutdown", runtimeArmingAndAsyncShutdown);
+        run("configurableDefaultTarget", configurableDefaultTarget);
+        run("invalidArmKeepsRecognitionListening", invalidArmKeepsRecognitionListening);
+        run("unsupportedRenderingRemainsObservable", unsupportedRenderingRemainsObservable);
+        run("linguisticContextResetsAcrossArms", linguisticContextResetsAcrossArms);
+    }
     wxTheApp->OnExit();
     wxEntryCleanup();
 }

@@ -12,6 +12,21 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Locate vcpkg caches
+        id: cache-paths
+        run: |
+          "downloads=$env:VCPKG_INSTALLATION_ROOT/downloads" >> $env:GITHUB_OUTPUT
+          "binaries=$env:LOCALAPPDATA/vcpkg/archives" >> $env:GITHUB_OUTPUT
+
+      - name: Restore verified dependency downloads and binaries
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ steps.cache-paths.outputs.downloads }}
+            ${{ steps.cache-paths.outputs.binaries }}
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
       - name: Configure native wxWidgets GUI and deterministic tests
         run: |
           $assetScript = Join-Path $env:GITHUB_WORKSPACE '.github/scripts/fetch-github-archive.ps1'
@@ -27,3 +42,12 @@ jobs:
 
       - name: Run tests including initial window layout
         run: ctest --test-dir build -C Debug --output-on-failure
+
+      - name: Save dependency caches even if a GUI assertion fails
+        if: always() && !cancelled() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ steps.cache-paths.outputs.downloads }}
+            ${{ steps.cache-paths.outputs.binaries }}
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}

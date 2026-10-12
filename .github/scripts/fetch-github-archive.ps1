@@ -14,8 +14,19 @@ if ($Sha512 -notmatch '^[A-Fa-f0-9]{128}$') { exit 1 }
 & curl.exe --fail --location --retry 3 --retry-all-errors --retry-delay 2 `
     --connect-timeout 20 --max-time 180 --output $Destination $archiveUrl
 if ($LASTEXITCODE -ne 0) { exit 1 }
-if ((Get-FileHash -LiteralPath $Destination -Algorithm SHA512).Hash -ine $Sha512) {
-    Remove-Item -LiteralPath $Destination -Force
+# vcpkg removes PowerShell module search paths from its build environment.
+# Use .NET directly rather than relying on the Get-FileHash cmdlet/module.
+$stream = [System.IO.File]::OpenRead($Destination)
+$algorithm = [System.Security.Cryptography.SHA512]::Create()
+try {
+    $actualHash = [System.BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '')
+}
+finally {
+    $algorithm.Dispose()
+    $stream.Dispose()
+}
+if ($actualHash -ine $Sha512) {
+    [System.IO.File]::Delete($Destination)
     exit 1
 }
 exit 0

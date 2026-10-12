@@ -67,10 +67,13 @@ namespace timmy::transport {
                     return OscMappingResult{OscExecutionPlan{std::move(message)}, {}};
                 }, *singleTarget);
             }
-            return OscMappingResult{
-                std::nullopt,
-                "The configured OSC profile does not support this semantic command."
-            };
+            else
+            {
+                return OscMappingResult{
+                    std::nullopt,
+                    "The configured OSC profile does not support this semantic command."
+                };
+            }
         }, commandValue);
     }
 
