@@ -9,6 +9,7 @@
  */
 
 #include "asr_listen_command.h"
+#include "asr_options.h"
 
 #include "timmy/audio/audio_channel_selector.h"
 #include "timmy/audio/audio_engine.h"
@@ -38,14 +39,9 @@ namespace timmy::cli {
 
         volatile std::sig_atomic_t stopRequested = 0;
 
-        struct AsrListenOptions
+        struct AsrListenOptions : AsrInputOptions
         {
-            std::filesystem::path modelPath;
-            std::filesystem::path vadModelPath;
-            std::optional<std::string> preferredLanguage;
-            asr::ComputeSelection compute{};
             std::string profile;
-            command::TargetType defaultTarget = command::TargetType::channel;
             std::string host;
             std::uint32_t port = 0;
             transport::Hydra2OscOptions hydra;
@@ -191,6 +187,10 @@ namespace timmy::cli {
                 << "  --default-target TYPE  channel (default), fixture or group.\n"
                 << "  --compute ID       automatic (default), cpu, or vulkan.\n"
                 << "  --compute-device N GGML GPU index (default: automatic).\n"
+                << "  --grammar on|off   Vocabulary grammar (default: on).\n"
+                << "  --prompt on|off    Compact prompt (default: on).\n"
+                << "  --setting ID=VALUE Backend tuning, using the shared settings schema.\n"
+                << "  --command-profile NAME  native (default) or hydra2.\n"
                 << "  --profile NAME     Opt in to hydra2 or generic OSC emission.\n"
                 << "  --host HOST        Required with --profile.\n"
                 << "  --port PORT        Required with --profile (Hydra II: 8000).\n"
@@ -209,25 +209,22 @@ namespace timmy::cli {
             for (int index = 0; index < argc; ++index)
             {
                 const std::string_view argument = argv[index];
+                const auto common = parseAsrInputOption(argument, index, argc, argv, options);
+                if (common == OptionParse::accepted) continue;
+                if (common == OptionParse::invalid) return false;
                 if (argument == "--pre-clear")
                 {
                     options.hydra.preClear = true;
                     options.outputOptions = options.hydraOptions = true;
                     continue;
                 }
-                if (argument == "--default-target" || argument == "--profile" || argument == "--host"
+                if (argument == "--profile" || argument == "--host"
                     || argument == "--port" || argument == "--key-hold-ms"
                     || argument == "--key-gap-ms")
                 {
                     if (++index >= argc) return false;
                     const std::string_view value = argv[index];
-                    if (argument == "--default-target")
-                    {
-                        const auto target = command::defaultTargetFromName(value);
-                        if (!target) return false;
-                        options.defaultTarget = *target;
-                    }
-                    else if (argument == "--profile")
+                    if (argument == "--profile")
                     {
                         if (value != "hydra2" && value != "generic") return false;
                         options.profile = value;
@@ -258,47 +255,6 @@ namespace timmy::cli {
                     }
                     continue;
                 }
-                if (argument == "--compute" || argument == "--compute-device")
-                {
-                    if (index + 1 >= argc) return false;
-                    const std::string value = argv[++index];
-                    if (argument == "--compute") {
-                        try { options.compute.backend = asr::computeBackendFromId(value); }
-                        catch (const std::invalid_argument&) { return false; }
-                    } else {
-                        int device = -1;
-                        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), device);
-                        if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || device < 0) return false;
-                        options.compute.deviceIndex = device;
-                    }
-                    continue;
-                }
-                if (argument == "--model"
-                    || argument == "--vad-model"
-                    || argument == "--language")
-                {
-                    if (index + 1 >= argc)
-                    {
-                        std::cerr << "Missing value for " << argument << ".\n";
-                        return false;
-                    }
-
-                    const std::string value = argv[++index];
-                    if (argument == "--model")
-                    {
-                        options.modelPath = value;
-                    }
-                    else if (argument == "--vad-model")
-                    {
-                        options.vadModelPath = value;
-                    }
-                    else
-                    {
-                        options.preferredLanguage = value;
-                    }
-                    continue;
-                }
-
                 std::cerr << "Unknown ASR listen option: " << argument << '\n';
                 return false;
             }
@@ -350,9 +306,9 @@ namespace timmy::cli {
         } interruptGuard;
 
         auto backend = core::createAsrBackend(core::AsrEngineId::whisperCpp,
-            { options.vadModelPath });
+            { options.vadModelPath }, options.settings);
         auto selector = std::make_shared<audio::AudioChannelSelector>(0);
-        auto languageProfile = options.profile == "hydra2"
+        auto languageProfile = (options.profile == "hydra2" || options.commandProfileName == "hydra2")
             ? command::hydra2CommandProfile(options.hydra.preClear) : command::CommandProfile{};
         audio::AudioEngine engine;
         languageProfile.parsing.defaultTarget = options.defaultTarget;

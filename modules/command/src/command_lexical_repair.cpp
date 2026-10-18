@@ -56,6 +56,12 @@ namespace timmy::command {
             const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
             return !text.empty() && error == std::errc{} && end == text.data() + text.size() && value > 0;
         }
+        bool percentage(std::string_view text)
+        {
+            unsigned int value = 0;
+            const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+            return !text.empty() && error == std::errc{} && end == text.data() + text.size() && value <= 100;
+        }
         bool target(std::string_view word)
         {
             return word == "channel" || word == "channels" || word == "fixture"
@@ -108,6 +114,15 @@ namespace timmy::command {
         }
         std::vector<std::string> replacements(tokens.size());
         std::vector<bool> removed(tokens.size(), false);
+        // Only the complete singular Spanish target + identifier + comma +
+        // percentage fragment. The existing grammar owns the meaning of "al"
+        // (intensity here), and validation still owns identifier limits. No list,
+        // explicit action/conjunction, third number, continuation or terminal comma
+        // qualifies. Exact custom target/separator aliases remain authoritative.
+        const auto separator = canonicalizeCommandText("al", configuration_.vocabulary);
+        const bool boundedSeparator = words.size() == 4 && lower(tokens[0].text) == "canal"
+            && words[0] == "channel" && number(words[1]) && words[2] == ","
+            && percentage(words[3]) && separator.size() == 1 && separator[0] == "al";
         bool expectTarget = true;
         bool selection = false;
         bool preferRange = false;
@@ -133,6 +148,16 @@ namespace timmy::command {
         for (std::size_t i = 0; i < words.size(); ++i) {
             auto& word = words[i];
             if (word == ",") {
+                if (boundedSeparator && i == 2) {
+                    const auto& token = tokens[i];
+                    auto& replacement = replacements[i];
+                    if (token.begin && !std::isspace(static_cast<unsigned char>(text[token.begin - 1]))) replacement += ' ';
+                    replacement += "al";
+                    if (token.end < text.size() && !std::isspace(static_cast<unsigned char>(text[token.end]))) replacement += ' ';
+                    result.repairs.push_back({",", "al", "asr_separator",
+                        "bounded singular Spanish target: comma interpreted as identifier-to-percentage separator"});
+                    continue;
+                }
                 // Terminal punctuation remains owned by normalization/parser.
                 if (i + 1 == words.size()) continue;
                 auto next = i + 1;

@@ -64,6 +64,19 @@ int main()
     require(parse({"--model", "unused-model", "--host", "localhost", "--port", "8000",
         "--key-hold-ms", "40", "--key-gap-ms", "20", "--pre-clear", "--profile", "hydra2"}, live));
     require(live.port == 8000 && live.hydra.hold.count() == 40 && live.hydra.gap.count() == 20 && live.hydra.preClear);
+    for (const bool grammar : {false, true}) for (const bool prompt : {false, true}) {
+        cli::AsrListenOptions options;
+        require(parse({"--model", "unused-model", "--grammar", grammar ? "on" : "off",
+            "--prompt", prompt ? "on" : "off", "--setting", "whisper.beam_size=3"}, options));
+        require(std::get<bool>(options.settings.at("whisper.grammar_enabled")) == grammar);
+        require(std::get<bool>(options.settings.at("whisper.compact_prompt")) == prompt);
+        require(std::get<int>(options.settings.at("whisper.beam_size")) == 3);
+    }
+    for (const auto text : {"whisper.beam_size=0", "whisper.beam_size=3.5", "unknown=1",
+            "whisper.temperature=nan", "whisper.grammar_enabled=maybe", "vad.minimum_silence_ms=-1"}) {
+        cli::AsrListenOptions options;
+        require(!parse({"--model", "unused-model", "--setting", text}, options));
+    }
     cli::AsrListenOptions generic;
     require(parse({"--model", "unused-model", "--profile", "generic", "--host", "localhost", "--port", "8000"}, generic));
 }

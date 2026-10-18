@@ -759,6 +759,9 @@ namespace {
         auto& next = benchmarkControl<wxButton>(fixture, "benchmark.next");
         auto& retry = benchmarkControl<wxButton>(fixture, "benchmark.retry");
         auto& file = benchmarkControl<wxTextCtrl>(fixture, "benchmark.path");
+        auto& saveAudio = benchmarkControl<wxCheckBox>(fixture, "benchmark.save_asr_input_wavs");
+        REQUIRE(!saveAudio.GetValue() && saveAudio.IsEnabled());
+        saveAudio.SetValue(true);
         click(start);
         REQUIRE(fixture.backend->starts == 0);
         file.ChangeValue(wxString::FromUTF8(path.string()));
@@ -766,6 +769,7 @@ namespace {
         toggle(fixture.output(), true);
         click(start);
         REQUIRE(fixture.backend->starts == 1 && !fixture.output().IsEnabled());
+        REQUIRE(!saveAudio.IsEnabled() && saveAudio.GetValue());
         REQUIRE(!fixture.output().GetValue() && fixture.factories == 0);
         for (auto* control : fixture.tuning) REQUIRE(!control->IsEnabled());
         toggle(fixture.output(), true);

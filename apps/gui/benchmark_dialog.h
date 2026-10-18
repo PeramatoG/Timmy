@@ -10,6 +10,7 @@
 #include <wx/dialog.h>
 #include <functional>
 
+class wxCheckBox;
 class wxButton;
 class wxStaticText;
 class wxTextCtrl;
@@ -28,6 +29,7 @@ public:
 
     BenchmarkDialog(wxWindow* parent, Actions actions);
     wxString resultPath() const;
+    bool saveAsrInputWavs() const;
     void setComputeStatus(const wxString& status);
     void beginSession(const core::RecognitionBenchmarkSnapshot& snapshot);
     void setCase(std::size_t index);
@@ -44,6 +46,7 @@ private:
     void wrapLabels();
     Actions actions_;
     wxTextCtrl* path_ = nullptr;
+    wxCheckBox* saveAudio_ = nullptr;
     wxButton *start_, *stop_, *next_, *retry_, *noResult_, *browse_, *startAttempt_;
     wxStaticText *summary_, *case_, *phrase_, *state_, *instruction_, *result_, *counts_;
     wxStaticText* compute_ = nullptr;

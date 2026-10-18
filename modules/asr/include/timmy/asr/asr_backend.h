@@ -40,6 +40,12 @@ namespace timmy::asr {
         { return {false, AsrDiagnostic{AsrDiagnosticCode::invalidConfiguration,
             "This backend does not support isolated benchmark attempts."}}; }
 
+        // Submit one already segmented inference buffer, bypassing streaming/VAD.
+        // The backend copies the PCM before returning, then uses its normal worker.
+        virtual AsrOperationResult submitInferenceInput(std::span<const float>)
+        { return {false, AsrDiagnostic{AsrDiagnosticCode::invalidConfiguration,
+            "This backend does not support exact inference-input replay."}}; }
+
         // Optional current attempt counters, including attempts without speech/results.
         virtual AttemptDiagnostics attemptDiagnostics() const { return {}; }
 
@@ -55,6 +61,7 @@ namespace timmy::asr {
         virtual void processAudioBlock(
             const audio::AudioBlockView& block) = 0;
 
+        bool publishInferenceInput(const InferenceInputView& input) const;
         void publishProgress(const RecognitionProgress& progress) const;
         void publishResult(const AsrResult& result) const;
         void publishDiagnostic(const AsrDiagnostic& diagnostic) const;

@@ -50,6 +50,12 @@ namespace timmy::asr {
         processAudioBlock(validatedBlock);
     }
 
+    bool IAsrBackend::publishInferenceInput(const InferenceInputView& input) const
+    {
+        if (const auto listener = resultListener()) return listener->onAsrInferenceInput(input);
+        return true;
+    }
+
     void IAsrBackend::publishProgress(const RecognitionProgress& progress) const
     {
         if (const auto listener = resultListener()) listener->onAsrProgress(progress);

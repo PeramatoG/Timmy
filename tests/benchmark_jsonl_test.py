@@ -136,6 +136,7 @@ for index, outcome in enumerate(("final_result", "no_speech", "empty_asr_result"
             "normalization_duration_seconds": 0.001, "assembly_duration_seconds": 0.001,
             "semantic_parse_duration_seconds": 0.002, "validation_duration_seconds": 0.001,
             "rendering_duration_seconds": 0.001,
+            "inference_inputs": None,
         }
         if outcome in ("no_speech", "operator_no_result"):
             assert row["raw_transcript"] is None and row["metrics"]["inference_duration_seconds"] is None

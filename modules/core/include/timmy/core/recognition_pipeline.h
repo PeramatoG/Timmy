@@ -11,6 +11,7 @@
 #pragma once
 
 #include "timmy/asr/asr_backend.h"
+#include "timmy/core/inference_audio.h"
 #include "timmy/audio/audio_channel_selector.h"
 #include "timmy/audio/audio_capture_stats.h"
 #include "timmy/audio/audio_format_adapter.h"
@@ -100,7 +101,10 @@ namespace timmy::core {
         [[nodiscard]] RecognitionPipelineState state() const;
         asr::AsrOperationResult start(const asr::AsrConfiguration& configuration);
         asr::AsrOperationResult stop();
-        asr::AsrOperationResult prepareAttempt(asr::AttemptGeneration generation);
+        asr::AsrOperationResult prepareAttempt(asr::AttemptGeneration generation,
+            std::optional<InferenceAudioCapture> capture = std::nullopt);
+        // Exact, already segmented backend input: no device, resampler or VAD pass.
+        asr::AsrOperationResult submitInferenceInput(std::span<const float> samples);
         void armAttempt();
         void disarmAttempt();
         [[nodiscard]] asr::AttemptDiagnostics attemptDiagnostics() const;
@@ -112,6 +116,7 @@ namespace timmy::core {
         class AudioInput;
         friend class BackendListener;
 
+        bool handleInferenceInput(const asr::InferenceInputView& input);
         void handleResult(const asr::AsrResult& result);
         void handleProgress(const asr::RecognitionProgress& progress);
         void handleDiagnostic(const asr::AsrDiagnostic& diagnostic);
@@ -137,6 +142,9 @@ namespace timmy::core {
         const bool benchmarkAttempts_;
         asr::AttemptGeneration attemptGeneration_ = 0;
         bool attemptArmed_ = false;
+        mutable std::mutex inferenceAudioMutex_;
+        std::optional<InferenceAudioCapture> inferenceCapture_;
+        std::vector<asr::InferenceInputDiagnostics> inferenceInputs_;
     };
 
 } // namespace timmy::core

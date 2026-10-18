@@ -43,6 +43,7 @@ namespace timmy::asr {
         AsrOperationResult stop() override;
         AsrOperationResult resetAttempt(AttemptGeneration generation) override;
         AttemptDiagnostics attemptDiagnostics() const override;
+        AsrOperationResult submitInferenceInput(std::span<const float> samples) override;
 
     private:
         void processAudioBlock(const audio::AudioBlockView& block) override;

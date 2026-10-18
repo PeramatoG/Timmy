@@ -7,6 +7,8 @@ add_library(timmy_core STATIC
     src/recognition_command_executor.cpp
     src/recognition_pipeline.cpp
     src/recognition_benchmark.cpp
+    src/inference_audio.cpp
+    src/recognition_replay.cpp
     src/resource_path_resolver.cpp
 )
 

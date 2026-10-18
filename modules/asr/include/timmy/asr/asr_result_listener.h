@@ -24,6 +24,12 @@ namespace timmy::asr {
         // not guaranteed to be a frontend or GUI thread.
         virtual void onAsrResult(const AsrResult& result) = 0;
 
+        // Optional exact inference-input observation. Implementations must consume
+        // the borrowed view synchronously; never retain its span. No realtime thread.
+        // false cancels work from an attempt Core has already disarmed. Diagnostic
+        // save failures must still return true so they cannot veto recognition.
+        virtual bool onAsrInferenceInput(const InferenceInputView&) { return true; }
+
         // Optional progress; implementations may emit only supported stages.
         virtual void onAsrProgress(const RecognitionProgress&) {}
 
