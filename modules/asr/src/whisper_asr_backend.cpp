@@ -25,6 +25,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <filesystem>
@@ -214,7 +215,6 @@ namespace timmy::asr {
             const std::vector<float>& samples, AttemptGeneration jobGeneration,
             std::optional<std::chrono::steady_clock::time_point> finalizedAt)
         {
-            progress(owner, RecognitionProgressState::inferenceStarted, jobGeneration);
             auto parameters = detail::makeWhisperCommandParameters(tuning);
             parameters.language = preferredLanguage.empty()
                 ? "auto"
@@ -227,16 +227,20 @@ namespace timmy::asr {
             detail::applyWhisperRecognitionGuidance(parameters, guidance, grammar, grammarRules);
 
             std::optional<double> inferenceSeconds;
+            bool admitted = false;
             const auto outcome = inferenceCancellation.run([&] {
                 if (samples.size() > static_cast<std::size_t>(
                         std::numeric_limits<int>::max()))
                 {
                     return -1;
                 }
+                admitted = owner.publishInferenceInput({jobGeneration, ++inferenceIndex, samples});
+                if (!admitted) return 0; // Attempt closed before this queued job began.
                 {
                     std::lock_guard lock(mutex);
                     guidanceDiagnostics = detail::whisperGuidanceDiagnostics(tuning, parameters);
                 }
+                progress(owner, RecognitionProgressState::inferenceStarted, jobGeneration);
                 const auto started = std::chrono::steady_clock::now();
                 const int result = whisper_full(context, parameters, samples.data(),
                     static_cast<int>(samples.size()));
@@ -244,7 +248,7 @@ namespace timmy::asr {
                     std::chrono::steady_clock::now() - started).count();
                 return result;
             });
-            if (outcome == detail::WhisperInferenceOutcome::cancelled)
+            if (!admitted || outcome == detail::WhisperInferenceOutcome::cancelled)
             {
                 return;
             }
@@ -394,6 +398,7 @@ namespace timmy::asr {
         detail::DiagnosticQueue<std::vector<float>> windows{maximumQueuedWindows};
         detail::DiagnosticQueue<std::vector<float>> vadFrames{maximumQueuedVadFrames};
         AttemptDiagnostics timings{};
+        std::uint64_t inferenceIndex = 0; // Inference worker only; reset with workers joined.
         AttemptGeneration generation = 0; // Changed only with workers joined/audio gated.
         bool shutdownRequested = false;
         std::thread inferenceWorker;
@@ -560,6 +565,7 @@ namespace timmy::asr {
             {
                 std::lock_guard lock(impl_->mutex);
                 impl_->generation = 0;
+                impl_->inferenceIndex = 0;
                 impl_->vadFrames.reset();
                 impl_->windows.reset();
                 impl_->timings = {};
@@ -616,6 +622,7 @@ namespace timmy::asr {
         {
             std::lock_guard lock(impl_->mutex);
             impl_->generation = generation;
+            impl_->inferenceIndex = 0;
             impl_->vadFrames.reset();
             impl_->windows.reset();
             impl_->timings = {};
@@ -654,6 +661,24 @@ namespace timmy::asr {
         }
         impl_->lifecycle = AsrState::stopped;
         return { true, std::nullopt };
+    }
+
+    AsrOperationResult WhisperAsrBackend::submitInferenceInput(std::span<const float> samples)
+    {
+        if (samples.empty() || samples.size() > 16000U * 600U
+            || std::any_of(samples.begin(), samples.end(), [](float s) { return !std::isfinite(s); }))
+            return failure(AsrDiagnosticCode::invalidAudioFormat,
+                "Replay requires finite mono 16 kHz PCM of at most ten minutes.");
+        {
+            std::lock_guard lock(impl_->mutex);
+            if (impl_->shutdownRequested || impl_->lifecycle != AsrState::running)
+                return failure(AsrDiagnosticCode::invalidConfiguration, "Replay backend is not running.");
+            if (impl_->windows.size() >= maximumQueuedWindows)
+                return failure(AsrDiagnosticCode::recognitionFailure, "Replay inference queue is full.");
+            impl_->windows.push(std::vector<float>{samples.begin(), samples.end()});
+        }
+        impl_->inferenceCondition.notify_one();
+        return {true, std::nullopt};
     }
 
     // Copies validated PCM into the fixed-window or VAD endpointing path.

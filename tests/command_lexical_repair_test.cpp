@@ -28,6 +28,10 @@ int main()
             {"selecciona fishtur cinco", "selecciona fixture 5", "Select Fixture 5"},
             {"channel cinco at cincuenta", "channel 5 at 50", "Channel 5 At 50"},
             {"fixture cinco a full", "fixture 5 a full", "Fixture 5 At 100"},
+            {"canal 25, 50.", "canal 25 al 50", "Channel 25 At 50"},
+            {"canal 25,50", "canal 25 al 50", "Channel 25 At 50"},
+            {"canal 25 , 0.", "canal 25 al 0", "Channel 25 At 0"},
+            {"Canal 150, 100!", "Canal 150 al 100", "Channel 150 At 100"},
             {"canal, 35 al 50", "canal 35 al 50", "Channel 35 At 50"},
             {"canal 150, al 50", "canal 150 al 50", "Channel 150 At 50"},
             {"selecciona, canal 5", "selecciona canal 5", "Select Channel 5"},
@@ -46,7 +50,11 @@ int main()
             require(processed.repair.repairedText == example.repaired, example.input);
             require(processed.validation.accepted && processed.rendering.text == example.rendered, example.input);
         }
-        for (const auto text : {"fixtures 1, 3 y 5", "3, 5", ", 3 at 50", "and 3, 5", "del 3 al 5, 7", "Select Channels 1,3 and 5", "channel 1 through 3, 5 at 50",
+        for (const auto text : {"canales 1, 5, 10", "canal 1, 5, 10", "canal 25, 50,",
+                "canal 25, 101", "canal 25, 50 y 60", "canal 25, y 50",
+                "channel 25, 50", "fixture 25, 50", "group 25, 50", "canal 25, 50 at 75",
+                "selecciona canal 25, 50", "apaga canal 25, 50", "canal 25, 50 al 75",
+                "fixtures 1, 3 y 5", "3, 5", ", 3 at 50", "and 3, 5", "del 3 al 5, 7", "Select Channels 1,3 and 5", "channel 1 through 3, 5 at 50",
                 "channels 1 a 3, 5 al 50", "canal 5 al 50", "limpia editor", "cler all",
                 "please fix 5", "hello remove fix 5", "fixture nonsense remove fix 5", "hello cha 13", "select chair 5", "fishtur five",
                 "ch 5", "f 5", "g 5", "fi editor", "gr editor", "cl editor", "rel all", "blackout", "can123 5",
@@ -60,11 +68,28 @@ int main()
         const auto notes = repair.repair("selecciona, fishtur 5");
         require(notes.repairs.size() == 2 && notes.repairs[0].category == "punctuation"
             && notes.repairs[1].original == "fishtur" && notes.repairs[1].replacement == "fixture", "repair diagnostics");
+        const auto invalidZero = CommandProcessor{}.process("canal 0, 50");
+        require(!invalidZero.validation.accepted, "invalid zero target remains rejected");
+        const auto separator = repair.repair("canal 25, 50");
+        require(separator.repairs.size() == 1 && separator.repairs[0].category == "asr_separator"
+            && separator.repairs[0].replacement == "al", "bounded separator is observable");
+        require(repair.repair("canal, 35, 50,").repairedText == "canal 35, 50,",
+            "leading comma is neutral; trailing comma preserves a pending list");
+        require(CommandAssembler{}.accept(repair.repair("canal, 35, 50,").repairedText).state == AssemblyState::pending,
+            "ambiguous real list remains pending");
+        const auto list = CommandProcessor{}.process("selecciona canales 1, 5, 10");
+        require(list.validation.accepted && list.rendering.text == "Select Channel 1 + 5 + 10", "genuine list");
+        const auto conjunction = CommandProcessor{}.process("selecciona canal 25 y 50");
+        require(conjunction.validation.accepted && conjunction.rendering.text == "Select Channel 25 + 50", "explicit conjunction");
         auto configuration = SemanticParsingConfiguration{};
         configuration.vocabulary.insert(configuration.vocabulary.begin(), {"fishtur", "group"});
         require(CommandLexicalRepair{configuration}.repair("fishtur 5").repairedText == "fishtur 5", "exact custom alias wins");
         configuration.vocabulary.insert(configuration.vocabulary.begin(), {"fixture", "group"});
         require(!CommandLexicalRepair{configuration}.repair("fix 5").applied(), "conflicting role alias refuses repair");
+        configuration.vocabulary.insert(configuration.vocabulary.begin(), {"canal", "group"});
+        require(!CommandLexicalRepair{configuration}.repair("canal 25, 50").applied(), "exact canal alias wins");
+        configuration.vocabulary.insert(configuration.vocabulary.begin(), {"al", "and"});
+        require(!CommandLexicalRepair{configuration}.repair("canal 25, 50").applied(), "exact separator alias wins");
         auto profile = CommandProfile{};
         profile.validation.maxIdentifier = 4;
         const auto rejected = CommandProcessor{profile}.process("fishtur 5 al 50");
@@ -72,6 +97,9 @@ int main()
             && !rejected.rendering.text, "repair must not bypass validation");
         for (const auto text : {"fishtur 5 al 101", "home cha 5", "rel editor", "cl all"})
             require(!CommandProcessor{}.process(text).validation.accepted, text);
+        const auto boundedRejected = CommandProcessor{profile}.process("canal 25, 50.");
+        require(boundedRejected.repair.applied() && !boundedRejected.validation.accepted,
+            "bounded separator cannot bypass validation");
         CommandAssembler assembler;
         require(assembler.accept(repair.repair("fishtur 5").repairedText).state == AssemblyState::pending, "pending repaired target");
         require(assembler.accept(repair.repair("al 50").repairedText).state == AssemblyState::complete, "pending repair preserves assembly");

@@ -177,6 +177,9 @@ namespace timmy::core {
             owner_.handleResult(result);
         }
 
+        bool onAsrInferenceInput(const asr::InferenceInputView& input) override
+        { return owner_.handleInferenceInput(input); }
+
         void onAsrProgress(const asr::RecognitionProgress& progress) override
         { owner_.handleProgress(progress); }
 
@@ -239,6 +242,11 @@ namespace timmy::core {
         const asr::AsrConfiguration& configuration)
     {
         stop();
+        {
+            std::lock_guard lock(inferenceAudioMutex_);
+            inferenceInputs_.clear();
+            inferenceCapture_.reset();
+        }
         discardPendingAssembly();
         publishState(RecognitionPipelineState::starting);
         formatAdapter_->reset();
@@ -302,6 +310,31 @@ namespace timmy::core {
             handleDiagnostic(*result.diagnostic);
         }
         return result;
+    }
+
+    bool RecognitionPipeline::handleInferenceInput(const asr::InferenceInputView& input)
+    {
+        if (!benchmarkAttempts_) return true;
+        // This also makes no-result snapshots wait for an in-progress save, so
+        // submitted jobs are linked even when the operator ends an attempt.
+        std::lock_guard audioLock(inferenceAudioMutex_);
+        {
+            std::lock_guard lock(mutex_);
+            if (!attemptArmed_ || input.generation != attemptGeneration_) return false;
+        }
+        inferenceInputs_.push_back(inspectInferenceAudio(input, inferenceCapture_));
+        return true;
+    }
+
+    asr::AsrOperationResult RecognitionPipeline::submitInferenceInput(std::span<const float> samples)
+    {
+        {
+            std::lock_guard lock(mutex_);
+            if (state_ != RecognitionPipelineState::listening || !benchmarkAttempts_ || !attemptArmed_)
+                return {false, asr::AsrDiagnostic{asr::AsrDiagnosticCode::invalidConfiguration,
+                    "Exact replay requires a running, armed isolated attempt."}};
+        }
+        return backend_->submitInferenceInput(samples);
     }
 
     // Normalizes and assembles each final transcript before publishing it.
@@ -370,6 +403,9 @@ namespace timmy::core {
         {
             if (benchmarkAttempts_)
                 commandTimings.commandProcessingDurationSeconds = std::chrono::duration<double>(Clock::now() - started).count();
+            // First final result closes benchmark input before the inference worker
+            // can admit another queued job. All saved inputs are now in this snapshot.
+            if (benchmarkAttempts_) disarmAttempt();
             auto diagnostics = attemptDiagnostics();
             diagnostics.inferenceAudioDurationSeconds = result.metrics.audioDurationSeconds;
             diagnostics.inferenceDurationSeconds = result.metrics.inferenceDurationSeconds;
@@ -405,7 +441,8 @@ namespace timmy::core {
         }
     }
 
-    asr::AsrOperationResult RecognitionPipeline::prepareAttempt(asr::AttemptGeneration generation)
+    asr::AsrOperationResult RecognitionPipeline::prepareAttempt(asr::AttemptGeneration generation,
+        std::optional<InferenceAudioCapture> capture)
     {
         disarmAttempt();
         audioInput_->reset();
@@ -415,7 +452,15 @@ namespace timmy::core {
             assembler_->reset();
             commandContext_.reset();
         }
-        return backend_->resetAttempt(generation);
+        const auto prepared = backend_->resetAttempt(generation);
+        // resetAttempt has joined all previous workers; no old PCM can be saved
+        // under the next identity. No session or GUI object is captured here.
+        {
+            std::lock_guard lock(inferenceAudioMutex_);
+            inferenceInputs_.clear();
+            inferenceCapture_ = std::move(capture);
+        }
+        return prepared;
     }
     void RecognitionPipeline::armAttempt()
     {
@@ -453,6 +498,10 @@ namespace timmy::core {
         diagnostics.captureRingMaxOccupancyFrames = input.captureRingMaxOccupancyFrames;
         diagnostics.captureRingCapacityFrames = input.captureRingCapacityFrames;
         diagnostics.captureSessionRingHighWaterFrames = input.captureSessionRingHighWaterFrames;
+        {
+            std::lock_guard lock(inferenceAudioMutex_);
+            diagnostics.inferenceInputs = inferenceInputs_;
+        }
         return diagnostics;
     }
     void RecognitionPipeline::handleProgress(const asr::RecognitionProgress& progress)

@@ -11,6 +11,7 @@
 #include "asr_commands.h"
 
 #include "asr_listen_command.h"
+#include "asr_replay_command.h"
 
 #include <iostream>
 #include <string_view>
@@ -26,7 +27,8 @@ namespace timmy::cli {
                 << "Usage:\n"
                 << "  timmy-cli asr listen --model <path> [options]\n\n"
                 << "ASR commands:\n"
-                << "  listen    Capture and transcribe microphone audio.\n";
+                << "  listen    Capture and transcribe microphone audio.\n"
+                << "  replay    Transcribe an exact inference-input WAV without a microphone.\n";
         }
 
     } // namespace
@@ -46,6 +48,8 @@ namespace timmy::cli {
             printAsrUsage();
             return 0;
         }
+
+        if (command == "replay") return runAsrReplay(argc - 1, argv + 1);
 
         if (command == "listen")
         {

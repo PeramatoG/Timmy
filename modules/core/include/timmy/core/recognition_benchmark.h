@@ -55,6 +55,7 @@ namespace timmy::core {
         asr::SettingValues settings;
         command::CommandProfile commandProfile;
         BenchmarkAudioSource audioSource{};
+        bool saveAsrInputWavs = false;
     };
 
     struct RecognitionBenchmarkAttempt
@@ -93,6 +94,8 @@ namespace timmy::core {
         // Explicit operator outcome, not a fabricated ASR transcript. The same
         // result gate arbitrates this action against a concurrent final result.
         [[nodiscard]] std::optional<RecognitionBenchmarkAttempt> recordNoResult(asr::AttemptDiagnostics diagnostics = {});
+        // Close inference admission before snapshotting files/counters.
+        [[nodiscard]] std::optional<RecognitionBenchmarkAttempt> recordNoResult(RecognitionPipeline& pipeline);
         // Navigation closes result acceptance until explicit prepare + Start attempt.
         [[nodiscard]] bool next();
         void retry();

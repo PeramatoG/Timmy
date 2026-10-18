@@ -1278,7 +1278,7 @@ namespace timmy::gui {
             || !benchmarkSession_->awaitingResult()) return;
         try
         {
-            const auto attempt = benchmarkSession_->recordNoResult(recognitionPipeline_->attemptDiagnostics());
+            const auto attempt = benchmarkSession_->recordNoResult(*recognitionPipeline_);
             if (!attempt) return; // A final result may have won the worker race.
             rawTranscriptText_->SetLabel("Raw transcript: No ASR result");
             normalizedTranscriptText_->SetLabel("Normalized transcript: -");
@@ -1433,7 +1433,8 @@ namespace timmy::gui {
                         resources.voiceActivityModelPath, settings, languageProfile,
                         {deviceChoice_->GetStringSelection().ToStdString(wxConvUTF8), channelSelector_->channelIndex(),
                             channelChoice_->GetSelection() == wxNOT_FOUND ? std::nullopt
-                                : std::optional<std::string>{channelChoice_->GetStringSelection().ToStdString(wxConvUTF8)}}});
+                                : std::optional<std::string>{channelChoice_->GetStringSelection().ToStdString(wxConvUTF8)}},
+                        benchmarkDialog_->saveAsrInputWavs()});
                 benchmarkStartRequested_ = false;
                 benchmarkResults_ = std::make_shared<BenchmarkResults>();
                 benchmarkDialog_->beginSession(benchmarkSession_->snapshot());

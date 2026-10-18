@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -84,6 +85,30 @@ namespace timmy::asr {
         backendReady, waitingForSpeech, speechStarted, utteranceFinalized,
         inferenceStarted, inferenceCompletedWithText, inferenceCompletedNoText
     };
+    // The borrowed view is valid only during the synchronous inference-worker
+    // notification, immediately before the backend consumes these exact samples.
+    struct InferenceInputView
+    {
+        AttemptGeneration generation;
+        std::uint64_t inferenceIndex; // One-based, reset only after old workers join.
+        std::span<const float> samples;
+        std::uint32_t sampleRate = 16000;
+    };
+    struct InferenceInputDiagnostics
+    {
+        std::uint64_t inferenceIndex = 0;
+        std::uint32_t sampleRate = 16000;
+        std::uint64_t sampleCount = 0;
+        std::string sampleFormat = "ieee_float32";
+        double peakLinear = 0, rmsLinear = 0;
+        std::optional<double> peakDbfs{}, rmsDbfs{}; // Silence is null, not -infinity JSON.
+        std::uint64_t nearFullScaleSamples = 0;
+        double nearFullScaleRatio = 0;
+        // No acoustic speech/noise windows are currently exported by endpointing.
+        std::optional<double> speechRmsDbfs{}, noiseRmsDbfs{}, estimatedSnrDb{};
+        std::optional<std::string> wavPath{}; // Relative to the JSONL's parent.
+        std::optional<std::string> wavError{};
+    };
     struct AttemptDiagnostics
     {
         std::uint64_t audioSamples = 0;
@@ -131,6 +156,8 @@ namespace timmy::asr {
         // Capture ring maximum is sampled during this attempt, not a session maximum.
         // Queue depths exclude work already dequeued; queue age/wait are wall time.
         // Speech/endpoint offsets are observed worker stages, not acoustic timestamps.
+        // Per-job observations and optional Core-owned diagnostic audio storage.
+        std::vector<InferenceInputDiagnostics> inferenceInputs{};
         // Backend-owned scalar diagnostics, using the settings serialization contract.
         // Empty means unreported. Passed flags describe actual inference in this attempt.
         SettingValues recognitionGuidance{};

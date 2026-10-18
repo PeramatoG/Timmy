@@ -80,3 +80,6 @@ out/
 
 # User-specific CMake presets
 CMakeUserPresets.json
+
+# Local diagnostic ASR recordings (curated fixtures require explicit addition)
+*.wav

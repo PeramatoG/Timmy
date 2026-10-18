@@ -6,6 +6,7 @@
 #include "benchmark_dialog.h"
 
 #include <wx/button.h>
+#include <wx/checkbox.h>
 #include <wx/collpane.h>
 #include <wx/filedlg.h>
 #include <wx/scrolwin.h>
@@ -66,6 +67,11 @@ BenchmarkDialog::BenchmarkDialog(wxWindow* parent, Actions actions)
             "JSONL files (*.jsonl)|*.jsonl", wxFD_SAVE);
         if (picker.ShowModal() == wxID_OK) path_->SetValue(picker.GetPath());
     });
+    saveAudio_ = new wxCheckBox(content, wxID_ANY, "Save ASR input WAVs");
+    saveAudio_->SetName("benchmark.save_asr_input_wavs");
+    saveAudio_->SetValue(false);
+    saveAudio_->SetToolTip("Save exact inference PCM beside the JSONL for offline replay.");
+    body->Add(saveAudio_, 0, wxBOTTOM, 8);
     summaryText_ = "Engine / model / language / profile will be frozen at Start.";
     summary_ = label(summaryText_, "benchmark.summary");
     compute_ = label("", "benchmark.compute_status");
@@ -169,6 +175,8 @@ void BenchmarkDialog::setState(const wxString& state, const wxString& instructio
     wrapLabels();
 }
 
+bool BenchmarkDialog::saveAsrInputWavs() const { return saveAudio_->GetValue(); }
+
 void BenchmarkDialog::beginSession(const core::RecognitionBenchmarkSnapshot& snapshot)
 {
     passes_ = failures_ = noResults_ = 0;
@@ -243,6 +251,14 @@ void BenchmarkDialog::showAttempt(const core::RecognitionBenchmarkAttempt& attem
         + "\nLegacy backend dropped blocks: " + count(d.droppedAudioBlocks)
         + "\nDropped VAD frames: " + count(d.droppedVadFrames)
         + "\nDropped inference jobs: " + count(d.droppedInferenceJobs));
+    for (const auto& audio : d.inferenceInputs) {
+        details_->AppendText("\nInference input #" + wxString::FromUTF8(std::to_string(audio.inferenceIndex))
+            + " / " + wxString::FromUTF8(std::to_string(audio.sampleCount)) + " samples"
+            + wxString::Format(" / peak %.5f / RMS %.5f / near-full-scale %.5f",
+                audio.peakLinear, audio.rmsLinear, audio.nearFullScaleRatio)
+            + "\nASR WAV: " + wxString::FromUTF8(audio.wavPath.value_or("Not saved")));
+        if (audio.wavError) details_->AppendText("\nWAV save error: " + wxString::FromUTF8(*audio.wavError));
+    }
     wrapLabels();
 }
 
@@ -301,6 +317,7 @@ void BenchmarkDialog::updateControls(bool canStart, bool active, bool listening,
     noResult_->Enable(active && listening && !stopping && awaiting && armed);
     startAttempt_->Enable(active && listening && !stopping && state == core::BenchmarkAttemptState::ready);
     path_->Enable(canStart && !active);
+    saveAudio_->Enable(canStart && !active);
     browse_->Enable(canStart && !active);
     if (active)
     {

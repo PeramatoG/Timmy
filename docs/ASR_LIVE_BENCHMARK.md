@@ -3,7 +3,8 @@
 In the Recognition column, select the engine, local model and VAD model, language,
 and recognition tuning as usual. Press **Open benchmark...** in the compact
 Recognition benchmark section. In the dedicated window, select a `.jsonl` result
-file (or enter its path), then press **Start benchmark**. The configuration freezes
+file (or enter its path). Optionally enable **Save ASR input WAVs** (off by default),
+then press **Start benchmark**. The configuration freezes
 at Start, rather than when the window opens. Files are appended to, so sessions
 can share one file; every line carries a distinct session ID and a UTC timestamp.
 
@@ -227,8 +228,9 @@ the realtime capture callback. Every attempt is flushed before publication.
 
 Deterministic Core and GUI tests use fake ASR without devices, models, GPUs or
 consoles. An additional strict JSON decoder test runs when Python 3 is available;
-it uses only Python's standard library. WAV capture/replay and parameter sweeps
-are outside this feature.
+it uses only Python's standard library. Exact inference-input WAV capture and
+headless replay are described below. Automated parameter sweeps remain outside
+this feature.
 
 
 ### ASR-PERF-010 diagnostic additions
@@ -300,3 +302,216 @@ minimum silence, Vocabulary Grammar ON and Compact Prompt ON, using the current
 beam search and grammar penalty. Select Channel as the default target for the
 existing live corpus. This change does not tune ASR or run a Small-model comparison;
 the next microphone benchmark measures semantic/contextual recovery alone.
+
+
+## Exact inference-input capture and replay
+
+The diagnostic audio follows the existing ownership boundaries:
+
+```text
+physical/device audio (AudioEngine callback -> bounded PCM ring)
+  -> selected channel (audio dispatch worker)
+  -> resampled 16 kHz mono float PCM (AudioFormatAdapter)
+  -> VAD/endpoint utterance, or the existing five-second non-VAD window
+  -> exact inference PCM (Whisper inference worker)
+       -> optional float32 WAV + input diagnostics (Core)
+       -> whisper_full() using the same immutable sample span
+```
+
+This is a diagnostic copy of an admitted inference job, not a second microphone
+recording. The hook runs inside Whisper's cooperative cancellation admission,
+after dequeue and endpoint preparation, immediately before `whisper_full()`.
+It observes the very same `samples.data()` and sample count passed to inference,
+including the endpoint padding that is actually present. It does not reconstruct
+an utterance from delayed progress events. Queued jobs dropped or canceled before
+admission have no WAV. Core closes admission after the first final result, timeout,
+or operator no-result snapshot, preventing later queued jobs from creating files
+outside the completed attempt. Several admitted jobs before a result (for example,
+an inference failure followed by another utterance) have separate indices.
+
+AudioEngine remains the sole physical-input owner; the ASR backend consumes PCM.
+No new work or disk I/O was added to its realtime callback. Core scans/saves the
+borrowed view synchronously on the inference worker, outside the backend queue
+lock. Only scalar metadata is retained. No wxWidgets types or GUI object lifetime
+are involved. Stop/Retry/Next join old workers before replacing the capture identity;
+Stop waits for any active file write. A file-write failure is recorded without
+vetoing inference or changing a command's acceptance.
+
+### Enabling and locating recordings
+
+1. Select the usual model, language, compute, decoder, VAD, profile and recognition
+   hints. Open the benchmark window and choose a JSONL file.
+2. Enable **Save ASR input WAVs** before Start. It freezes with the session and is
+   disabled while that session is active. Default remains OFF.
+3. Run an attempt normally. **Details** shows each inference's input levels,
+   sample count, WAV path or save error. JSONL contains the same records.
+4. Resolve `diagnostics.inference_inputs[*].wav_path` relative to the JSONL's
+   parent directory. For `results/intercom.jsonl`, files are stored under
+   `results/intercom_audio/`.
+
+Names have the form:
+
+```text
+intercom_audio/s-<escaped-session>_c-<escaped-case>_a-<attempt>_g-<generation>_i-<inference>.wav
+```
+
+`attempt` and `inference` are one-based; retry number is attempt minus one. The
+session ID separates appended sessions. Case/attempt/generation/inference separate
+all jobs and retries. Components escape unsafe bytes as `_hh`, including literal
+underscores, so punctuation cannot become path separators or collide with escapes.
+Creation is exclusive: existing WAVs are never truncated or silently replaced.
+The sibling directory is created only on the first actual inference when saving
+is enabled. No-speech attempts with no admitted inference create no WAV; empty
+successful ASR results and operator-no-result attempts retain any actual input
+already admitted before their snapshot.
+
+Files are RIFF/WAVE **mono IEEE float32 (format tag 3), 16,000 Hz**, with `fmt`,
+`fact`, and `data` chunks and little-endian sample bits. No scaling, quantization,
+resampling or normalization is performed during serialization. Signed zero and
+finite float32 values, including samples above 1.0, round-trip bit for bit.
+`timmy::audio::writeFloatWav` / `readFloatWav` own this small format utility. The
+reader rejects unsupported formats, malformed/truncated chunks, nonfinite samples
+and oversized files rather than silently converting them. Input is bounded to
+9,600,000 samples (ten minutes at 16 kHz), well above current endpoint/window limits.
+Generated WAVs are ignored by Git; selected recordings can later be copied to a
+curated external corpus or deliberately added as small fixtures in a separate task.
+Keep their originating JSONL row to preserve model/settings/provenance.
+
+### Additive schema-version-2 fields
+
+Existing field meanings, schema version and corpus are unchanged. Older v2 rows
+without these additions remain valid. Readers should tolerate additional keys.
+
+`recognition_settings.save_asr_input_wavs` records the frozen opt-in. Under
+`diagnostics`, `inference_inputs` is null if no inference was admitted or the
+backend does not report input observations; otherwise it is an ordered array:
+
+| Field in each inference record | Meaning |
+| --- | --- |
+| `inference_index` | One-based job index within the attempt generation. |
+| `sample_rate`, `sample_count`, `sample_format` | Exact backend input representation; Whisper uses 16000, submitted sample count, `ieee_float32`. |
+| `wav_path` | Relative path from the JSONL parent; null when disabled or saving failed. |
+| `wav_error` | Observable save failure; null when disabled or successful. Errors do not invalidate recognition. |
+| `peak_linear`, `peak_dbfs` | Maximum absolute sample and `20*log10(peak)` of this inference buffer. |
+| `rms_linear`, `rms_dbfs` | RMS over every submitted sample, including genuine endpoint padding, and `20*log10(RMS)`. |
+| `near_full_scale_threshold` | 0.999, tested as `abs(sample) >= 0.999`. |
+| `near_full_scale_samples`, `near_full_scale_ratio` | Count and count/sample_count satisfying that threshold. This is not proof of physical ADC clipping. |
+| `speech_rms_dbfs`, `noise_rms_dbfs`, `estimated_snr_db` | Currently null: no reliable acoustic speech/noise sample windows are exported at this boundary. |
+
+Silence has linear peak/RMS zero and null dBFS, avoiding non-JSON negative infinity.
+These metrics remain available with WAV saving OFF and are independent of armed
+input peak/RMS. Armed input includes pre-resampling audio throughout the open
+attempt; inference metrics describe only each submitted backend buffer. VAD
+speech-start/progress timestamps are worker wall times, not sample indices.
+They must not be used to invent speech/noise RMS or SNR. Saved WAVs provide the
+future evidence for carefully labeled, sample-based SNR analysis.
+
+Input scanning is benchmark-only. Opt-in WAV saving adds diagnostic I/O on the
+inference worker and can change
+queue residence and end-to-result latency. `metrics.inference_duration_seconds`
+and `diagnostics.inference_duration_seconds` still measure `whisper_full()` itself,
+excluding the WAV write. Existing end-to-result/queue diagnostics expose the wider
+latency. Audio samples and decoder/VAD defaults are unchanged.
+
+### Headless replay and controlled comparisons
+
+Replay uses the reusable Core `replayInferenceWav()` runner, the normal
+`RecognitionPipeline`, backend worker, Whisper parameter/guidance construction,
+and command parser/validator/renderer. It opens no AudioEngine or microphone and
+never emits a command to a console. A finite, mono float32 WAV at exactly 16 kHz is
+required; other WAV encodings/rates are explicitly rejected to preserve evidence.
+
+```sh
+timmy-cli asr replay --wav results/intercom_audio/<saved-name>.wav \
+  --model models/<same-model>.bin --language es --compute cpu \
+  --command-profile native --default-target channel --grammar on --prompt on
+```
+
+Select `--compute automatic|cpu|vulkan` and optional `--compute-device N` as in
+`asr listen`. Choose `--command-profile native|hydra2`; both provide their normal
+recognition hints without enabling transport. Decoder and endpoint values use the
+same backend-owned descriptor IDs, types, ranges and defaults as the GUI:
+
+```sh
+# Examples: reproduce the frozen tuning values from recognition_settings.tuning.
+timmy-cli asr replay --wav results/intercom_audio/<saved-name>.wav \
+  --model models/<same-model>.bin --language es --compute cpu \
+  --setting whisper.beam_size=5 --setting whisper.temperature=0.4 \
+  --setting whisper.temperature_increment=1.0 --setting whisper.max_tokens=32 \
+  --setting whisper.audio_context=0 --setting whisper.threads=4 \
+  --setting whisper.grammar_penalty=20.0 --grammar off --prompt on
+```
+
+`--setting ID=VALUE`, `--grammar on|off` and `--prompt on|off` are shared with
+`asr listen`; settings are not a separate replay-specific Whisper configuration.
+`--setting` accepts booleans `on|off|true|false` and typed numeric values; invalid,
+unknown, nonfinite and out-of-range settings fail explicitly. Grammar and compact
+prompt switches are independent. With the same saved WAV, run all four pairs:
+
+```sh
+for grammar in on off; do
+  for prompt in on off; do
+    timmy-cli asr replay --wav results/intercom_audio/<saved-name>.wav \
+      --model models/<same-model>.bin --language es --compute cpu \
+      --grammar "$grammar" --prompt "$prompt" \
+      > "replay-grammar-$grammar-prompt-$prompt.txt"
+  done
+done
+```
+
+Output includes raw/normalized/repaired transcript, repair reasons, semantic
+intent, validation/rendering, detected language, input counts/levels, inference
+seconds, RTF, requested settings, actual guidance-passed flags and compute
+status. There is no fabricated benchmark PASS/FAIL: no expected utterance is
+supplied to replay. `--timeout-seconds N` controls the inference wait (default
+120); failure/timeout stops and joins the backend before returning nonzero.
+A successful empty ASR result is an observed empty transcript, not a timeout.
+
+The input is **already** a finalized inference buffer. Exact replay bypasses
+channel selection, resampling, VAD, endpoint trimming/padding and five-second
+window slicing, using `IAsrBackend::submitInferenceInput()` instead. VAD tuning
+IDs and optional `--vad-model` remain accepted through the shared configuration,
+but do not segment or modify this WAV; changing them cannot change its samples.
+To investigate VAD itself would require continuous pre-endpoint input, a different
+evidence boundary. Exact PCM is reproducible; model versions, runtime/device,
+threading and decoding settings can still affect transcripts/timings. This task
+does not promise cross-device bitwise deterministic inference.
+
+No model/grammar/prompt/VAD defaults or live corpus cases changed. No gate,
+compressor, limiter, AGC, denoiser, EQ, high-pass, new DSP dependency, or speculative
+processing-plugin API was added. Future preprocessing comparisons can explicitly
+produce a new WAV from this immutable corpus, then use the same replay path.
+
+## Bounded Spanish comma repair
+
+The confirmed existing meaning of **Canal 25 al 50** is **channel 25 at 50%**,
+as defined by the corpus and semantic parser. It does not mean channels 25 through
+50. Range selections continue to require their existing explicit grammar.
+
+After ordinary transcript normalization, `CommandLexicalRepair` accepts only the
+complete four-token form **`canal <positive identifier> , <0..100 percentage>`**.
+The exact Spanish singular target must retain its canonical Channel role and `al`
+must retain its normal separator role. One comma is replaced by `al`; parsing,
+semantic validation and rendering remain authoritative. The lexical layer does
+not instantiate a semantic parser or infer a selection range. Its repair record
+has category `asr_separator`, replacement `al`, and an explicit bounded
+identifier-to-percentage reason. Custom exact aliases still win.
+
+Thus `canal 25, 50.` becomes `canal 25 al 50` -> `Channel 25 At 50`.
+`canal, 35, 50,` only loses the neutral comma beside the target and remains
+`canal 35, 50,`, a pending numeric list. Its trailing comma is evidence of a
+possible continuation, so it is deliberately not forced into an intensity.
+Plural targets, explicit list conjunctions/actions, a third numeric member,
+English targets, unrelated syntax, invalid percentages and pending numeric
+continuations do not qualify. Existing terminal punctuation behavior, CMD-LEX-010
+root repairs, exact aliases and multi-utterance assembly retain their regression
+coverage.
+
+Deterministic tests cover bit-exact float WAV round trips (including signed zero,
+subnormals and out-of-range levels), unsupported/malformed WAVs and odd RIFF chunks,
+exclusive file creation and safe identity names, default OFF/no-inference behavior,
+multiple jobs/retries/generation isolation, independent armed/inference metrics,
+save failures without recognition failure, null SNR/silent dBFS, no-speech/empty/
+operator-no-result outcomes, worker joins during shutdown, hardware-free replay,
+replay errors/timeouts, independent grammar/prompt switches, strict additive v2
+JSON decoding, GUI checkbox lifecycle and full command/pipeline regressions.

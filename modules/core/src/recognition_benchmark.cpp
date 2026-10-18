@@ -352,6 +352,7 @@ namespace timmy::core {
         out << ",\"active_guidance\":";
         if (recognized.diagnostics.recognitionGuidance.empty()) out << "null";
         else settings(out, recognized.diagnostics.recognitionGuidance);
+        out << ",\"save_asr_input_wavs\":" << snapshot.saveAsrInputWavs;
         out << ",\"recognition_hints\":{\"constraint_intent\":"
             << quoted(config.recognitionHints.constraintIntent == asr::RecognitionConstraintIntent::commandPhrase ? "command_phrase" : "none")
             << ",\"vocabulary\":";
@@ -409,6 +410,31 @@ namespace timmy::core {
         out << ",\"validation_duration_seconds\":"; number(out, recognized.diagnostics.validationDurationSeconds);
         out << ",\"rendering_duration_seconds\":"; number(out, recognized.diagnostics.renderingDurationSeconds);
 
+        out << ",\"inference_inputs\":";
+        const auto& inputs = recognized.diagnostics.inferenceInputs;
+        if (inputs.empty()) out << "null";
+        else {
+            out << '[';
+            for (std::size_t i = 0; i < inputs.size(); ++i) {
+                if (i) out << ',';
+                const auto& audio = inputs[i];
+                out << "{\"inference_index\":" << audio.inferenceIndex
+                    << ",\"sample_rate\":" << audio.sampleRate << ",\"sample_count\":" << audio.sampleCount
+                    << ",\"sample_format\":" << quoted(audio.sampleFormat)
+                    << ",\"wav_path\":" << nullable(audio.wavPath) << ",\"wav_error\":" << nullable(audio.wavError)
+                    << ",\"peak_linear\":"; number(out, audio.peakLinear);
+                out << ",\"peak_dbfs\":"; number(out, audio.peakDbfs);
+                out << ",\"rms_linear\":"; number(out, audio.rmsLinear);
+                out << ",\"rms_dbfs\":"; number(out, audio.rmsDbfs);
+                out << ",\"near_full_scale_threshold\":0.999,\"near_full_scale_samples\":" << audio.nearFullScaleSamples
+                    << ",\"near_full_scale_ratio\":"; number(out, audio.nearFullScaleRatio);
+                out << ",\"speech_rms_dbfs\":"; number(out, audio.speechRmsDbfs);
+                out << ",\"noise_rms_dbfs\":"; number(out, audio.noiseRmsDbfs);
+                out << ",\"estimated_snr_db\":"; number(out, audio.estimatedSnrDb);
+                out << '}';
+            }
+            out << ']';
+        }
         out << "}}";
         return out.str();
     }
@@ -428,16 +454,20 @@ namespace timmy::core {
     asr::AsrOperationResult RecognitionBenchmarkSession::prepare(RecognitionPipeline& pipeline)
     {
         asr::AttemptGeneration nextGeneration;
+        std::optional<InferenceAudioCapture> capture;
         {
             std::lock_guard lock(mutex_);
             if (closed_ || state_ != BenchmarkAttemptState::preparing)
                 return {false, asr::AsrDiagnostic{asr::AsrDiagnosticCode::invalidConfiguration,
                     "Attempt is not awaiting preparation."}};
             nextGeneration = ++generation_;
+            if (snapshot_.saveAsrInputWavs)
+                capture = InferenceAudioCapture{path_, sessionId_, liveBenchmarkCases().at(index_).id,
+                    attempt_, nextGeneration};
             diagnostics_ = {};
             speechAt_.reset(); inferenceAt_.reset();
         }
-        const auto prepared = pipeline.prepareAttempt(nextGeneration);
+        const auto prepared = pipeline.prepareAttempt(nextGeneration, std::move(capture));
         {
             std::lock_guard lock(mutex_);
             if (prepared.succeeded && !closed_) state_ = BenchmarkAttemptState::ready;
@@ -476,6 +506,7 @@ namespace timmy::core {
             {
                 RecognitionTranscript absent;
                 absent.generation = generation_;
+                pipeline.disarmAttempt();
                 absent.diagnostics = pipeline.attemptDiagnostics();
                 timedOut = recordAttempt(absent, BenchmarkRecognitionOutcome::noSpeech);
             }
@@ -531,6 +562,11 @@ namespace timmy::core {
         std::lock_guard lock(mutex_);
         return recordAttempt(transcript, transcript.normalizedTranscript.empty()
             ? BenchmarkRecognitionOutcome::emptyAsrResult : BenchmarkRecognitionOutcome::finalResult);
+    }
+    std::optional<RecognitionBenchmarkAttempt> RecognitionBenchmarkSession::recordNoResult(RecognitionPipeline& pipeline)
+    {
+        pipeline.disarmAttempt();
+        return recordNoResult(pipeline.attemptDiagnostics());
     }
     std::optional<RecognitionBenchmarkAttempt> RecognitionBenchmarkSession::recordNoResult(asr::AttemptDiagnostics diagnostics)
     {
